@@ -222,6 +222,73 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(legacyMCPPath.statusCode, 200)
     }
 
+    func testForwardedIssuerBindsBearerTokenToOrigin() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [
+                        ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)
+                    ],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let originalOrigin = [
+            "X-Forwarded-Host": "macremote-one.trycloudflare.com",
+            "X-Forwarded-Proto": "https"
+        ]
+        let replayOrigin = [
+            "X-Forwarded-Host": "macremote-two.trycloudflare.com",
+            "X-Forwarded-Proto": "https"
+        ]
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(
+            base: base,
+            coordinator: coordinator,
+            server: server,
+            headers: originalOrigin
+        )
+
+        let authorized = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: originalOrigin,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "same-origin",
+                "method": "tools/list"
+            ]
+        )
+        XCTAssertEqual(authorized.statusCode, 200)
+
+        let replayed = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: replayOrigin,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "replay-origin",
+                "method": "tools/list"
+            ]
+        )
+        XCTAssertEqual(replayed.statusCode, 401)
+    }
+
     func testDestructiveMCPToolCallRequiresHostApproval() async throws {
         let coordinator = OAuthCoordinator()
         let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 5)
@@ -317,11 +384,13 @@ private struct ToolCallErrorResponse: Sendable {
 private func authorizedAccessToken(
     base: URL,
     coordinator: OAuthCoordinator,
-    server: LocalMCPServer
+    server: LocalMCPServer,
+    headers: [String: String] = [:]
 ) async throws -> String {
     let verifier = "server-flow-verifier"
     let registered = try await postJSON(
         url: base.appendingPathComponent("register"),
+        headers: headers,
         body: [
             "client_name": "HTTP Test",
             "redirect_uris": ["http://127.0.0.1/callback"],
@@ -341,7 +410,7 @@ private func authorizedAccessToken(
         URLQueryItem(name: "code_challenge", value: OAuthCoordinator.pkceChallenge(for: verifier)),
         URLQueryItem(name: "code_challenge_method", value: "S256")
     ]
-    let authorizationPage = try await get(url: try XCTUnwrap(authorize.url))
+    let authorizationPage = try await get(url: try XCTUnwrap(authorize.url), headers: headers)
     XCTAssertEqual(authorizationPage.statusCode, 200)
 
     let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
@@ -349,12 +418,13 @@ private func authorizedAccessToken(
 
     var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
     statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
-    let status = try await getJSON(url: try XCTUnwrap(statusURL.url))
+    let status = try await getJSON(url: try XCTUnwrap(statusURL.url), headers: headers)
     let redirectURI = try XCTUnwrap(status.json["redirect_uri"] as? String)
     let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
     let token = try await postForm(
         url: base.appendingPathComponent("token"),
+        headers: headers,
         form: [
             "grant_type": "authorization_code",
             "client_id": clientID,
@@ -421,11 +491,15 @@ private func postJSON(
 
 private func postForm(
     url: URL,
+    headers: [String: String] = [:],
     form: [String: String]
 ) async throws -> (statusCode: Int, json: [String: Any]) {
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    for (key, value) in headers {
+        request.setValue(value, forHTTPHeaderField: key)
+    }
     request.httpBody = form
         .map { key, value in
             "\(percentEncode(key))=\(percentEncode(value))"

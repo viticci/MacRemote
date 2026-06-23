@@ -5,6 +5,7 @@ final class OAuthCoordinatorTests: XCTestCase {
     func testHostApprovalRequiredBeforeTokenExchange() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "test-verifier-\(UUID().uuidString)"
+        let issuer = "http://127.0.0.1:1234"
         let client = try coordinator.registerClient(from: [
             "client_name": "Claude Test",
             "redirect_uris": ["http://127.0.0.1/callback"],
@@ -22,7 +23,7 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
                 "code_challenge_method": "S256"
             ],
-            issuer: "http://127.0.0.1:1234"
+            issuer: issuer
         )
 
         XCTAssertEqual(coordinator.approvalSnapshot().first?.state, .pending)
@@ -33,7 +34,7 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "redirect_uri": "http://127.0.0.1/callback",
                 "code": "not-issued",
                 "code_verifier": verifier
-            ])
+            ], issuer: issuer)
         )
 
         XCTAssertTrue(coordinator.approve(requestID: requestID))
@@ -47,14 +48,15 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uri": "http://127.0.0.1/callback",
             "code": code,
             "code_verifier": verifier
-        ])
+        ], issuer: issuer)
 
         let accessToken = try XCTUnwrap(token["access_token"] as? String)
-        XCTAssertTrue(coordinator.validateAccessToken(accessToken))
+        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer))
     }
 
     func testPKCEMismatchRejectsTokenExchange() throws {
         let coordinator = OAuthCoordinator()
+        let issuer = "http://127.0.0.1:1234"
         let client = try coordinator.registerClient(from: [
             "client_name": "Bad PKCE",
             "redirect_uris": ["http://localhost/callback"],
@@ -71,7 +73,7 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_challenge": OAuthCoordinator.pkceChallenge(for: "right-verifier"),
                 "code_challenge_method": "S256"
             ],
-            issuer: "http://127.0.0.1:1234"
+            issuer: issuer
         )
         XCTAssertTrue(coordinator.approve(requestID: requestID))
         let status = coordinator.authorizationStatus(requestID: requestID)
@@ -85,10 +87,61 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "redirect_uri": "http://localhost/callback",
                 "code": code,
                 "code_verifier": "wrong-verifier"
-            ])
+            ], issuer: issuer)
         ) { error in
             XCTAssertEqual(error as? OAuthError, .invalidGrant("PKCE verification failed."))
         }
+    }
+
+    func testAuthorizationCodeAndAccessTokenAreIssuerBound() throws {
+        let coordinator = OAuthCoordinator()
+        let verifier = "issuer-bound-verifier"
+        let issuer = "https://macremote-one.example"
+        let otherIssuer = "https://macremote-two.example"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Issuer Test",
+            "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256"
+            ],
+            issuer: issuer
+        )
+
+        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+        XCTAssertThrowsError(
+            try coordinator.exchangeToken(form: [
+                "grant_type": "authorization_code",
+                "client_id": clientID,
+                "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+                "code": code,
+                "code_verifier": verifier
+            ], issuer: otherIssuer)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidGrant("Issuer mismatch."))
+        }
+
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+            "code": code,
+            "code_verifier": verifier
+        ], issuer: issuer)
+        let accessToken = try XCTUnwrap(token["access_token"] as? String)
+        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer))
+        XCTAssertFalse(coordinator.validateAccessToken(accessToken, issuer: otherIssuer))
     }
 
     func testUnregisteredRedirectURIIsRejected() throws {
@@ -120,6 +173,7 @@ final class OAuthCoordinatorTests: XCTestCase {
     func testRefreshTokenRotates() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "refresh-verifier"
+        let issuer = "http://127.0.0.1:1234"
         let client = try coordinator.registerClient(from: [
             "client_name": "Refresh Test",
             "redirect_uris": ["http://127.0.0.1/callback"],
@@ -135,7 +189,7 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
                 "code_challenge_method": "S256"
             ],
-            issuer: "http://127.0.0.1:1234"
+            issuer: issuer
         )
         XCTAssertTrue(coordinator.approve(requestID: requestID))
         let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
@@ -146,18 +200,68 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uri": "http://127.0.0.1/callback",
             "code": code,
             "code_verifier": verifier
-        ])
+        ], issuer: issuer)
         let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
         let rotated = try coordinator.exchangeToken(form: [
             "grant_type": "refresh_token",
             "refresh_token": refreshToken
-        ])
+        ], issuer: issuer)
         XCTAssertNotNil(rotated["access_token"] as? String)
         XCTAssertThrowsError(
             try coordinator.exchangeToken(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken
-            ])
+            ], issuer: issuer)
         )
+    }
+
+    func testRefreshTokenIsIssuerBound() throws {
+        let coordinator = OAuthCoordinator()
+        let verifier = "refresh-issuer-verifier"
+        let issuer = "https://macremote-one.example"
+        let otherIssuer = "https://macremote-two.example"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Refresh Issuer Test",
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": "http://127.0.0.1/callback",
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256"
+            ],
+            issuer: issuer
+        )
+        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "code": code,
+            "code_verifier": verifier
+        ], issuer: issuer)
+        let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
+
+        XCTAssertThrowsError(
+            try coordinator.exchangeToken(form: [
+                "grant_type": "refresh_token",
+                "refresh_token": refreshToken
+            ], issuer: otherIssuer)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidGrant("Issuer mismatch."))
+        }
+
+        let rotated = try coordinator.exchangeToken(form: [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken
+        ], issuer: issuer)
+        XCTAssertNotNil(rotated["access_token"] as? String)
     }
 }

@@ -43,12 +43,14 @@ final class OAuthCoordinator: @unchecked Sendable {
 
     private struct AccessTokenRecord {
         let clientID: String
+        let issuer: String
         let scopes: Set<String>
         let expiresAt: Date
     }
 
     private struct RefreshTokenRecord {
         let clientID: String
+        let issuer: String
         let scopes: Set<String>
         let expiresAt: Date
     }
@@ -208,24 +210,24 @@ final class OAuthCoordinator: @unchecked Sendable {
         return result.changed
     }
 
-    func exchangeToken(form: [String: String]) throws -> [String: Any] {
+    func exchangeToken(form: [String: String], issuer: String) throws -> [String: Any] {
         switch form["grant_type"] {
         case "authorization_code":
-            return try exchangeAuthorizationCode(form: form)
+            return try exchangeAuthorizationCode(form: form, issuer: issuer)
         case "refresh_token":
-            return try exchangeRefreshToken(form: form)
+            return try exchangeRefreshToken(form: form, issuer: issuer)
         default:
             throw OAuthError.invalidRequest("Unsupported grant_type.")
         }
     }
 
-    func validateAccessToken(_ token: String, requiredScope: String = "mcp:tools") -> Bool {
+    func validateAccessToken(_ token: String, issuer: String, requiredScope: String = "mcp:tools") -> Bool {
         let tokenHash = Self.sha256Hex(token)
         let now = Date()
         return lock.withLock {
             pruneExpiredTokens(now: now)
             guard let record = accessTokensByHash[tokenHash] else { return false }
-            return record.expiresAt > now && record.scopes.contains(requiredScope)
+            return record.expiresAt > now && record.issuer == issuer && record.scopes.contains(requiredScope)
         }
     }
 
@@ -236,7 +238,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         }
     }
 
-    private func exchangeAuthorizationCode(form: [String: String]) throws -> [String: Any] {
+    private func exchangeAuthorizationCode(form: [String: String], issuer: String) throws -> [String: Any] {
         guard let code = form["code"], !code.isEmpty else {
             throw OAuthError.invalidRequest("Missing code.")
         }
@@ -270,6 +272,9 @@ final class OAuthCoordinator: @unchecked Sendable {
             guard authorization.clientID == clientID, authorization.redirectURI == redirectURI else {
                 throw OAuthError.invalidGrant("Client or redirect URI mismatch.")
             }
+            guard authorization.issuer == issuer else {
+                throw OAuthError.invalidGrant("Issuer mismatch.")
+            }
             guard let codeExpiresAt = authorization.codeExpiresAt, codeExpiresAt > now else {
                 throw OAuthError.invalidGrant("Authorization code expired.")
             }
@@ -286,10 +291,10 @@ final class OAuthCoordinator: @unchecked Sendable {
         let scopes = lock.withLock {
             authorizations[authorizationID]?.scopes ?? ["mcp:tools"]
         }
-        return issueTokenResponse(clientID: clientID, scopes: scopes, now: now)
+        return issueTokenResponse(clientID: clientID, issuer: issuer, scopes: scopes, now: now)
     }
 
-    private func exchangeRefreshToken(form: [String: String]) throws -> [String: Any] {
+    private func exchangeRefreshToken(form: [String: String], issuer: String) throws -> [String: Any] {
         guard let refreshToken = form["refresh_token"], !refreshToken.isEmpty else {
             throw OAuthError.invalidRequest("Missing refresh_token.")
         }
@@ -298,19 +303,23 @@ final class OAuthCoordinator: @unchecked Sendable {
         let now = Date()
         let record: RefreshTokenRecord = try lock.withLock {
             pruneExpiredTokens(now: now)
-            guard let record = refreshTokensByHash.removeValue(forKey: refreshHash) else {
+            guard let record = refreshTokensByHash[refreshHash] else {
                 throw OAuthError.invalidGrant("Invalid refresh token.")
             }
             guard record.expiresAt > now else {
                 throw OAuthError.invalidGrant("Refresh token expired.")
             }
+            guard record.issuer == issuer else {
+                throw OAuthError.invalidGrant("Issuer mismatch.")
+            }
+            refreshTokensByHash.removeValue(forKey: refreshHash)
             return record
         }
 
-        return issueTokenResponse(clientID: record.clientID, scopes: record.scopes, now: now)
+        return issueTokenResponse(clientID: record.clientID, issuer: issuer, scopes: record.scopes, now: now)
     }
 
-    private func issueTokenResponse(clientID: String, scopes: Set<String>, now: Date) -> [String: Any] {
+    private func issueTokenResponse(clientID: String, issuer: String, scopes: Set<String>, now: Date) -> [String: Any] {
         let accessToken = Self.randomToken(byteCount: 32)
         let refreshToken = Self.randomToken(byteCount: 32)
         let accessHash = Self.sha256Hex(accessToken)
@@ -321,11 +330,13 @@ final class OAuthCoordinator: @unchecked Sendable {
         lock.withLock {
             accessTokensByHash[accessHash] = AccessTokenRecord(
                 clientID: clientID,
+                issuer: issuer,
                 scopes: scopes,
                 expiresAt: now.addingTimeInterval(TimeInterval(accessExpiresIn))
             )
             refreshTokensByHash[refreshHash] = RefreshTokenRecord(
                 clientID: clientID,
+                issuer: issuer,
                 scopes: scopes,
                 expiresAt: now.addingTimeInterval(TimeInterval(refreshExpiresIn))
             )

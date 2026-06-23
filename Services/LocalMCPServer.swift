@@ -177,7 +177,7 @@ final class LocalMCPServer: @unchecked Sendable {
         case ("GET", "/authorize/status"):
             return authorizationStatus(request)
         case ("POST", "/token"):
-            return token(request)
+            return token(request, issuer: base)
         default:
             return jsonErrorResponse(status: .notFound, error: "not_found", description: "Route not found.")
         }
@@ -338,9 +338,9 @@ final class LocalMCPServer: @unchecked Sendable {
         return jsonResponse(status)
     }
 
-    private func token(_ request: HTTPRequest) -> Data {
+    private func token(_ request: HTTPRequest, issuer: String) -> Data {
         do {
-            let response = try authCoordinator.exchangeToken(form: request.formURLEncodedBody())
+            let response = try authCoordinator.exchangeToken(form: request.formURLEncodedBody(), issuer: issuer)
             eventHandler?(.log(.info, "OAuth token issued after host approval."))
             return jsonResponse(response)
         } catch {
@@ -359,7 +359,7 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         guard let bearerToken = request.bearerToken,
-              authCoordinator.validateAccessToken(bearerToken) else {
+              authCoordinator.validateAccessToken(bearerToken, issuer: base) else {
             return HTTPResponse(
                 status: .unauthorized,
                 headers: [
