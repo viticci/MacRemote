@@ -1,0 +1,45 @@
+import Foundation
+
+enum NavigationSection: String, CaseIterable, Identifiable {
+    case dashboard
+    case tools
+    case approvals
+    case tunnel
+    case logs
+    case settings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dashboard: "Dashboard"
+        case .tools: "Tools"
+        case .approvals: "Approvals"
+        case .tunnel: "Tunnel"
+        case .logs: "Logs"
+        case .settings: "Settings"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case .dashboard: "Server status"
+        case .tools: "Allowed commands"
+        case .approvals: "Host-gated auth"
+        case .tunnel: "Cloudflare"
+        case .logs: "Audit trail"
+        case .settings: "Preferences"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .dashboard: "gauge.with.dots.needle.33percent"
+        case .tools: "terminal"
+        case .approvals: "checkmark.shield"
+        case .tunnel: "network"
+        case .logs: "list.bullet.rectangle"
+        case .settings: "gearshape"
+        }
+    }
+}

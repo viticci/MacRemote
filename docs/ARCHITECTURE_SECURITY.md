@@ -1,0 +1,205 @@
+# MacRemote Architecture and Security Design
+
+## Decision
+
+Use Cloudflare Tunnel as the default remote transport.
+
+Claude custom connectors connect from Anthropic cloud infrastructure, so a
+private tailnet-only endpoint is not enough. Tailscale Funnel can expose a local
+service to the public internet, but Cloudflare Tunnel is the better default for
+MacRemote because it is outbound-only, maps a public hostname to
+`http://127.0.0.1:<port>`, and can layer Access, WAF, DDoS protection, and
+Managed OAuth features in front of the app when needed.
+
+Tailscale remains a future optional mode for personal testing, but not the
+default chatbot integration path.
+
+## Product Landscape
+
+This category exists, but most current options are closer to "give the model a
+remote shell on my Mac" than a native, host-governed Mac app. The closest match
+found during research is `remote-control-mcp`, which is listed as exposing a Mac
+over MCP through a secure tunnel with OAuth 2.0 + PKCE, shell execution, file
+management, and AppleScript. Other projects expose AppleScript/JXA, zsh, browser
+automation, or VNC-style Mac control.
+
+MacRemote should not compete on breadth first. Its initial differentiator is the
+opposite: a narrow tool registry, native user control, no arbitrary shell string,
+and a remote auth flow that must be approved on the host Mac before any token is
+issued.
+
+## Runtime Components
+
+### macOS App
+
+The SwiftUI app owns configuration and user intent:
+
+- tool definitions;
+- server lifecycle;
+- tunnel lifecycle;
+- pending authorization requests;
+- audit log;
+- settings for Cloudflare and local server preferences.
+
+The main UI is a native `NavigationSplitView` with these sections:
+
+- Dashboard: server, tunnel, and auth status.
+- Tools: allowed tool profiles and individual command templates.
+- Approvals: pending and recent OAuth authorization requests.
+- Tunnel: Cloudflare setup and current public MCP URL.
+- Logs: execution and auth audit trail.
+- Settings: provider paths, ports, and advanced security options.
+
+### Local MCP Server
+
+The MCP server binds only to `127.0.0.1` on a random high port or a user-selected
+local port. It exposes HTTP MCP endpoints only through the app-controlled
+listener. It must never bind to `0.0.0.0`.
+
+Required endpoints:
+
+- `GET /health`
+- `GET /.well-known/oauth-protected-resource`
+- `GET /.well-known/oauth-authorization-server`
+- `POST /register`
+- `GET /authorize`
+- `POST /authorize/decision`
+- `POST /token`
+- `POST /mcp`
+
+The app can implement the server natively in Swift or manage a helper process,
+but the trust boundary is the same: the public tunnel may reach only this local
+server, and the local server may run only approved tool definitions.
+
+### Tool Runner
+
+Tools are not shell snippets. A tool definition contains:
+
+- stable tool id;
+- display name and description;
+- executable absolute path;
+- fixed argv template;
+- typed parameter schema;
+- allowed parameter validators;
+- timeout;
+- stdout/stderr byte caps;
+- working directory policy;
+- environment allow-list;
+- capability class: read-only, write, destructive.
+
+Execution uses `Process`/`NSTask` style direct spawning with an executable and
+argv array. No `/bin/sh -c` is used for user-defined tools.
+
+The first profile is RemCTL read-only:
+
+- executable: `/Users/viticci/bin/remctl`
+- allowed subcommands: `today`, `upcoming`, `overdue`, `show`, `search`, `info`,
+  `lists`, `sections`, `stats`
+- forced machine-readable output where supported: `--json`
+- write commands rejected until the auth, audit, and per-call confirmation model
+  is proven.
+
+Direct RemCTL reads use the local Reminders CoreData store. When launched from a
+GUI app bundle, macOS privacy controls can block that read unless the app has
+Full Disk Access. MacRemote should surface that as a permission gate rather than
+falling back to a broader or less-auditable execution path.
+
+### Tunnel Manager
+
+The app starts the local server first, verifies `/health`, then starts or
+configures Cloudflare Tunnel to forward a single public hostname to the local
+server port.
+
+The public URL should include an instance-specific high-entropy component:
+
+- preferred: `https://<random-instance>.<configured-domain>/mcp`
+- acceptable: `https://<configured-host>/i/<random-instance>/mcp`
+
+The random instance id must be generated with at least 128 bits of entropy and
+stored in the user keychain or app support directory with file mode protection.
+The URL is not a secret by itself; it is a routing hardening layer. OAuth and
+host-side approval remain mandatory.
+
+## Authorization Design
+
+MacRemote acts as both MCP resource server and OAuth authorization server.
+
+Flow:
+
+1. Remote client calls `/mcp` without a token.
+2. Server returns `401` with `WWW-Authenticate` pointing to protected resource
+   metadata.
+3. Client discovers authorization metadata.
+4. Client uses dynamic client registration or an allowed redirect URI.
+5. Client opens `/authorize` with PKCE.
+6. MacRemote creates a pending authorization request and shows it in the Mac app.
+7. The browser page waits. It cannot approve itself.
+8. User approves or denies on the host Mac.
+9. On approval, the server issues a short-lived authorization code.
+10. Client exchanges code plus PKCE verifier for access and refresh tokens.
+11. Tool calls require a valid bearer token scoped to the instance and tool set.
+
+Security requirements:
+
+- PKCE required for authorization code flow.
+- Authorization codes are one-time use and expire within 2 minutes.
+- Access tokens expire quickly, target 15 minutes.
+- Refresh tokens rotate on every use.
+- Stored tokens are hashed or encrypted.
+- Tokens are bound to client id, redirect URI, resource URI, instance id, and
+  approved tool profile.
+- A leaked public URL is insufficient. The host Mac must approve each new client.
+- Pending authorization requests expire automatically.
+- Denials are logged.
+
+Cloudflare Access can be added as an outer protection layer, but app-level OAuth
+and host approval are still required because Access is not the product's only
+security boundary.
+
+## Audit and User Control
+
+Every sensitive event is logged locally:
+
+- server started/stopped;
+- tunnel started/stopped;
+- auth request created/approved/denied/expired;
+- token refresh;
+- tool call requested;
+- tool call accepted/rejected;
+- process exit code, duration, and truncated output metadata.
+
+The audit log must not store bearer tokens, authorization codes, refresh tokens,
+or full command output by default.
+
+The app should provide:
+
+- disable tunnel;
+- stop server;
+- revoke client;
+- rotate instance id;
+- rotate local signing keys;
+- export redacted logs.
+
+## First Build Scope
+
+The first useful build should include:
+
+- SwiftUI shell with Dashboard, Tools, Approvals, Tunnel, Logs, Settings;
+- local server lifecycle state;
+- RemCTL-only tool registry;
+- local RemCTL tool runner with tests;
+- security design and threat model artifacts;
+- build/run script and Codex Run action.
+
+The first public tunnel and Anthropic/OpenAI MCP smoke test happen only after
+the local RemCTL profile passes process-runner tests and the auth gate is
+present.
+
+## Sources
+
+- Claude custom connectors using remote MCP: https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp
+- Claude Messages API MCP connector: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+- Cloudflare Tunnel: https://developers.cloudflare.com/tunnel/
+- Cloudflare MCP server portals: https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/mcp-portals/
+- Tailscale Funnel: https://tailscale.com/docs/features/tailscale-funnel
+- Remote Control MCP listing: https://conare.ai/marketplace/mcp/remote-control-mcp
