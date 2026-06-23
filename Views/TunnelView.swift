@@ -65,9 +65,17 @@ struct TunnelView: View {
                         Button("Smoke Test Guide", systemImage: "terminal") {
                             openSmokeTestGuide()
                         }
+
+                        if appModel.currentPublicMCPURL != nil {
+                            Button("Copy Preflight", systemImage: "doc.on.clipboard") {
+                                copyPreflightCommand()
+                            }
+                        }
                     }
                 }
                 .panelStyle()
+
+                ExposureSummaryPanel(summary: appModel.toolExposureSummary)
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Why Cloudflare")
@@ -107,5 +115,61 @@ struct TunnelView: View {
     private func openSmokeTestGuide() {
         let url = URL(fileURLWithPath: "/Users/viticci/Projects/MacRemote/docs/END_TO_END_SMOKE_TEST.md")
         NSWorkspace.shared.open(url)
+    }
+
+    private func copyPreflightCommand() {
+        guard let url = appModel.currentPublicMCPURL else { return }
+        let command = """
+        MACREMOTE_MCP_URL="\(url.absoluteString)" \\
+        ./script/anthropic_mcp_smoke.py --mcp-preflight-only
+        """
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+        appModel.appendLog(level: .info, "Copied MacRemote MCP preflight command.")
+    }
+}
+
+private struct ExposureSummaryPanel: View {
+    let summary: ToolExposureSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Exposed Tool Surface")
+                .font(.headline)
+
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+                ExposureRow(label: "Total", value: "\(summary.total) tools")
+                ExposureRow(label: "Read-only", value: "\(summary.readOnly)")
+                ExposureRow(label: "Host-gated", value: "\(summary.gatedToolCount) write/destructive")
+                ExposureRow(label: "Custom", value: "\(summary.custom)")
+                ExposureRow(label: "Generic adapters", value: "\(summary.genericAdapters)")
+            }
+
+            if summary.nonReadOnlyToolNames.isEmpty {
+                Text("No write-capable tools are currently exposed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Host approval required for: \(summary.nonReadOnlyToolNames.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .panelStyle()
+    }
+}
+
+private struct ExposureRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        GridRow {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(.body, design: .monospaced))
+        }
     }
 }

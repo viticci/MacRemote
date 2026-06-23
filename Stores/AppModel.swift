@@ -330,6 +330,10 @@ final class AppModel {
         return nil
     }
 
+    var toolExposureSummary: ToolExposureSummary {
+        ToolExposureSummary(tools: tools)
+    }
+
     func appendLog(level: AppLogEntry.Level, _ message: String) {
         logs.insert(AppLogEntry(date: Date(), level: level, message: message), at: 0)
         if logs.count > 250 {

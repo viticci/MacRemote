@@ -25,6 +25,8 @@ the full RemCTL CLI plus narrow read helper tools.
   local MCP server port, not to the Mac as a whole.
 - Instance ID rotation that stops public exposure, clears in-memory OAuth grants,
   and changes the public MCP URL path.
+- Tunnel view summarizes the exposed tool surface before public access: total
+  tools, custom tools, generic adapters, and host-gated write/destructive tools.
 
 ## CLI Adapter Model
 
@@ -147,6 +149,8 @@ MacRemote should fail closed:
   and forces remote clients to use a new URL path.
 - Settings can revoke registered OAuth clients and bearer/refresh tokens while
   keeping the current MCP URL. Clients must reauthorize on the host Mac.
+- Tunnel shows the currently exposed tool surface and can copy the direct MCP
+  preflight command once a public URL exists.
 - Before starting the local MCP server, MacRemote runs
   `remctl doctor --for-agent --json` from its own process context. If macOS
   privacy blocks Reminders CoreData access, startup is blocked and Settings

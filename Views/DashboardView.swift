@@ -58,9 +58,9 @@ struct DashboardView: View {
 
                     StatusPanel(
                         title: "Tools",
-                        value: "\(appModel.tools.count) exposed",
+                        value: "\(appModel.toolExposureSummary.total) exposed",
                         systemImage: "wrench.and.screwdriver",
-                        detail: "\(appModel.tools.filter { $0.isUserDefined }.count) custom, 1 full RemCTL CLI, \(RemCTLToolCatalog.readOnlyTools.count) read helpers."
+                        detail: "\(appModel.toolExposureSummary.customDescription), \(appModel.toolExposureSummary.capabilityDescription)."
                     ) {
                         Button("Run Safe Test", systemImage: "checkmark.circle") {
                             appModel.runRemCTLTodayTest()

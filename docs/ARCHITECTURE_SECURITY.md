@@ -50,6 +50,10 @@ codes, access tokens, and refresh tokens without requiring an instance path
 rotation. Rotation is still available when the public MCP URL itself should be
 invalidated.
 
+The tunnel UI must show the tool surface that will be reachable through the
+public URL: total tools, custom tools, generic CLI adapters, and write or
+destructive tools that require per-call host approval.
+
 The main UI is a native `NavigationSplitView` with these sections:
 
 - Dashboard: server, tunnel, and auth status.

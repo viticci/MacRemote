@@ -28,6 +28,49 @@ final class RemCTLToolCatalogTests: XCTestCase {
         XCTAssertTrue(tool.isGenericCLIAdapter)
     }
 
+    func testToolExposureSummaryForDefaultRemCTLProfile() {
+        let summary = ToolExposureSummary(tools: RemCTLToolCatalog.builtInTools)
+
+        XCTAssertEqual(summary.total, 10)
+        XCTAssertEqual(summary.readOnly, 9)
+        XCTAssertEqual(summary.write, 0)
+        XCTAssertEqual(summary.destructive, 1)
+        XCTAssertEqual(summary.gatedToolCount, 1)
+        XCTAssertEqual(summary.builtIn, 10)
+        XCTAssertEqual(summary.custom, 0)
+        XCTAssertEqual(summary.genericAdapters, 1)
+        XCTAssertEqual(summary.nonReadOnlyToolNames, ["Run RemCTL"])
+        XCTAssertEqual(summary.customDescription, "No custom tools")
+        XCTAssertEqual(summary.capabilityDescription, "9 read-only, 1 host-gated")
+    }
+
+    func testToolExposureSummaryCountsCustomTools() {
+        let customTool = ToolDefinition(
+            id: "custom.echo",
+            name: "Custom Echo",
+            summary: "Echo a value.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{args}"],
+            parameters: [],
+            capability: .write,
+            timeoutSeconds: 5,
+            outputByteLimit: 1024,
+            origin: .userDefined,
+            category: .utilities
+        )
+
+        let summary = ToolExposureSummary(tools: RemCTLToolCatalog.builtInTools + [customTool])
+
+        XCTAssertEqual(summary.total, 11)
+        XCTAssertEqual(summary.write, 1)
+        XCTAssertEqual(summary.destructive, 1)
+        XCTAssertEqual(summary.gatedToolCount, 2)
+        XCTAssertEqual(summary.custom, 1)
+        XCTAssertEqual(summary.genericAdapters, 2)
+        XCTAssertEqual(summary.nonReadOnlyToolNames, ["Custom Echo", "Run RemCTL"])
+        XCTAssertEqual(summary.customDescription, "1 custom")
+    }
+
     func testFullRemCTLCLIAdapterPassesArgumentsDirectly() throws {
         let arguments = try RemCTLToolCatalog.arguments(
             for: "remctl.run",

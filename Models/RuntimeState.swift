@@ -133,3 +133,40 @@ struct FullDiskAccessReport: Equatable, Sendable {
         state == .ready
     }
 }
+
+struct ToolExposureSummary: Equatable, Sendable {
+    let total: Int
+    let readOnly: Int
+    let write: Int
+    let destructive: Int
+    let builtIn: Int
+    let custom: Int
+    let genericAdapters: Int
+    let nonReadOnlyToolNames: [String]
+
+    init(tools: [ToolDefinition]) {
+        total = tools.count
+        readOnly = tools.filter { $0.capability == .readOnly }.count
+        write = tools.filter { $0.capability == .write }.count
+        destructive = tools.filter { $0.capability == .destructive }.count
+        builtIn = tools.filter { $0.origin == .builtIn }.count
+        custom = tools.filter { $0.origin == .userDefined }.count
+        genericAdapters = tools.filter(\.isGenericCLIAdapter).count
+        nonReadOnlyToolNames = tools
+            .filter { $0.capability != .readOnly }
+            .map(\.name)
+            .sorted()
+    }
+
+    var gatedToolCount: Int {
+        write + destructive
+    }
+
+    var customDescription: String {
+        custom == 0 ? "No custom tools" : "\(custom) custom"
+    }
+
+    var capabilityDescription: String {
+        "\(readOnly) read-only, \(gatedToolCount) host-gated"
+    }
+}
