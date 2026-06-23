@@ -233,18 +233,27 @@ final class LocalMCPServer: @unchecked Sendable {
     private func baseURL(for request: HTTPRequest, activePort: UInt16) -> String {
         let localBase = localBaseURL(activePort: activePort)
 
-        guard let publicHost = request.forwardedHost ?? request.hostHeader,
-              let normalizedHost = Self.normalizedHost(publicHost),
-              !Self.isLoopbackHost(normalizedHost) else {
+        guard let normalizedHost = publicHost(for: request) else {
             return localBase
         }
 
-        let scheme = request.forwardedScheme ?? "https"
-        guard scheme == "https" else {
-            return localBase
+        return "https://\(normalizedHost)"
+    }
+
+    private func publicHost(for request: HTTPRequest) -> String? {
+        if let host = request.hostHeader,
+           let normalizedHost = Self.normalizedHost(host),
+           !Self.isLoopbackHost(normalizedHost) {
+            return normalizedHost
         }
 
-        return "\(scheme)://\(normalizedHost)"
+        if let forwardedHost = request.forwardedHost,
+           let normalizedForwardedHost = Self.normalizedHost(forwardedHost),
+           !Self.isLoopbackHost(normalizedForwardedHost) {
+            return normalizedForwardedHost
+        }
+
+        return nil
     }
 
     private func isAllowedOrigin(for request: HTTPRequest, base: String, activePort: UInt16) -> Bool {
@@ -963,20 +972,6 @@ private struct HTTPRequest {
 
     var forwardedHost: String? {
         firstForwardedValue(headers["x-forwarded-host"])
-    }
-
-    var forwardedScheme: String? {
-        if let proto = firstForwardedValue(headers["x-forwarded-proto"])?.lowercased(),
-           proto == "https" || proto == "http" {
-            return proto
-        }
-
-        if let visitor = headers["cf-visitor"]?.lowercased(),
-           visitor.contains("\"scheme\":\"https\"") {
-            return "https"
-        }
-
-        return nil
     }
 
     var bearerToken: String? {

@@ -97,6 +97,11 @@ authorization polling, and unauthorized MCP attempts have separate buckets.
 Loopback requests are not rate limited by this guard because they are local
 diagnostics and tests, not the public attack surface.
 
+Public origin detection must prefer a non-loopback `Host` header over forwarded
+headers, and any non-loopback host is normalized to HTTPS. A spoofed
+`X-Forwarded-Host` or `X-Forwarded-Proto` header must not downgrade a public
+request into loopback mode or re-enable the legacy local `/mcp` path.
+
 The app can implement the server natively in Swift or manage a helper process,
 but the trust boundary is the same: the public tunnel may reach only this local
 server, and the local server may run only approved tool definitions.

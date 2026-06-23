@@ -405,6 +405,60 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(instancePublicPath.statusCode, 200)
     }
 
+    func testPublicHostCannotBeDowngradedBySpoofedForwardedHeaders() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let spoofedHeaders = [
+            "Host": "macremote-test.trycloudflare.com",
+            "X-Forwarded-Host": "127.0.0.1:\(port)",
+            "X-Forwarded-Proto": "http"
+        ]
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let publicHealth = try await getJSON(url: base.appendingPathComponent("health"), headers: spoofedHeaders)
+        XCTAssertEqual(publicHealth.json["public_metadata"] as? Bool, true)
+        XCTAssertNil(publicHealth.json["instance_id"])
+        XCTAssertNil(publicHealth.json["tool_count"])
+
+        let authorizationServer = try await getJSON(
+            url: base.appendingPathComponent(".well-known/oauth-authorization-server"),
+            headers: spoofedHeaders
+        )
+        XCTAssertEqual(authorizationServer.json["issuer"] as? String, "https://macremote-test.trycloudflare.com")
+
+        let legacyPublicPath = try await postJSON(
+            url: base.appendingPathComponent("mcp"),
+            headers: spoofedHeaders,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "legacy-public",
+                "method": "ping"
+            ]
+        )
+        XCTAssertEqual(legacyPublicPath.statusCode, 404)
+    }
+
     func testForwardedIssuerBindsBearerTokenToOrigin() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
