@@ -37,7 +37,7 @@ final class LocalMCPServerTests: XCTestCase {
             url: base.appendingPathComponent(".well-known/oauth-protected-resource"),
             headers: forwardedHeaders
         )
-        XCTAssertEqual(protectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp")
+        XCTAssertEqual(protectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp/test-instance")
         XCTAssertEqual(protectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
         XCTAssertEqual(protectedResource.json["mcp_protocol_version"] as? String, "2025-11-25")
 
@@ -83,7 +83,7 @@ final class LocalMCPServerTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
 
         let noAuth = try await postJSON(
-            url: base.appendingPathComponent("mcp"),
+            url: base.appendingPathComponent("mcp/test-instance"),
             body: [
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -93,7 +93,7 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(noAuth.statusCode, 401)
 
         let invalidOrigin = try await postJSON(
-            url: base.appendingPathComponent("mcp"),
+            url: base.appendingPathComponent("mcp/test-instance"),
             headers: ["Origin": "https://evil.example"],
             body: [
                 "jsonrpc": "2.0",
@@ -104,7 +104,7 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(invalidOrigin.statusCode, 403)
 
         let unsupportedProtocol = try await postJSON(
-            url: base.appendingPathComponent("mcp"),
+            url: base.appendingPathComponent("mcp/test-instance"),
             headers: ["MCP-Protocol-Version": "2099-01-01"],
             body: [
                 "jsonrpc": "2.0",
@@ -114,7 +114,7 @@ final class LocalMCPServerTests: XCTestCase {
         )
         XCTAssertEqual(unsupportedProtocol.statusCode, 400)
 
-        let getMCP = try await get(url: base.appendingPathComponent("mcp"))
+        let getMCP = try await get(url: base.appendingPathComponent("mcp/test-instance"))
         XCTAssertEqual(getMCP.statusCode, 405)
 
         let verifier = "server-flow-verifier"
@@ -165,7 +165,7 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
 
         let toolsList = try await postJSON(
-            url: base.appendingPathComponent("mcp"),
+            url: base.appendingPathComponent("mcp/test-instance"),
             bearerToken: accessToken,
             headers: ["MCP-Protocol-Version": "2025-11-25"],
             body: [
@@ -186,7 +186,7 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(annotations["openWorldHint"] as? Bool, false)
 
         let toolCall = try await postJSON(
-            url: base.appendingPathComponent("mcp"),
+            url: base.appendingPathComponent("mcp/test-instance"),
             bearerToken: accessToken,
             headers: ["MCP-Protocol-Version": "2025-11-25"],
             body: [
@@ -209,16 +209,27 @@ final class LocalMCPServerTests: XCTestCase {
         let content = try XCTUnwrap(callResult["content"] as? [[String: Any]])
         let text = try XCTUnwrap(content.first?["text"] as? String)
         XCTAssertTrue(text.contains("\"stdout\":\"echo:hello\""))
+
+        let legacyMCPPath = try await postJSON(
+            url: base.appendingPathComponent("mcp"),
+            bearerToken: accessToken,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "legacy",
+                "method": "ping"
+            ]
+        )
+        XCTAssertEqual(legacyMCPPath.statusCode, 200)
     }
 }
 
 private struct FakeToolExecutor: ToolExecuting {
-    func execute(toolID: String, parameters: [String: String]) async throws -> ToolExecutionOutcome {
+    func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
         ToolExecutionOutcome(
             toolID: toolID,
             toolName: "Echo",
             exitCode: 0,
-            stdout: "echo:\(parameters["value"] ?? "")",
+            stdout: "echo:\(parameters["value"]?.stringValue ?? "")",
             stderr: "",
             duration: 0.01,
             timedOut: false,

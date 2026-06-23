@@ -10,6 +10,10 @@
 - Add RemCTL read-only tool definitions.
 - Add direct process runner that never invokes a shell.
 - Add unit tests for command validation and argv construction.
+- Add generic CLI adapter definitions: executable path + `{args}` array +
+  optional `stdin`.
+- Add opt-in default command categories for Filesystem, Utilities, Image
+  Processing, Text, and Developer templates.
 
 ## Phase 2: Local MCP Server
 
@@ -20,6 +24,7 @@
 - Add token issuance with PKCE.
 - Add `/mcp` JSON-RPC handling for `tools/list` and `tools/call`.
 - Wire RemCTL read-only tools through the MCP handler.
+- Wire user-defined generic CLI adapter tools through the same MCP handler.
 - Add an explicit Reminders permission preflight for GUI-launched RemCTL reads.
 
 ## Phase 3: Tunnel
@@ -50,6 +55,8 @@
 ## Non-Negotiable Gates
 
 - No shell-based tool runner.
+- No generic wrappers for shell interpreters or `/usr/bin/env`.
+- No filesystem delete/unlink/trash presets.
 - No server binding outside `127.0.0.1`.
 - No public tunnel before local health passes.
 - No OAuth token without host approval.

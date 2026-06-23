@@ -21,25 +21,33 @@ struct ToolExecutionOutcome: Sendable, Equatable {
 }
 
 protocol ToolExecuting: Sendable {
-    func execute(toolID: String, parameters: [String: String]) async throws -> ToolExecutionOutcome
+    func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome
 }
 
-struct RemCTLToolExecutor: ToolExecuting {
+struct ConfiguredToolExecutor: ToolExecuting {
+    let toolsByID: [String: ToolDefinition]
     let environment: [String: String]
     private let runner = ProcessRunner()
 
-    func execute(toolID: String, parameters: [String: String] = [:]) async throws -> ToolExecutionOutcome {
-        guard let tool = RemCTLToolCatalog.tool(id: toolID) else {
+    init(tools: [ToolDefinition], environment: [String: String]) {
+        toolsByID = Dictionary(uniqueKeysWithValues: tools.map { ($0.id, $0) })
+        self.environment = environment
+    }
+
+    func execute(toolID: String, parameters: [String: ToolArgumentValue] = [:]) async throws -> ToolExecutionOutcome {
+        guard let tool = toolsByID[toolID] else {
             throw ToolValidationError.unknownTool(toolID)
         }
 
-        let arguments = try RemCTLToolCatalog.arguments(for: toolID, parameters: parameters)
+        let arguments = try ToolArgumentResolver.arguments(for: tool, parameters: parameters)
+        let standardInput = parameters["stdin"]?.stringValue
         let result = try await runner.run(
             executablePath: tool.executablePath,
             arguments: arguments,
             timeoutSeconds: tool.timeoutSeconds,
             outputByteLimit: tool.outputByteLimit,
-            environment: environment
+            environment: environment,
+            standardInput: standardInput
         )
 
         return ToolExecutionOutcome(
@@ -53,5 +61,17 @@ struct RemCTLToolExecutor: ToolExecuting {
             truncatedStdout: result.truncatedStdout,
             truncatedStderr: result.truncatedStderr
         )
+    }
+}
+
+struct RemCTLToolExecutor: ToolExecuting {
+    let environment: [String: String]
+
+    func execute(toolID: String, parameters: [String: ToolArgumentValue] = [:]) async throws -> ToolExecutionOutcome {
+        try await ConfiguredToolExecutor(
+            tools: RemCTLToolCatalog.readOnlyTools,
+            environment: environment
+        )
+        .execute(toolID: toolID, parameters: parameters)
     }
 }

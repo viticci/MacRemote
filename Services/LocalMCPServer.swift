@@ -115,12 +115,24 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         let base = baseURL(for: request, activePort: activePort)
+        let mcpResourceURL = "\(base)\(mcpEndpointPath)"
         guard isAllowedOrigin(for: request, base: base, activePort: activePort) else {
             return jsonErrorResponse(
                 status: .forbidden,
                 error: "forbidden_origin",
                 description: "Invalid Origin header."
             )
+        }
+
+        if isMCPPath(request.path) {
+            switch request.method {
+            case "POST":
+                return await mcp(request: request, base: base)
+            case "GET", "DELETE":
+                return methodNotAllowedForMCP()
+            default:
+                return methodNotAllowedForMCP()
+            }
         }
 
         switch (request.method, request.path) {
@@ -135,7 +147,7 @@ final class LocalMCPServer: @unchecked Sendable {
             ])
         case ("GET", "/.well-known/oauth-protected-resource"):
             return jsonResponse([
-                "resource": "\(base)/mcp",
+                "resource": mcpResourceURL,
                 "authorization_servers": [base],
                 "scopes_supported": ["mcp:tools"],
                 "bearer_methods_supported": ["header"],
@@ -163,20 +175,28 @@ final class LocalMCPServer: @unchecked Sendable {
             return authorizationStatus(request)
         case ("POST", "/token"):
             return token(request)
-        case ("POST", "/mcp"):
-            return await mcp(request: request, base: base)
-        case ("GET", "/mcp"), ("DELETE", "/mcp"):
-            return jsonResponse(
-                [
-                    "error": "method_not_allowed",
-                    "error_description": "This MacRemote build supports JSON responses over POST /mcp only."
-                ],
-                status: .methodNotAllowed,
-                headers: ["Allow": "POST"]
-            )
         default:
             return jsonErrorResponse(status: .notFound, error: "not_found", description: "Route not found.")
         }
+    }
+
+    private var mcpEndpointPath: String {
+        "/mcp/\(instanceID)"
+    }
+
+    private func isMCPPath(_ path: String) -> Bool {
+        path == "/mcp" || path == mcpEndpointPath
+    }
+
+    private func methodNotAllowedForMCP() -> Data {
+        jsonResponse(
+            [
+                "error": "method_not_allowed",
+                "error_description": "This MacRemote build supports JSON responses over POST /mcp only."
+            ],
+            status: .methodNotAllowed,
+            headers: ["Allow": "POST"]
+        )
     }
 
     private func baseURL(for request: HTTPRequest, activePort: UInt16) -> String {
@@ -410,14 +430,30 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         let rawArguments = params["arguments"] as? [String: Any] ?? [:]
-        let arguments = rawArguments.compactMapValues { value -> String? in
+        let arguments = rawArguments.compactMapValues { value -> ToolArgumentValue? in
             switch value {
             case let string as String:
-                return string
+                return .string(string)
             case let int as Int:
-                return String(int)
+                return .string(String(int))
             case let double as Double where double.rounded() == double:
-                return String(Int(double))
+                return .string(String(Int(double)))
+            case let strings as [String]:
+                return .stringArray(strings)
+            case let array as [Any]:
+                let values = array.compactMap { item -> String? in
+                    switch item {
+                    case let string as String:
+                        return string
+                    case let int as Int:
+                        return String(int)
+                    case let double as Double where double.rounded() == double:
+                        return String(Int(double))
+                    default:
+                        return nil
+                    }
+                }
+                return values.count == array.count ? .stringArray(values) : nil
             default:
                 return nil
             }
@@ -478,8 +514,8 @@ final class LocalMCPServer: @unchecked Sendable {
                 "title": tool.name,
                 "readOnlyHint": tool.capability == .readOnly,
                 "destructiveHint": tool.capability == .destructive,
-                "idempotentHint": tool.capability == .readOnly,
-                "openWorldHint": false
+                "idempotentHint": tool.capability == .readOnly && !tool.isGenericCLIAdapter,
+                "openWorldHint": tool.isGenericCLIAdapter
             ]
         ]
     }
@@ -554,6 +590,10 @@ final class LocalMCPServer: @unchecked Sendable {
                 schema["minimum"] = range.lowerBound
                 schema["maximum"] = range.upperBound
             }
+        case .stringArray:
+            schema["type"] = "array"
+            schema["items"] = ["type": "string"]
+            schema["maxItems"] = 64
         }
 
         if let defaultValue = parameter.defaultValue {

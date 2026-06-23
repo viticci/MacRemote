@@ -18,12 +18,44 @@ limited to RemCTL read-only commands.
 - Cloudflare Tunnel for public reachability. The tunnel forwards only to the
   local MCP server port, not to the Mac as a whole.
 
+## CLI Adapter Model
+
+Custom tools use a generic CLI adapter instead of one hand-written MCP wrapper
+per command. The user picks an executable, and MacRemote exposes it as one MCP
+tool with:
+
+- `args`: optional `array<string>` expanded directly into argv;
+- `stdin`: optional string written to standard input;
+- timeout and output byte caps;
+- explicit read-only/write/destructive risk label;
+- direct `Process` execution with no shell.
+
+For tighter surfaces, users can replace the generic `{args}` template with fixed
+argv templates such as `["--format", "json", "search", "{query}"]`; placeholders
+become typed MCP parameters. This gives both modes: universal CLI wrapping when
+the whole executable is the intended capability, and narrow command templates
+when only one subcommand should be exposed.
+
+The Add Tool flow includes opt-in default command categories that prefill safe
+templates:
+
+- Filesystem: list, stat, head, and find-by-name. No delete/unlink presets.
+- Utilities: date, disk usage, uptime, and network interfaces.
+- Image Processing: image info plus write-to-output conversion and resize
+  templates via `sips`.
+- Text: word count, line count, and single-file grep.
+- Developer: read-only git status and recent log templates.
+
+These presets are not exposed automatically. They only become MCP tools after
+the user selects one, reviews the executable/argv template, and saves it.
+
 ## MCP Baseline
 
 MacRemote targets the latest stable MCP specification, `2025-11-25`, while
 keeping compatibility with `2025-06-18` and `2025-03-26` clients.
 
-- Streamable HTTP endpoint at `/mcp`.
+- Streamable HTTP endpoint at `/mcp/<instance-id>`, with `/mcp` retained as a
+  compatibility route.
 - OAuth 2.1-style authorization code flow with PKCE and host approval.
 - RFC 9728 protected-resource metadata and authorization-server discovery.
 - `MCP-Protocol-Version` validation on MCP requests.
@@ -75,8 +107,10 @@ MacRemote should fail closed:
 - no tool execution without a valid access token;
 - no token issuance without host approval;
 - no arbitrary shell strings;
+- no `sh`, `bash`, `zsh`, `fish`, `csh`, `tcsh`, or `env` executable wrappers;
 - no inherited broad environment;
 - no unbounded runtime or output;
+- no default filesystem delete commands;
 - no write-capable RemCTL commands in the first profile.
 
 ## Current Local Gates
@@ -98,6 +132,12 @@ native app control, a user-defined allow-list, direct executable plus argv
 execution, host-side approval, and no arbitrary shell surface in the first
 profile.
 
+The generic CLI direction is based on the same conclusion behind `cli2mcp` and
+Peter Steinberger's CLI-first Peekaboo work: CLIs are the stable interface, and
+the MCP layer should adapt selected executables rather than requiring one custom
+server per CLI. MacRemote keeps that idea but puts it behind a native Mac UI,
+OAuth, host approval, loopback binding, tunnel control, and local audit logs.
+
 Useful source links:
 
 - Claude custom connectors using remote MCP: https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp
@@ -108,6 +148,10 @@ Useful source links:
 - MCP tools and structured content: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 - MCP Enterprise-Managed Authorization: https://blog.modelcontextprotocol.io/posts/enterprise-managed-auth/
 - MCP 2026-07-28 release candidate: https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/
+- cli2mcp: https://github.com/RonieNeubauer/cli2mcp
+- Peekaboo CLI-first write-up: https://steipete.me/posts/2025/peekaboo-2-freeing-the-cli-from-its-mcp-shackles
+- steipete Claude Code MCP wrapper: https://github.com/steipete/claude-code-mcp
+- MCPorter: https://github.com/openclaw/mcporter
 - Cloudflare Tunnel: https://developers.cloudflare.com/tunnel/
 - Cloudflare MCP server portals: https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/mcp-portals/
 - Tailscale Funnel: https://tailscale.com/docs/features/tailscale-funnel

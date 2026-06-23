@@ -72,7 +72,7 @@ struct TunnelView: View {
     private var publicURLText: String {
         switch appModel.tunnelStatus {
         case .running(let url):
-            return url.appendingPathComponent("mcp").absoluteString
+            return appModel.publicMCPURL(for: url).absoluteString
         case .starting:
             return "Waiting for Cloudflare"
         case .failed(let message):

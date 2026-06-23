@@ -58,9 +58,9 @@ struct DashboardView: View {
 
                     StatusPanel(
                         title: "Tools",
-                        value: "\(appModel.tools.count) read-only",
+                        value: "\(appModel.tools.count) exposed",
                         systemImage: "wrench.and.screwdriver",
-                        detail: "Only `/Users/viticci/bin/remctl` is enabled."
+                        detail: "\(appModel.tools.filter { $0.isUserDefined }.count) custom, \(RemCTLToolCatalog.readOnlyTools.count) RemCTL built-in."
                     ) {
                         Button("Run Safe Test", systemImage: "checkmark.circle") {
                             appModel.runRemCTLTodayTest()
@@ -93,7 +93,7 @@ struct DashboardView: View {
         case .ready:
             return "Cloudflare can forward to the local server."
         case .running(let url):
-            return url.appendingPathComponent("mcp").absoluteString
+            return appModel.publicMCPURL(for: url).absoluteString
         case .failed(let message):
             return message
         case .stopped:

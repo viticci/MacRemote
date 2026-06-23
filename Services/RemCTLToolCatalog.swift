@@ -13,7 +13,8 @@ enum RemCTLToolCatalog {
             parameters: [],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024
+            outputByteLimit: 512 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.upcoming",
@@ -33,7 +34,8 @@ enum RemCTLToolCatalog {
             ],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 1024 * 1024
+            outputByteLimit: 1024 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.overdue",
@@ -44,7 +46,8 @@ enum RemCTLToolCatalog {
             parameters: [],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024
+            outputByteLimit: 512 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.lists",
@@ -55,7 +58,8 @@ enum RemCTLToolCatalog {
             parameters: [],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024
+            outputByteLimit: 512 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.sections",
@@ -66,7 +70,8 @@ enum RemCTLToolCatalog {
             parameters: [],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024
+            outputByteLimit: 512 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.stats",
@@ -77,7 +82,8 @@ enum RemCTLToolCatalog {
             parameters: [],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024
+            outputByteLimit: 512 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.search",
@@ -95,7 +101,8 @@ enum RemCTLToolCatalog {
             ],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 1024 * 1024
+            outputByteLimit: 1024 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.show",
@@ -113,7 +120,8 @@ enum RemCTLToolCatalog {
             ],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 1024 * 1024
+            outputByteLimit: 1024 * 1024,
+            category: .reminders
         ),
         ToolDefinition(
             id: "remctl.info",
@@ -131,7 +139,8 @@ enum RemCTLToolCatalog {
             ],
             capability: .readOnly,
             timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024
+            outputByteLimit: 512 * 1024,
+            category: .reminders
         )
     ]
 
@@ -143,63 +152,6 @@ enum RemCTLToolCatalog {
         guard let tool = tool(id: toolID) else {
             throw ToolValidationError.unknownTool(toolID)
         }
-
-        guard tool.capability == .readOnly else {
-            throw ToolValidationError.writeToolDisabled(toolID)
-        }
-
-        var resolved = [String]()
-        for argument in tool.argumentPattern {
-            guard argument.hasPrefix("{"), argument.hasSuffix("}") else {
-                resolved.append(argument)
-                continue
-            }
-
-            let parameterName = String(argument.dropFirst().dropLast())
-            let value = try validatedValue(
-                named: parameterName,
-                for: tool,
-                parameters: parameters
-            )
-            resolved.append(value)
-        }
-        return resolved
-    }
-
-    private static func validatedValue(
-        named name: String,
-        for tool: ToolDefinition,
-        parameters: [String: String]
-    ) throws -> String {
-        guard let schema = tool.parameters.first(where: { $0.name == name }) else {
-            throw ToolValidationError.missingParameter(name)
-        }
-
-        guard let rawValue = parameters[name] ?? schema.defaultValue else {
-            if schema.required {
-                throw ToolValidationError.missingParameter(name)
-            }
-            return ""
-        }
-
-        if rawValue.contains("\0") {
-            throw ToolValidationError.nulByte(name)
-        }
-
-        switch schema.kind {
-        case .string:
-            if let maximumLength = schema.maximumLength, rawValue.count > maximumLength {
-                throw ToolValidationError.stringTooLong(name)
-            }
-            return rawValue
-        case .integer:
-            guard let integer = Int(rawValue) else {
-                throw ToolValidationError.invalidInteger(name)
-            }
-            if let range = schema.integerRange, !range.contains(integer) {
-                throw ToolValidationError.integerOutOfRange(name)
-            }
-            return String(integer)
-        }
+        return try ToolArgumentResolver.arguments(for: tool, stringParameters: parameters)
     }
 }

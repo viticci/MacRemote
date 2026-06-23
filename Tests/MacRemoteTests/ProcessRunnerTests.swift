@@ -30,4 +30,18 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertTrue(result.succeeded)
         XCTAssertTrue(result.stdout.contains("MACREMOTE_TEST_ENV=present"))
     }
+
+    func testRunnerWritesStandardInput() async throws {
+        let runner = ProcessRunner()
+        let result = try await runner.run(
+            executablePath: "/bin/cat",
+            arguments: [],
+            timeoutSeconds: 2,
+            outputByteLimit: 1024,
+            standardInput: "hello stdin"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertEqual(result.stdout, "hello stdin")
+    }
 }

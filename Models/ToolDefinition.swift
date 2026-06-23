@@ -14,9 +14,56 @@ enum ToolCapability: String, Codable, CaseIterable, Sendable {
     }
 }
 
+enum ToolOrigin: String, Codable, Sendable {
+    case builtIn
+    case userDefined
+}
+
+enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
+    case reminders
+    case filesystem
+    case utilities
+    case imageProcessing
+    case text
+    case developer
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .reminders: "Reminders"
+        case .filesystem: "Filesystem"
+        case .utilities: "Utilities"
+        case .imageProcessing: "Image Processing"
+        case .text: "Text"
+        case .developer: "Developer"
+        }
+    }
+}
+
 enum ToolParameterKind: String, Codable, Sendable {
     case string
     case integer
+    case stringArray
+}
+
+enum ToolArgumentValue: Equatable, Sendable {
+    case string(String)
+    case stringArray([String])
+
+    var stringValue: String? {
+        if case .string(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var stringArrayValue: [String]? {
+        if case .stringArray(let value) = self {
+            return value
+        }
+        return nil
+    }
 }
 
 struct ToolParameter: Identifiable, Codable, Hashable, Sendable {
@@ -97,14 +144,89 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let capability: ToolCapability
     let timeoutSeconds: TimeInterval
     let outputByteLimit: Int
+    let origin: ToolOrigin
+    let category: ToolCategory
 
     var preview: String {
         ([executablePath] + argumentPattern).joined(separator: " ")
+    }
+
+    var isUserDefined: Bool {
+        origin == .userDefined
+    }
+
+    var isGenericCLIAdapter: Bool {
+        argumentPattern == ["{args}"] || argumentPattern == ["{argv}"]
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case summary
+        case executablePath
+        case argumentPattern
+        case parameters
+        case capability
+        case timeoutSeconds
+        case outputByteLimit
+        case origin
+        case category
+    }
+
+    init(
+        id: String,
+        name: String,
+        summary: String,
+        executablePath: String,
+        argumentPattern: [String],
+        parameters: [ToolParameter],
+        capability: ToolCapability,
+        timeoutSeconds: TimeInterval,
+        outputByteLimit: Int,
+        origin: ToolOrigin = .builtIn,
+        category: ToolCategory = .utilities
+    ) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.executablePath = executablePath
+        self.argumentPattern = argumentPattern
+        self.parameters = parameters
+        self.capability = capability
+        self.timeoutSeconds = timeoutSeconds
+        self.outputByteLimit = outputByteLimit
+        self.origin = origin
+        self.category = category
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        summary = try container.decode(String.self, forKey: .summary)
+        executablePath = try container.decode(String.self, forKey: .executablePath)
+        argumentPattern = try container.decode([String].self, forKey: .argumentPattern)
+        parameters = try container.decode([ToolParameter].self, forKey: .parameters)
+        capability = try container.decode(ToolCapability.self, forKey: .capability)
+        timeoutSeconds = try container.decode(TimeInterval.self, forKey: .timeoutSeconds)
+        outputByteLimit = try container.decode(Int.self, forKey: .outputByteLimit)
+        origin = try container.decodeIfPresent(ToolOrigin.self, forKey: .origin) ?? .userDefined
+        category = try container.decodeIfPresent(ToolCategory.self, forKey: .category) ?? .utilities
     }
 }
 
 enum ToolValidationError: LocalizedError, Equatable, Sendable {
     case unknownTool(String)
+    case emptyName
+    case executableNotAbsolute
+    case executableUnavailable(String)
+    case blockedExecutable(String)
+    case invalidArgument(String)
+    case tooManyArguments
+    case invalidPlaceholder(String)
+    case undefinedPlaceholder(String)
+    case invalidTimeout
+    case invalidOutputLimit
     case missingParameter(String)
     case invalidInteger(String)
     case integerOutOfRange(String)
@@ -115,6 +237,16 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .unknownTool(let id): "Unknown tool: \(id)"
+        case .emptyName: "Tool name is required."
+        case .executableNotAbsolute: "Executable path must be absolute."
+        case .executableUnavailable(let path): "Executable is not available: \(path)"
+        case .blockedExecutable(let path): "Shell-style executable is blocked: \(path)"
+        case .invalidArgument(let argument): "Invalid argument: \(argument)"
+        case .tooManyArguments: "Tool has too many arguments."
+        case .invalidPlaceholder(let placeholder): "Invalid placeholder: \(placeholder)"
+        case .undefinedPlaceholder(let name): "Argument placeholder has no matching parameter: \(name)"
+        case .invalidTimeout: "Timeout must be between 1 and 60 seconds."
+        case .invalidOutputLimit: "Output limit must be between 1 KB and 5 MB."
         case .missingParameter(let name): "Missing parameter: \(name)"
         case .invalidInteger(let name): "Expected integer for parameter: \(name)"
         case .integerOutOfRange(let name): "Integer parameter out of range: \(name)"

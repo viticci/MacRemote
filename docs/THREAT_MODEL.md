@@ -68,6 +68,16 @@ tool parameters or ask for a broader tool than approved. Mitigations include no
 shell execution, exact executable allow-lists, per-tool parameter schemas, argv
 construction from typed values, fixed timeouts, environment allow-lists, and
 separate capability classes for read-only, write, and destructive tools.
+Generic CLI adapters intentionally expose one executable plus model-supplied
+argv and optional stdin. That is universal but not a sandbox. Each generic
+adapter must be treated as delegation of the whole executable's reachable
+capability surface. Shell interpreters and `/usr/bin/env` are blocked because
+they erase the executable boundary.
+
+Default command categories are only preset drafts. They must not be auto-enabled
+or silently added to the exposed MCP surface. Filesystem presets are constrained
+to read-only commands and must not include delete, unlink, or trash operations;
+write-capable presets such as image conversion must be labeled as write tools.
 
 Tunnel setup is high risk. A bug that binds the local server to `0.0.0.0` or
 forwards a broad local service would expose more than the intended MCP process.

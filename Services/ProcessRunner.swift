@@ -22,7 +22,8 @@ struct ProcessRunner: Sendable {
         arguments: [String],
         timeoutSeconds: TimeInterval,
         outputByteLimit: Int,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        standardInput: String? = nil
     ) async throws -> CommandRunResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
@@ -33,6 +34,10 @@ struct ProcessRunner: Sendable {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        let stdinPipe = standardInput.map { _ in Pipe() }
+        if let stdinPipe {
+            process.standardInput = stdinPipe
+        }
 
         let started = Date()
         let timeoutState = TimeoutState()
@@ -46,6 +51,10 @@ struct ProcessRunner: Sendable {
         }
 
         try process.run()
+        if let standardInput, let stdinPipe {
+            stdinPipe.fileHandleForWriting.write(Data(standardInput.utf8))
+            try? stdinPipe.fileHandleForWriting.close()
+        }
 
         let timeout = Task {
             try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))

@@ -44,7 +44,8 @@ The SwiftUI app owns configuration and user intent:
 The main UI is a native `NavigationSplitView` with these sections:
 
 - Dashboard: server, tunnel, and auth status.
-- Tools: allowed tool profiles and individual command templates.
+- Tools: allowed tool profiles, generic CLI adapters, and individual command
+  templates.
 - Approvals: pending and recent OAuth authorization requests.
 - Tunnel: Cloudflare setup and current public MCP URL.
 - Logs: execution and auth audit trail.
@@ -78,7 +79,7 @@ Tools are not shell snippets. A tool definition contains:
 - stable tool id;
 - display name and description;
 - executable absolute path;
-- fixed argv template;
+- argv template, defaulting to a generic `{args}` adapter;
 - typed parameter schema;
 - allowed parameter validators;
 - timeout;
@@ -89,6 +90,30 @@ Tools are not shell snippets. A tool definition contains:
 
 Execution uses `Process`/`NSTask` style direct spawning with an executable and
 argv array. No `/bin/sh -c` is used for user-defined tools.
+
+MacRemote supports two CLI exposure modes:
+
+- Generic CLI adapter: one MCP tool wraps one executable. The tool schema
+  exposes `args: array<string>` and optional `stdin: string`. This is the
+  universal mode for CLIs whose entire capability surface the user intends to
+  grant.
+- Fixed command template: one MCP tool wraps one exact argv template. Template
+  placeholders such as `{query}` become typed MCP parameters. This is the
+  safer mode for CLIs where only one subcommand or workflow should be exposed.
+
+The app ships opt-in preset categories that prefill fixed command templates for
+common operations: Filesystem, Utilities, Image Processing, Text, and Developer.
+Presets are convenience drafts, not an expanded default tool surface. Filesystem
+presets must remain read-only and must not include delete, unlink, or trash
+commands. Write-capable image presets must write to explicit output paths and be
+labeled as write tools.
+
+This follows the practical direction of projects such as `cli2mcp`, which wraps
+arbitrary CLI binaries as MCP tools, while avoiding shell wrappers and keeping
+the Mac app as the approval and audit boundary. Future versions can improve
+generic adapter ergonomics by parsing `--help` output into richer flag schemas;
+the security model must still treat every exposed executable as a delegated
+capability rather than a sandbox.
 
 The first profile is RemCTL read-only:
 
@@ -112,8 +137,8 @@ server port.
 
 The public URL should include an instance-specific high-entropy component:
 
-- preferred: `https://<random-instance>.<configured-domain>/mcp`
-- acceptable: `https://<configured-host>/i/<random-instance>/mcp`
+- current quick-tunnel shape: `https://<trycloudflare-host>/mcp/<instance-id>`;
+- future named-domain shape: `https://<random-instance>.<configured-domain>/mcp`.
 
 The random instance id must be generated with at least 128 bits of entropy and
 stored in the user keychain or app support directory with file mode protection.
@@ -126,7 +151,7 @@ MacRemote acts as both MCP resource server and OAuth authorization server.
 
 Flow:
 
-1. Remote client calls `/mcp` without a token.
+1. Remote client calls `/mcp/<instance-id>` without a token.
 2. Server returns `401` with `WWW-Authenticate` pointing to protected resource
    metadata.
 3. Client discovers authorization metadata.
@@ -187,6 +212,8 @@ The first useful build should include:
 - SwiftUI shell with Dashboard, Tools, Approvals, Tunnel, Logs, Settings;
 - local server lifecycle state;
 - RemCTL-only tool registry;
+- generic CLI adapter for user-defined executable paths;
+- opt-in preset command categories for common CLI templates;
 - local RemCTL tool runner with tests;
 - security design and threat model artifacts;
 - build/run script and Codex Run action.
@@ -203,3 +230,7 @@ present.
 - Cloudflare MCP server portals: https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/mcp-portals/
 - Tailscale Funnel: https://tailscale.com/docs/features/tailscale-funnel
 - Remote Control MCP listing: https://conare.ai/marketplace/mcp/remote-control-mcp
+- cli2mcp: https://github.com/RonieNeubauer/cli2mcp
+- Peekaboo CLI-first write-up: https://steipete.me/posts/2025/peekaboo-2-freeing-the-cli-from-its-mcp-shackles
+- steipete Claude Code MCP wrapper: https://github.com/steipete/claude-code-mcp
+- MCPorter: https://github.com/openclaw/mcporter

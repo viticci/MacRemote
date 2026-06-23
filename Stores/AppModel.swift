@@ -5,7 +5,7 @@ import Observation
 @Observable
 final class AppModel {
     var selection: NavigationSection? = .dashboard
-    var tools: [ToolDefinition] = RemCTLToolCatalog.readOnlyTools
+    var tools: [ToolDefinition]
     var logs: [AppLogEntry] = []
     var approvals: [ApprovalRequest] = []
     var serverStatus: ServerStatus = .stopped
@@ -14,11 +14,19 @@ final class AppModel {
     var instanceID: String = AppModel.makeInstanceID()
 
     private let tunnelService = TunnelService()
-    private let toolExecutor = RemCTLToolExecutor(environment: AppModel.toolEnvironment)
+    private let toolStore = ToolRegistryStore()
     private var authCoordinator: OAuthCoordinator!
     private var localServer: LocalMCPServer?
 
     init() {
+        do {
+            let customTools = try toolStore.loadUserDefinedTools()
+            tools = RemCTLToolCatalog.readOnlyTools + customTools
+        } catch {
+            tools = RemCTLToolCatalog.readOnlyTools
+            logs.insert(AppLogEntry(date: Date(), level: .error, message: "Could not load custom tools: \(error.localizedDescription)"), at: 0)
+        }
+
         authCoordinator = OAuthCoordinator { [weak self] approvals in
             Task { @MainActor in
                 self?.approvals = approvals
@@ -37,7 +45,7 @@ final class AppModel {
                 instanceID: instanceID,
                 tools: tools,
                 authCoordinator: authCoordinator,
-                toolExecutor: toolExecutor
+                toolExecutor: toolExecutorSnapshot()
             ) { [weak self] event in
                 Task { @MainActor in
                     self?.handleServerEvent(event)
@@ -74,9 +82,9 @@ final class AppModel {
         }
     }
 
-    func runToolTest(toolID: String, parameters: [String: String] = [:]) async {
+    func runToolTest(toolID: String, parameters: [String: ToolArgumentValue] = [:]) async {
         do {
-            let result = try await toolExecutor.execute(toolID: toolID, parameters: parameters)
+            let result = try await toolExecutorSnapshot().execute(toolID: toolID, parameters: parameters)
             if result.succeeded {
                 appendLog(level: .info, "\(result.toolName) completed in \(result.duration.formattedDuration) with \(result.outputByteCount) bytes.")
             } else {
@@ -84,6 +92,44 @@ final class AppModel {
             }
         } catch {
             appendLog(level: .error, "Tool test failed: \(error.localizedDescription)")
+        }
+    }
+
+    func addUserTool(from draft: ToolDefinitionDraft) -> String? {
+        guard !serverStatus.isRunning else {
+            return "Stop the local server before changing exposed tools."
+        }
+
+        do {
+            let tool = try draft.makeTool()
+            tools.append(tool)
+            try persistUserDefinedTools()
+            appendLog(level: .info, "Added custom tool \(tool.name).")
+            return nil
+        } catch {
+            appendLog(level: .error, "Could not add custom tool: \(error.localizedDescription)")
+            return error.localizedDescription
+        }
+    }
+
+    func deleteUserTool(id: String) -> String? {
+        guard !serverStatus.isRunning else {
+            return "Stop the local server before changing exposed tools."
+        }
+
+        guard let tool = tools.first(where: { $0.id == id && $0.isUserDefined }) else {
+            return "Only custom tools can be deleted."
+        }
+
+        tools.removeAll { $0.id == id && $0.isUserDefined }
+        do {
+            try persistUserDefinedTools()
+            appendLog(level: .warning, "Deleted custom tool \(tool.name).")
+            return nil
+        } catch {
+            tools.append(tool)
+            appendLog(level: .error, "Could not delete custom tool: \(error.localizedDescription)")
+            return error.localizedDescription
         }
     }
 
@@ -131,6 +177,12 @@ final class AppModel {
         appendLog(level: .info, "Cloudflare Tunnel stopped.")
     }
 
+    func publicMCPURL(for tunnelBaseURL: URL) -> URL {
+        tunnelBaseURL
+            .appendingPathComponent("mcp")
+            .appendingPathComponent(instanceID)
+    }
+
     func appendLog(level: AppLogEntry.Level, _ message: String) {
         logs.insert(AppLogEntry(date: Date(), level: level, message: message), at: 0)
         if logs.count > 250 {
@@ -139,8 +191,16 @@ final class AppModel {
     }
 
     private static func makeInstanceID() -> String {
+        let key = "MacRemote.instanceID"
+        if let existing = UserDefaults.standard.string(forKey: key),
+           existing.range(of: #"^[a-f0-9]{32}$"#, options: .regularExpression) != nil {
+            return existing
+        }
+
         let bytes = (0..<16).map { _ in UInt8.random(in: UInt8.min...UInt8.max) }
-        return bytes.map { String(format: "%02x", $0) }.joined()
+        let instanceID = bytes.map { String(format: "%02x", $0) }.joined()
+        UserDefaults.standard.set(instanceID, forKey: key)
+        return instanceID
     }
 
     private static var toolEnvironment: [String: String] {
@@ -175,6 +235,14 @@ final class AppModel {
 
         let capped = String(stderr.prefix(180))
         return "stderr: \(capped)"
+    }
+
+    private func persistUserDefinedTools() throws {
+        try toolStore.saveUserDefinedTools(tools)
+    }
+
+    private func toolExecutorSnapshot() -> ConfiguredToolExecutor {
+        ConfiguredToolExecutor(tools: tools, environment: AppModel.toolEnvironment)
     }
 
     private func handleServerEvent(_ event: LocalMCPServerEvent) {
