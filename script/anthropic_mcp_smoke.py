@@ -28,6 +28,7 @@ ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_BETA = "mcp-client-2025-11-20"
 DEFAULT_TOOL = "remctl.today"
+DEFAULT_PROTOCOL_VERSION = "2025-11-25"
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ def main() -> int:
     parser.add_argument("--model", default=os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL))
     parser.add_argument("--beta", default=os.environ.get("ANTHROPIC_BETA", DEFAULT_BETA))
     parser.add_argument("--tool", default=os.environ.get("MACREMOTE_SMOKE_TOOL", DEFAULT_TOOL))
+    parser.add_argument("--protocol-version", default=os.environ.get("MACREMOTE_MCP_PROTOCOL_VERSION", DEFAULT_PROTOCOL_VERSION))
     parser.add_argument(
         "--prompt",
         default=None,
@@ -68,19 +70,43 @@ def main() -> int:
     )
     parser.add_argument("--server-name", default="macremote")
     parser.add_argument("--oauth-timeout", type=int, default=180)
+    parser.add_argument(
+        "--skip-mcp-preflight",
+        action="store_true",
+        help="Skip direct MacRemote discovery, initialize, and tools/list checks before the Anthropic call.",
+    )
+    parser.add_argument(
+        "--mcp-preflight-only",
+        action="store_true",
+        help="Validate MacRemote discovery, OAuth, initialize, and tools/list, then exit before calling Anthropic.",
+    )
     parser.add_argument("--show-response", action="store_true", help="Print the full Anthropic JSON response.")
     args = parser.parse_args()
 
+    if args.skip_mcp_preflight and args.mcp_preflight_only:
+        fail("--skip-mcp-preflight cannot be combined with --mcp-preflight-only.")
     if not args.mcp_url:
         fail("Missing --mcp-url or MACREMOTE_MCP_URL.")
-    if not args.anthropic_api_key:
+    if not args.anthropic_api_key and not args.mcp_preflight_only:
         fail("Missing --anthropic-api-key or ANTHROPIC_API_KEY.")
     if not args.mcp_url.startswith("https://"):
-        fail("Anthropic requires an HTTPS MCP URL.")
+        fail("MacRemote smoke tests require an HTTPS MCP URL.")
 
     access_token = args.access_token
     if not access_token:
         access_token = obtain_macremote_access_token(args.mcp_url, timeout_seconds=args.oauth_timeout)
+
+    if not args.skip_mcp_preflight:
+        preflight_macremote_mcp(
+            mcp_url=args.mcp_url,
+            access_token=access_token,
+            expected_tool=args.tool,
+            protocol_version=args.protocol_version,
+        )
+
+    if args.mcp_preflight_only:
+        print("anthropic_call=skipped")
+        return 0
 
     response = call_anthropic(
         api_key=args.anthropic_api_key,
@@ -216,6 +242,91 @@ def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
     return access_token
 
 
+def preflight_macremote_mcp(
+    *,
+    mcp_url: str,
+    access_token: str,
+    expected_tool: str,
+    protocol_version: str,
+) -> None:
+    base_url = macremote_base_url(mcp_url)
+    resource = canonical_mcp_resource_url(mcp_url)
+    metadata_path = path_protected_resource_metadata_url(mcp_url)
+
+    root_resource_metadata = http_json("GET", f"{base_url}/.well-known/oauth-protected-resource")
+    path_resource_metadata = http_json("GET", metadata_path)
+    authorization_server_metadata = http_json("GET", f"{base_url}/.well-known/oauth-authorization-server")
+
+    assert_equal(root_resource_metadata.get("resource"), resource, "root protected-resource metadata resource")
+    assert_equal(path_resource_metadata.get("resource"), resource, "path protected-resource metadata resource")
+    assert_contains(
+        path_resource_metadata.get("authorization_servers"),
+        base_url,
+        "path protected-resource authorization server",
+    )
+    assert_equal(authorization_server_metadata.get("issuer"), base_url, "authorization server issuer")
+
+    initialize = mcp_json_rpc(
+        mcp_url=mcp_url,
+        access_token=access_token,
+        protocol_version=protocol_version,
+        body={
+            "jsonrpc": "2.0",
+            "id": "initialize",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": protocol_version,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "MacRemote Anthropic Smoke Test",
+                    "version": "0.1.0",
+                },
+            },
+        },
+    )
+    initialize_result = json_rpc_result(initialize, "initialize")
+    negotiated = initialize_result.get("protocolVersion")
+    if not isinstance(negotiated, str) or not negotiated:
+        fail("MacRemote initialize response did not include protocolVersion.")
+
+    initialized = http_request(
+        "POST",
+        mcp_url,
+        data=json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            }
+        ).encode("utf-8"),
+        headers=mcp_headers(access_token, negotiated),
+    )
+    if initialized.status not in {200, 202}:
+        fail(f"MacRemote initialized notification returned HTTP {initialized.status}.")
+
+    tools_list = mcp_json_rpc(
+        mcp_url=mcp_url,
+        access_token=access_token,
+        protocol_version=negotiated,
+        body={
+            "jsonrpc": "2.0",
+            "id": "tools/list",
+            "method": "tools/list",
+        },
+    )
+    tools_result = json_rpc_result(tools_list, "tools/list")
+    tools = tools_result.get("tools")
+    if not isinstance(tools, list):
+        fail("MacRemote tools/list response did not include a tools array.")
+
+    tool_names = [tool.get("name") for tool in tools if isinstance(tool, dict)]
+    if expected_tool not in tool_names:
+        fail(f"MacRemote tools/list did not include expected tool {expected_tool!r}.")
+
+    print("mcp_preflight=passed")
+    print(f"mcp_protocol_version={negotiated}")
+    print(f"mcp_tool_count={len(tools)}")
+
+
 def call_anthropic(
     *,
     api_key: str,
@@ -296,6 +407,57 @@ def canonical_mcp_resource_url(mcp_url: str) -> str:
             "",
         )
     )
+
+
+def path_protected_resource_metadata_url(mcp_url: str) -> str:
+    parsed = urllib.parse.urlparse(mcp_url)
+    if parsed.scheme != "https" or not parsed.netloc or not parsed.path:
+        fail("MCP URL must be an absolute HTTPS URL with a path.")
+    metadata_path = "/.well-known/oauth-protected-resource" + parsed.path.rstrip("/")
+    return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), metadata_path, "", "", ""))
+
+
+def mcp_json_rpc(
+    *,
+    mcp_url: str,
+    access_token: str,
+    protocol_version: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    return http_json(
+        "POST",
+        mcp_url,
+        body,
+        headers=mcp_headers(access_token, protocol_version),
+    )
+
+
+def mcp_headers(access_token: str, protocol_version: str) -> dict[str, str]:
+    return {
+        "authorization": f"Bearer {access_token}",
+        "accept": "application/json, text/event-stream",
+        "mcp-protocol-version": protocol_version,
+    }
+
+
+def json_rpc_result(response: dict[str, Any], label: str) -> dict[str, Any]:
+    error = response.get("error")
+    if error:
+        fail(f"MacRemote {label} returned JSON-RPC error: {json.dumps(error, sort_keys=True)}")
+    result = response.get("result")
+    if not isinstance(result, dict):
+        fail(f"MacRemote {label} did not return a JSON-RPC result object.")
+    return result
+
+
+def assert_equal(actual: Any, expected: Any, label: str) -> None:
+    if actual != expected:
+        fail(f"Unexpected {label}: expected {expected!r}, got {actual!r}.")
+
+
+def assert_contains(actual: Any, expected: Any, label: str) -> None:
+    if not isinstance(actual, list) or expected not in actual:
+        fail(f"Unexpected {label}: expected list containing {expected!r}, got {actual!r}.")
 
 
 def pkce_challenge(verifier: str) -> str:

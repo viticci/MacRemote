@@ -43,6 +43,24 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
 
 Run the script from the repository root. Do not paste or store secrets in files.
 
+To validate MacRemote before calling Anthropic:
+
+```bash
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+./script/anthropic_mcp_smoke.py --mcp-preflight-only
+```
+
+Expected successful preflight output includes:
+
+```text
+oauth_status=waiting_for_host_approval
+oauth_status=approved
+mcp_preflight=passed
+anthropic_call=skipped
+```
+
+Then run the full API smoke test:
+
 ```bash
 ANTHROPIC_API_KEY="$(/Users/viticci/bin/op-get "Anthropic API Key")" \
 MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
@@ -61,11 +79,21 @@ The script will:
 6. Enable only the selected tool, defaulting to `remctl.today`.
 7. Report whether Claude produced `mcp_tool_use` and `mcp_tool_result` blocks.
 
+Before the Anthropic call, the script also performs a direct MCP preflight
+against the same URL and access token:
+
+- protected-resource metadata at the root and path-specific well-known URL;
+- authorization-server issuer metadata;
+- `initialize`;
+- `notifications/initialized`;
+- `tools/list`, including the selected tool.
+
 Expected successful output includes:
 
 ```text
 oauth_status=waiting_for_host_approval
 oauth_status=approved
+mcp_preflight=passed
 mcp_tool_use_count=1
 mcp_tool_result_count=1
 smoke_test=passed
@@ -89,3 +117,6 @@ MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
 
 For `remctl.run`, MacRemote will pause execution until the host approves that
 specific command in Approvals.
+
+Use `--skip-mcp-preflight` only when debugging Anthropic connector behavior
+after the direct MacRemote preflight has already passed.
