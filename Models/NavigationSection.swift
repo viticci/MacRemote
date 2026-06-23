@@ -25,7 +25,7 @@ enum NavigationSection: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: "Server status"
         case .tools: "Allowed commands"
-        case .approvals: "Host-gated auth"
+        case .approvals: "Host gates"
         case .tunnel: "Cloudflare"
         case .logs: "Audit trail"
         case .settings: "Preferences"

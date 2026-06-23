@@ -8,6 +8,7 @@ final class AppModel {
     var tools: [ToolDefinition]
     var logs: [AppLogEntry] = []
     var approvals: [ApprovalRequest] = []
+    var toolCallApprovals: [ToolCallApprovalRequest] = []
     var serverStatus: ServerStatus = .stopped
     var tunnelStatus: TunnelStatus = .stopped
     var localServerURL: URL?
@@ -18,6 +19,7 @@ final class AppModel {
     private let toolStore = ToolRegistryStore()
     private let fullDiskAccessService = FullDiskAccessService()
     private var authCoordinator: OAuthCoordinator!
+    private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
     private var localServer: LocalMCPServer?
 
     init() {
@@ -32,6 +34,14 @@ final class AppModel {
         authCoordinator = OAuthCoordinator { [weak self] approvals in
             Task { @MainActor in
                 self?.approvals = approvals
+            }
+        }
+        toolCallApprovalCoordinator = ToolCallApprovalCoordinator { [weak self] approvals in
+            Task { @MainActor in
+                self?.toolCallApprovals = approvals
+                if approvals.contains(where: { $0.state == .pending }) {
+                    self?.selection = .approvals
+                }
             }
         }
         tunnelStatus = tunnelService.status(localServerURL: nil)
@@ -69,6 +79,7 @@ final class AppModel {
                 instanceID: instanceID,
                 tools: tools,
                 authCoordinator: authCoordinator,
+                toolCallApprovalCoordinator: toolCallApprovalCoordinator,
                 toolExecutor: toolExecutorSnapshot()
             ) { [weak self] event in
                 Task { @MainActor in
@@ -95,6 +106,7 @@ final class AppModel {
         localServer = nil
         localServerURL = nil
         approvals = authCoordinator.approvalSnapshot()
+        toolCallApprovals = toolCallApprovalCoordinator.approvalSnapshot()
         serverStatus = .stopped
         tunnelStatus = tunnelService.status(localServerURL: nil)
         appendLog(level: .info, "Local MCP server stopped.")
@@ -211,6 +223,18 @@ final class AppModel {
     func denyAuthorizationRequest(_ id: UUID) {
         if localServer?.denyAuthorizationRequest(id: id) == true {
             appendLog(level: .warning, "Authorization request denied on host Mac.")
+        }
+    }
+
+    func approveToolCallRequest(_ id: UUID) {
+        if toolCallApprovalCoordinator.approve(requestID: id) {
+            appendLog(level: .info, "Tool call approved on host Mac.")
+        }
+    }
+
+    func denyToolCallRequest(_ id: UUID) {
+        if toolCallApprovalCoordinator.deny(requestID: id) {
+            appendLog(level: .warning, "Tool call denied on host Mac.")
         }
     }
 

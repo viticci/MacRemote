@@ -106,6 +106,7 @@ private struct SecurityChecklistView: View {
     private let items = [
         "Loopback-only local server",
         "Host approval required before token issuance",
+        "Write tools require per-call approval",
         "Full Disk Access checked before server start",
         "No arbitrary shell commands",
         "Full RemCTL CLI runs as direct argv",

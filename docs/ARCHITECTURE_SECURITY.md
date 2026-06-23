@@ -127,6 +127,12 @@ queries:
 - `remctl.run` is annotated as destructive because the full RemCTL CLI includes
   write and delete operations.
 
+Read-only helper tools can execute after OAuth token validation. Write and
+destructive tools require a second host approval for each call. The MCP request
+waits while the call is shown in the Approvals view with the tool name,
+capability, and argument preview. Denied or expired calls return a JSON-RPC
+error and never reach the process runner.
+
 Full RemCTL uses the local Reminders CoreData store for high-fidelity reads and
 normal RemCTL write paths for mutations. When launched from a GUI app bundle,
 macOS privacy controls can block that access unless the app has Full Disk

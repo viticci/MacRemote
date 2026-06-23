@@ -20,6 +20,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private let instanceID: String
     private let tools: [ToolDefinition]
     private let authCoordinator: OAuthCoordinator
+    private let toolCallApprovalCoordinator: ToolCallApprovalCoordinator?
     private let toolExecutor: any ToolExecuting
     private let eventHandler: EventHandler?
 
@@ -27,12 +28,14 @@ final class LocalMCPServer: @unchecked Sendable {
         instanceID: String,
         tools: [ToolDefinition],
         authCoordinator: OAuthCoordinator,
+        toolCallApprovalCoordinator: ToolCallApprovalCoordinator? = nil,
         toolExecutor: any ToolExecuting,
         eventHandler: EventHandler? = nil
     ) {
         self.instanceID = instanceID
         self.tools = tools
         self.authCoordinator = authCoordinator
+        self.toolCallApprovalCoordinator = toolCallApprovalCoordinator
         self.toolExecutor = toolExecutor
         self.eventHandler = eventHandler
     }
@@ -460,6 +463,22 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         do {
+            if let tool = tools.first(where: { $0.id == name }),
+               tool.capability != .readOnly {
+                guard let toolCallApprovalCoordinator else {
+                    eventHandler?(.log(.warning, "Blocked \(tool.name): host approval gate is unavailable."))
+                    return jsonRPCError(id: id, code: -32003, message: "Host approval is required for this tool.")
+                }
+
+                eventHandler?(.log(.warning, "\(tool.name) is waiting for host approval before execution."))
+                let approved = await toolCallApprovalCoordinator.requestApproval(tool: tool, parameters: arguments)
+                guard approved else {
+                    eventHandler?(.log(.warning, "\(tool.name) was denied or expired before execution."))
+                    return jsonRPCError(id: id, code: -32004, message: "Tool call was not approved on the host Mac.")
+                }
+                eventHandler?(.log(.info, "\(tool.name) approved on host Mac."))
+            }
+
             let outcome = try await toolExecutor.execute(toolID: name, parameters: arguments)
             let structuredContent = structuredContent(for: outcome)
             eventHandler?(.log(

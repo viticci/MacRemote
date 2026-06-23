@@ -221,6 +221,76 @@ final class LocalMCPServerTests: XCTestCase {
         )
         XCTAssertEqual(legacyMCPPath.statusCode, 200)
     }
+
+    func testDestructiveMCPToolCallRequiresHostApproval() async throws {
+        let coordinator = OAuthCoordinator()
+        let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 5)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.remctl.run",
+                    name: "Run RemCTL",
+                    summary: "Run full RemCTL.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{args}"],
+                    parameters: [
+                        ToolParameter(
+                            name: "args",
+                            title: "Arguments",
+                            kind: .stringArray,
+                            required: false
+                        )
+                    ],
+                    capability: .destructive,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolCallApprovalCoordinator: toolApprovals,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let callTask = Task { () throws -> ToolCallErrorResponse in
+            let response = try await postJSON(
+                url: base.appendingPathComponent("mcp/test-instance"),
+                bearerToken: accessToken,
+                headers: ["MCP-Protocol-Version": "2025-11-25"],
+                body: [
+                    "jsonrpc": "2.0",
+                    "id": "call",
+                    "method": "tools/call",
+                    "params": [
+                        "name": "test.remctl.run",
+                        "arguments": [
+                            "args": ["add", "Test", "-l", "Work"]
+                        ]
+                    ]
+                ]
+            )
+            let error = response.json["error"] as? [String: Any]
+            return ToolCallErrorResponse(
+                statusCode: response.statusCode,
+                errorCode: error?["code"] as? Int
+            )
+        }
+
+        let approval = try await waitForPendingToolApproval(in: toolApprovals)
+        XCTAssertEqual(approval.toolID, "test.remctl.run")
+        XCTAssertTrue(approval.argumentsPreview.contains("args=add Test -l Work"))
+        XCTAssertTrue(toolApprovals.deny(requestID: approval.id))
+
+        let deniedCall = try await callTask.value
+        XCTAssertEqual(deniedCall.statusCode, 200)
+        XCTAssertEqual(deniedCall.errorCode, -32004)
+    }
 }
 
 private struct FakeToolExecutor: ToolExecuting {
@@ -237,6 +307,80 @@ private struct FakeToolExecutor: ToolExecuting {
             truncatedStderr: false
         )
     }
+}
+
+private struct ToolCallErrorResponse: Sendable {
+    let statusCode: Int
+    let errorCode: Int?
+}
+
+private func authorizedAccessToken(
+    base: URL,
+    coordinator: OAuthCoordinator,
+    server: LocalMCPServer
+) async throws -> String {
+    let verifier = "server-flow-verifier"
+    let registered = try await postJSON(
+        url: base.appendingPathComponent("register"),
+        body: [
+            "client_name": "HTTP Test",
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "scope": "mcp:tools"
+        ]
+    )
+    XCTAssertEqual(registered.statusCode, 201)
+    let clientID = try XCTUnwrap(registered.json["client_id"] as? String)
+
+    var authorize = URLComponents(url: base.appendingPathComponent("authorize"), resolvingAgainstBaseURL: false)!
+    authorize.queryItems = [
+        URLQueryItem(name: "response_type", value: "code"),
+        URLQueryItem(name: "client_id", value: clientID),
+        URLQueryItem(name: "redirect_uri", value: "http://127.0.0.1/callback"),
+        URLQueryItem(name: "scope", value: "mcp:tools"),
+        URLQueryItem(name: "state", value: "state-token"),
+        URLQueryItem(name: "code_challenge", value: OAuthCoordinator.pkceChallenge(for: verifier)),
+        URLQueryItem(name: "code_challenge_method", value: "S256")
+    ]
+    let authorizationPage = try await get(url: try XCTUnwrap(authorize.url))
+    XCTAssertEqual(authorizationPage.statusCode, 200)
+
+    let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
+    XCTAssertTrue(server.approveAuthorizationRequest(id: requestID))
+
+    var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
+    statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
+    let status = try await getJSON(url: try XCTUnwrap(statusURL.url))
+    let redirectURI = try XCTUnwrap(status.json["redirect_uri"] as? String)
+    let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+    let token = try await postForm(
+        url: base.appendingPathComponent("token"),
+        form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "code": code,
+            "code_verifier": verifier
+        ]
+    )
+    XCTAssertEqual(token.statusCode, 200)
+    return try XCTUnwrap(token.json["access_token"] as? String)
+}
+
+private func waitForPendingToolApproval(
+    in coordinator: ToolCallApprovalCoordinator,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async throws -> ToolCallApprovalRequest {
+    for _ in 0..<50 {
+        if let request = coordinator.approvalSnapshot().first(where: { $0.state == .pending }) {
+            return request
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    XCTFail("Timed out waiting for pending tool approval.", file: file, line: line)
+    throw NSError(domain: "MacRemoteTests", code: 1)
 }
 
 private func get(url: URL, headers: [String: String] = [:]) async throws -> (statusCode: Int, data: Data) {

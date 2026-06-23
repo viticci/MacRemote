@@ -69,6 +69,32 @@ struct ApprovalRequest: Identifiable, Hashable, Sendable {
     }
 }
 
+struct ToolCallApprovalRequest: Identifiable, Hashable, Sendable {
+    enum State: String, Sendable {
+        case pending
+        case approved
+        case denied
+        case expired
+    }
+
+    let id: UUID
+    let toolID: String
+    let toolName: String
+    let capability: ToolCapability
+    let argumentsPreview: String
+    let createdAt: Date
+    var state: State
+
+    var stateTitle: String {
+        switch state {
+        case .pending: "Pending"
+        case .approved: "Approved"
+        case .denied: "Denied"
+        case .expired: "Expired"
+        }
+    }
+}
+
 enum FullDiskAccessState: Equatable, Sendable {
     case unknown
     case checking

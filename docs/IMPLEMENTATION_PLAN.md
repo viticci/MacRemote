@@ -27,6 +27,8 @@
 - Add `/mcp` JSON-RPC handling for `tools/list` and `tools/call`.
 - Wire the full RemCTL CLI adapter and read helper tools through the MCP
   handler.
+- Add per-call host approval for write and destructive tool calls before the
+  process runner executes them.
 - Wire user-defined generic CLI adapter tools through the same MCP handler.
 - Block local server startup until the app-launched RemCTL doctor check passes.
 
@@ -63,6 +65,7 @@
 - No server binding outside `127.0.0.1`.
 - No public tunnel before local health passes.
 - No OAuth token without host approval.
+- No write or destructive tool execution without per-call host approval.
 - No secrets in logs, git, screenshots, or command output.
 - No RemCTL exposure before Full Disk Access is explicitly granted and verified
   from MacRemote's own process context.

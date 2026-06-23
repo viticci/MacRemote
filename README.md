@@ -15,6 +15,7 @@ the full RemCTL CLI plus narrow read helper tools.
 - No shell execution for tool calls. Commands run as exact executable paths plus
   validated argv arrays.
 - Host-side approval before a remote client receives OAuth tokens.
+- Per-call host approval before write or destructive tools execute.
 - Full Disk Access preflight before the full RemCTL profile can be exposed.
 - Cloudflare Tunnel for public reachability. The tunnel forwards only to the
   local MCP server port, not to the Mac as a whole.
@@ -108,6 +109,7 @@ MacRemote should fail closed:
 - no tunnel unless the local server is healthy;
 - no tool execution without a valid access token;
 - no token issuance without host approval;
+- no write or destructive tool execution without per-call host approval;
 - no arbitrary shell strings;
 - no `sh`, `bash`, `zsh`, `fish`, `csh`, `tcsh`, or `env` executable wrappers;
 - no inherited broad environment;
@@ -127,6 +129,9 @@ MacRemote should fail closed:
 - `remctl.run` is marked destructive because the RemCTL CLI can create, edit,
   complete, or delete reminders and lists. It is still direct `Process`
   execution, never shell execution.
+- Write and destructive tool calls are paused until they are approved in the
+  Approvals view on the host Mac. Denied or expired calls do not reach the
+  process runner.
 - Before starting the local MCP server, MacRemote runs
   `remctl doctor --for-agent --json` from its own process context. If macOS
   privacy blocks Reminders CoreData access, startup is blocked and Settings

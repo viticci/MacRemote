@@ -7,64 +7,152 @@ struct ApprovalsView: View {
         VStack(alignment: .leading, spacing: 18) {
             HeaderView(
                 title: "Approvals",
-                subtitle: "Remote clients cannot authorize themselves. New clients must be approved on this Mac."
+                subtitle: "Approve new remote clients and write-capable tool calls on this Mac."
             )
 
-            if appModel.approvals.isEmpty {
+            if appModel.approvals.isEmpty && appModel.toolCallApprovals.isEmpty {
                 ContentUnavailableView(
                     "No Pending Requests",
                     systemImage: "checkmark.shield",
-                    description: Text("Authorization requests will appear here when a remote MCP client connects.")
+                    description: Text("Client authorization and write-capable tool calls will appear here.")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(appModel.approvals) { request in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .firstTextBaseline) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(request.clientName)
-                                    .font(.headline)
-                                Text(request.redirectURI)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                            }
-
-                            Spacer()
-
-                            Text(request.stateTitle)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(color(for: request.state))
-                        }
-
-                        if !request.requestedScopes.isEmpty {
-                            Text(request.requestedScopes.joined(separator: ", "))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if request.state == .pending {
-                            HStack {
-                                Button("Deny", systemImage: "xmark") {
-                                    appModel.denyAuthorizationRequest(request.id)
-                                }
-
-                                Button("Approve", systemImage: "checkmark") {
-                                    appModel.approveAuthorizationRequest(request.id)
-                                }
-                                .buttonStyle(.borderedProminent)
+                List {
+                    if !appModel.approvals.isEmpty {
+                        Section("Client Authorization") {
+                            ForEach(appModel.approvals) { request in
+                                AuthorizationApprovalRow(request: request)
                             }
                         }
                     }
-                    .padding(.vertical, 6)
+
+                    if !appModel.toolCallApprovals.isEmpty {
+                        Section("Tool Calls") {
+                            ForEach(appModel.toolCallApprovals) { request in
+                                ToolCallApprovalRow(request: request)
+                            }
+                        }
+                    }
                 }
             }
         }
         .padding(24)
         .navigationTitle("Approvals")
     }
+}
+
+private struct AuthorizationApprovalRow: View {
+    @Environment(AppModel.self) private var appModel
+    let request: ApprovalRequest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(request.clientName)
+                        .font(.headline)
+                    Text(request.redirectURI)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                Spacer()
+
+                Text(request.stateTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(color(for: request.state))
+            }
+
+            if !request.requestedScopes.isEmpty {
+                Text(request.requestedScopes.joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if request.state == .pending {
+                HStack {
+                    Button("Deny", systemImage: "xmark") {
+                        appModel.denyAuthorizationRequest(request.id)
+                    }
+
+                    Button("Approve", systemImage: "checkmark") {
+                        appModel.approveAuthorizationRequest(request.id)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
 
     private func color(for state: ApprovalRequest.State) -> Color {
+        switch state {
+        case .pending: .orange
+        case .approved: .green
+        case .denied: .red
+        case .expired: .secondary
+        }
+    }
+}
+
+private struct ToolCallApprovalRow: View {
+    @Environment(AppModel.self) private var appModel
+    let request: ToolCallApprovalRequest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(request.toolName)
+                        .font(.headline)
+                    Text(request.toolID)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text(request.stateTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(color(for: request.state))
+            }
+
+            HStack(spacing: 8) {
+                Text(request.capability.title)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.orange.opacity(0.18), in: Capsule())
+
+                Text(request.createdAt, style: .time)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(request.argumentsPreview)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            if request.state == .pending {
+                HStack {
+                    Button("Deny", systemImage: "xmark") {
+                        appModel.denyToolCallRequest(request.id)
+                    }
+
+                    Button("Approve Run", systemImage: "play.fill") {
+                        appModel.approveToolCallRequest(request.id)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func color(for state: ToolCallApprovalRequest.State) -> Color {
         switch state {
         case .pending: .orange
         case .approved: .green
