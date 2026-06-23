@@ -276,6 +276,13 @@ final class AppModel {
             .appendingPathComponent(instanceID)
     }
 
+    var currentPublicMCPURL: URL? {
+        if case .running(let publicURL) = tunnelStatus {
+            return self.publicMCPURL(for: publicURL)
+        }
+        return nil
+    }
+
     func appendLog(level: AppLogEntry.Level, _ message: String) {
         logs.insert(AppLogEntry(date: Date(), level: level, message: message), at: 0)
         if logs.count > 250 {

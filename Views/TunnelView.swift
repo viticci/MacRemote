@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct TunnelView: View {
@@ -23,9 +24,17 @@ struct TunnelView: View {
                             .foregroundStyle(appModel.localServerURL == nil ? .secondary : .primary)
                     }
                     LabeledContent("Public URL") {
-                        Text(publicURLText)
-                            .foregroundStyle(appModel.tunnelStatus.isRunning ? .primary : .secondary)
-                            .textSelection(.enabled)
+                        HStack(spacing: 8) {
+                            Text(publicURLText)
+                                .foregroundStyle(appModel.tunnelStatus.isRunning ? .primary : .secondary)
+                                .textSelection(.enabled)
+
+                            if appModel.currentPublicMCPURL != nil {
+                                Button("Copy", systemImage: "doc.on.doc") {
+                                    copyPublicURL()
+                                }
+                            }
+                        }
                     }
 
                     Divider()
@@ -52,6 +61,10 @@ struct TunnelView: View {
                                 appModel.refreshTunnelStatus()
                             }
                         }
+
+                        Button("Smoke Test Guide", systemImage: "terminal") {
+                            openSmokeTestGuide()
+                        }
                     }
                 }
                 .panelStyle()
@@ -70,9 +83,11 @@ struct TunnelView: View {
     }
 
     private var publicURLText: String {
+        if let currentPublicMCPURL = appModel.currentPublicMCPURL {
+            return currentPublicMCPURL.absoluteString
+        }
+
         switch appModel.tunnelStatus {
-        case .running(let url):
-            return appModel.publicMCPURL(for: url).absoluteString
         case .starting:
             return "Waiting for Cloudflare"
         case .failed(let message):
@@ -80,5 +95,17 @@ struct TunnelView: View {
         default:
             return "Not created yet"
         }
+    }
+
+    private func copyPublicURL() {
+        guard let url = appModel.currentPublicMCPURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        appModel.appendLog(level: .info, "Copied public MCP URL.")
+    }
+
+    private func openSmokeTestGuide() {
+        let url = URL(fileURLWithPath: "/Users/viticci/Projects/MacRemote/docs/END_TO_END_SMOKE_TEST.md")
+        NSWorkspace.shared.open(url)
     }
 }
