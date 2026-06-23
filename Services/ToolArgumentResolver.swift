@@ -2,7 +2,7 @@ import Foundation
 
 enum ToolArgumentResolver {
     private static let maximumArgumentCount = 64
-    private static let maximumArgumentLength = 512
+    private static let maximumArgumentLength = 4096
     private static let blockedExecutableNames: Set<String> = [
         "bash",
         "csh",

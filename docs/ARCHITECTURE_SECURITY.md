@@ -115,19 +115,25 @@ generic adapter ergonomics by parsing `--help` output into richer flag schemas;
 the security model must still treat every exposed executable as a delegated
 capability rather than a sandbox.
 
-The first profile is RemCTL read-only:
+The first remote profile is the full RemCTL CLI, with read helpers for common
+queries:
 
 - executable: `/Users/viticci/bin/remctl`
-- allowed subcommands: `today`, `upcoming`, `overdue`, `show`, `search`, `info`,
-  `lists`, `sections`, `stats`
-- forced machine-readable output where supported: `--json`
-- write commands rejected until the auth, audit, and per-call confirmation model
-  is proven.
+- full adapter tool: `remctl.run`, which passes validated argv arrays directly
+  to RemCTL;
+- read helper tools: `today`, `upcoming`, `overdue`, `lists`, `sections`,
+  `stats`, `search`, `show`, and `info`;
+- helper tools force machine-readable output with global `--format json`;
+- `remctl.run` is annotated as destructive because the full RemCTL CLI includes
+  write and delete operations.
 
-Direct RemCTL reads use the local Reminders CoreData store. When launched from a
-GUI app bundle, macOS privacy controls can block that read unless the app has
-Full Disk Access. MacRemote should surface that as a permission gate rather than
-falling back to a broader or less-auditable execution path.
+Full RemCTL uses the local Reminders CoreData store for high-fidelity reads and
+normal RemCTL write paths for mutations. When launched from a GUI app bundle,
+macOS privacy controls can block that access unless the app has Full Disk
+Access. MacRemote blocks local server startup until `remctl doctor --for-agent
+--json` passes from the app process context. If the check fails, Settings shows
+the exact RemCTL permission targets and can launch RemCTL's guided Full Disk
+Access helper.
 
 ### Tunnel Manager
 

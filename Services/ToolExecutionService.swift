@@ -69,7 +69,7 @@ struct RemCTLToolExecutor: ToolExecuting {
 
     func execute(toolID: String, parameters: [String: ToolArgumentValue] = [:]) async throws -> ToolExecutionOutcome {
         try await ConfiguredToolExecutor(
-            tools: RemCTLToolCatalog.readOnlyTools,
+            tools: RemCTLToolCatalog.builtInTools,
             environment: environment
         )
         .execute(toolID: toolID, parameters: parameters)

@@ -68,3 +68,40 @@ struct ApprovalRequest: Identifiable, Hashable, Sendable {
         }
     }
 }
+
+enum FullDiskAccessState: Equatable, Sendable {
+    case unknown
+    case checking
+    case ready
+    case required
+    case helperOpened
+    case failed(String)
+
+    var title: String {
+        switch self {
+        case .unknown: "Unknown"
+        case .checking: "Checking"
+        case .ready: "Ready"
+        case .required: "Required"
+        case .helperOpened: "Helper Opened"
+        case .failed: "Failed"
+        }
+    }
+}
+
+struct FullDiskAccessTarget: Identifiable, Equatable, Sendable {
+    var id: String { path }
+    let title: String
+    let path: String
+    let subtitle: String
+}
+
+struct FullDiskAccessReport: Equatable, Sendable {
+    var state: FullDiskAccessState = .unknown
+    var detail: String = "Check Full Disk Access before exposing full RemCTL over MCP."
+    var targets: [FullDiskAccessTarget] = []
+
+    var isReady: Bool {
+        state == .ready
+    }
+}

@@ -60,7 +60,7 @@ struct DashboardView: View {
                         title: "Tools",
                         value: "\(appModel.tools.count) exposed",
                         systemImage: "wrench.and.screwdriver",
-                        detail: "\(appModel.tools.filter { $0.isUserDefined }.count) custom, \(RemCTLToolCatalog.readOnlyTools.count) RemCTL built-in."
+                        detail: "\(appModel.tools.filter { $0.isUserDefined }.count) custom, 1 full RemCTL CLI, \(RemCTLToolCatalog.readOnlyTools.count) read helpers."
                     ) {
                         Button("Run Safe Test", systemImage: "checkmark.circle") {
                             appModel.runRemCTLTodayTest()
@@ -106,8 +106,9 @@ private struct SecurityChecklistView: View {
     private let items = [
         "Loopback-only local server",
         "Host approval required before token issuance",
+        "Full Disk Access checked before server start",
         "No arbitrary shell commands",
-        "RemCTL profile starts read-only",
+        "Full RemCTL CLI runs as direct argv",
         "Cloudflare Tunnel forwards one local port"
     ]
 

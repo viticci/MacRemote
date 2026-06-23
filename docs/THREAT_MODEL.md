@@ -102,7 +102,10 @@ High:
 
 - redirect URI validation flaw that leaks authorization codes;
 - refresh token replay or non-rotating refresh tokens;
-- RemCTL write command exposed in the first read-only profile;
+- full RemCTL CLI exposed without host-approved OAuth or destructive tool
+  annotation;
+- RemCTL exposed before a verified Full Disk Access gate passes from
+  MacRemote's process context;
 - logs storing bearer tokens or Cloudflare credentials.
 
 Medium:

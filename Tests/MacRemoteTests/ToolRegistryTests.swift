@@ -78,7 +78,7 @@ final class ToolRegistryTests: XCTestCase {
             origin: .userDefined
         )
 
-        try store.saveUserDefinedTools(RemCTLToolCatalog.readOnlyTools + [custom])
+        try store.saveUserDefinedTools(RemCTLToolCatalog.builtInTools + [custom])
         let loaded = try store.loadUserDefinedTools()
         XCTAssertEqual(loaded, [custom])
     }

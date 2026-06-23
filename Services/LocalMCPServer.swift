@@ -141,7 +141,7 @@ final class LocalMCPServer: @unchecked Sendable {
                 "ok": true,
                 "service": "MacRemote",
                 "instance_id": instanceID,
-                "tool_profile": "remctl-readonly",
+                "tool_profile": "remctl-full-cli",
                 "tool_count": tools.count,
                 "auth": "host-approved-oauth-pkce"
             ])

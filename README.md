@@ -5,7 +5,7 @@ set of local tools to remote MCP clients.
 
 The design goal is not "remote shell for your Mac." The server can only run
 tools that the user explicitly defines in the app, and the first live profile is
-limited to RemCTL read-only commands.
+the full RemCTL CLI plus narrow read helper tools.
 
 ## Product Shape
 
@@ -15,6 +15,7 @@ limited to RemCTL read-only commands.
 - No shell execution for tool calls. Commands run as exact executable paths plus
   validated argv arrays.
 - Host-side approval before a remote client receives OAuth tokens.
+- Full Disk Access preflight before the full RemCTL profile can be exposed.
 - Cloudflare Tunnel for public reachability. The tunnel forwards only to the
   local MCP server port, not to the Mac as a whole.
 
@@ -78,12 +79,13 @@ expanding the local command surface.
 The first end-to-end target is:
 
 1. Start MacRemote.
-2. Enable the RemCTL-only tool profile.
-3. Start the local MCP server.
+2. Grant Full Disk Access to MacRemote with the guided RemCTL helper if needed.
+3. Start the local MCP server after `remctl doctor --for-agent --json` passes
+   from the app process.
 4. Expose it through a Cloudflare Tunnel.
 5. Connect a remote model client to the MCP URL.
 6. Approve the auth request on the Mac.
-7. Run a RemCTL read-only tool call and verify the result.
+7. Run a RemCTL tool call and verify the result.
 
 ## Repository Layout
 
@@ -111,17 +113,24 @@ MacRemote should fail closed:
 - no inherited broad environment;
 - no unbounded runtime or output;
 - no default filesystem delete commands;
-- no write-capable RemCTL commands in the first profile.
+- no RemCTL exposure until Full Disk Access passes from MacRemote's own process
+  context.
 
 ## Current Local Gates
 
 - `cloudflared` is supported when installed in `/opt/homebrew/bin` or
   `/usr/local/bin`. MacRemote starts accountless quick tunnels and extracts the
   temporary `trycloudflare.com` MCP URL from process output.
-- Direct RemCTL reads from the GUI app require Full Disk Access for
-  `dist/MacRemote.app`; without it, macOS blocks reads of the local Reminders
-  CoreData store. Terminal runs can still pass because Terminal already has the
-  required permission.
+- The default RemCTL surface includes `remctl.run`, a full CLI adapter that
+  passes validated argv arrays directly to `/Users/viticci/bin/remctl`, plus
+  narrow read helper tools for common calls.
+- `remctl.run` is marked destructive because the RemCTL CLI can create, edit,
+  complete, or delete reminders and lists. It is still direct `Process`
+  execution, never shell execution.
+- Before starting the local MCP server, MacRemote runs
+  `remctl doctor --for-agent --json` from its own process context. If macOS
+  privacy blocks Reminders CoreData access, startup is blocked and Settings
+  offers RemCTL's guided Full Disk Access helper.
 
 ## Research Notes
 

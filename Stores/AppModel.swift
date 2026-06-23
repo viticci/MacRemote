@@ -12,18 +12,20 @@ final class AppModel {
     var tunnelStatus: TunnelStatus = .stopped
     var localServerURL: URL?
     var instanceID: String = AppModel.makeInstanceID()
+    var fullDiskAccessReport = FullDiskAccessReport()
 
     private let tunnelService = TunnelService()
     private let toolStore = ToolRegistryStore()
+    private let fullDiskAccessService = FullDiskAccessService()
     private var authCoordinator: OAuthCoordinator!
     private var localServer: LocalMCPServer?
 
     init() {
         do {
             let customTools = try toolStore.loadUserDefinedTools()
-            tools = RemCTLToolCatalog.readOnlyTools + customTools
+            tools = RemCTLToolCatalog.builtInTools + customTools
         } catch {
-            tools = RemCTLToolCatalog.readOnlyTools
+            tools = RemCTLToolCatalog.builtInTools
             logs.insert(AppLogEntry(date: Date(), level: .error, message: "Could not load custom tools: \(error.localizedDescription)"), at: 0)
         }
 
@@ -33,12 +35,34 @@ final class AppModel {
             }
         }
         tunnelStatus = tunnelService.status(localServerURL: nil)
-        appendLog(level: .info, "MacRemote initialized with RemCTL read-only profile.")
+        appendLog(level: .info, "MacRemote initialized with full RemCTL CLI profile.")
     }
 
     func startLocalServer() {
-        guard !serverStatus.isRunning else { return }
+        switch serverStatus {
+        case .running, .starting:
+            return
+        case .stopped, .failed:
+            break
+        }
+
         serverStatus = .starting
+        Task {
+            let report = await refreshFullDiskAccessStatus()
+            guard report.isReady else {
+                serverStatus = .failed("Full Disk Access required for full RemCTL.")
+                tunnelStatus = tunnelService.status(localServerURL: localServerURL)
+                selection = .settings
+                appendLog(level: .warning, "Blocked server start: grant Full Disk Access to MacRemote before exposing the full RemCTL CLI.")
+                return
+            }
+
+            startLocalServerAfterPermissionCheck()
+        }
+    }
+
+    private func startLocalServerAfterPermissionCheck() {
+        guard !serverStatus.isRunning else { return }
 
         do {
             let server = LocalMCPServer(
@@ -78,7 +102,52 @@ final class AppModel {
 
     func runRemCTLTodayTest() {
         Task {
+            let report = await refreshFullDiskAccessStatus()
+            guard report.isReady else {
+                selection = .settings
+                appendLog(level: .warning, "Blocked RemCTL test: Full Disk Access is required for MacRemote's app-launched RemCTL process.")
+                return
+            }
+
             await runToolTest(toolID: "remctl.today")
+        }
+    }
+
+    func checkFullDiskAccess() {
+        Task {
+            let report = await refreshFullDiskAccessStatus()
+            switch report.state {
+            case .ready:
+                appendLog(level: .info, "Full Disk Access check passed for MacRemote.")
+            case .required:
+                appendLog(level: .warning, "Full Disk Access required: \(singleLine(report.detail))")
+            case .failed(let message):
+                appendLog(level: .error, "Full Disk Access check failed: \(message)")
+            default:
+                break
+            }
+        }
+    }
+
+    func openFullDiskAccessHelper() {
+        Task {
+            fullDiskAccessReport = FullDiskAccessReport(
+                state: .checking,
+                detail: "Opening RemCTL's guided Full Disk Access setup.",
+                targets: fullDiskAccessReport.targets
+            )
+            let report = await fullDiskAccessService.openHelper(environment: AppModel.toolEnvironment)
+            fullDiskAccessReport = report
+            selection = .settings
+
+            switch report.state {
+            case .helperOpened:
+                appendLog(level: .info, "Opened RemCTL Full Disk Access helper.")
+            case .failed(let message):
+                appendLog(level: .error, "Could not open Full Disk Access helper: \(message)")
+            default:
+                appendLog(level: .warning, report.detail)
+            }
         }
     }
 
@@ -243,6 +312,24 @@ final class AppModel {
 
     private func toolExecutorSnapshot() -> ConfiguredToolExecutor {
         ConfiguredToolExecutor(tools: tools, environment: AppModel.toolEnvironment)
+    }
+
+    private func refreshFullDiskAccessStatus() async -> FullDiskAccessReport {
+        fullDiskAccessReport = FullDiskAccessReport(
+            state: .checking,
+            detail: "Running `remctl doctor --for-agent --json` from MacRemote.",
+            targets: fullDiskAccessReport.targets
+        )
+        let report = await fullDiskAccessService.check(environment: AppModel.toolEnvironment)
+        fullDiskAccessReport = report
+        return report
+    }
+
+    private func singleLine(_ value: String) -> String {
+        value
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func handleServerEvent(_ event: LocalMCPServerEvent) {

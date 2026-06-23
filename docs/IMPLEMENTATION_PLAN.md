@@ -7,7 +7,9 @@
 - Add `.codex/environments/environment.toml`.
 - Build the native SwiftUI shell.
 - Add persistent app model for server, tunnel, tools, auth requests, and logs.
-- Add RemCTL read-only tool definitions.
+- Add the full RemCTL CLI adapter plus narrow read helper tool definitions.
+- Add a Full Disk Access flow that uses RemCTL's own permission helper and
+  `remctl doctor --for-agent --json` from the app process.
 - Add direct process runner that never invokes a shell.
 - Add unit tests for command validation and argv construction.
 - Add generic CLI adapter definitions: executable path + `{args}` array +
@@ -23,9 +25,10 @@
 - Add pending host-approval flow in app state.
 - Add token issuance with PKCE.
 - Add `/mcp` JSON-RPC handling for `tools/list` and `tools/call`.
-- Wire RemCTL read-only tools through the MCP handler.
+- Wire the full RemCTL CLI adapter and read helper tools through the MCP
+  handler.
 - Wire user-defined generic CLI adapter tools through the same MCP handler.
-- Add an explicit Reminders permission preflight for GUI-launched RemCTL reads.
+- Block local server startup until the app-launched RemCTL doctor check passes.
 
 ## Phase 3: Tunnel
 
@@ -42,7 +45,7 @@
 - Use the public HTTPS MCP URL in an Anthropic or OpenAI API call.
 - Confirm the model can discover the RemCTL tool.
 - Approve the auth request on the Mac.
-- Confirm a read-only RemCTL result returns through MCP.
+- Confirm a full RemCTL CLI result returns through MCP.
 
 ## Phase 5: Computer Use Verification
 
@@ -60,7 +63,6 @@
 - No server binding outside `127.0.0.1`.
 - No public tunnel before local health passes.
 - No OAuth token without host approval.
-- No RemCTL write command in the first public tunnel profile.
 - No secrets in logs, git, screenshots, or command output.
-- No silent bypass around macOS privacy permissions; if RemCTL cannot read the
-  local store from the app bundle, show the permission failure and stop.
+- No RemCTL exposure before Full Disk Access is explicitly granted and verified
+  from MacRemote's own process context.

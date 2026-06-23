@@ -3,6 +3,33 @@ import Foundation
 enum RemCTLToolCatalog {
     static let executablePath = "/Users/viticci/bin/remctl"
 
+    static let fullCLITool = ToolDefinition(
+        id: "remctl.run",
+        name: "Run RemCTL",
+        summary: "Run the full RemCTL CLI by passing argv directly. Requires MacRemote's Full Disk Access preflight before the server can start.",
+        executablePath: executablePath,
+        argumentPattern: ["{args}"],
+        parameters: [
+            ToolParameter(
+                name: "args",
+                title: "Arguments",
+                kind: .stringArray,
+                required: false
+            ),
+            ToolParameter(
+                name: "stdin",
+                title: "Standard Input",
+                kind: .string,
+                required: false,
+                maximumLength: 1024 * 1024
+            )
+        ],
+        capability: .destructive,
+        timeoutSeconds: 30,
+        outputByteLimit: 2 * 1024 * 1024,
+        category: .reminders
+    )
+
     static let readOnlyTools: [ToolDefinition] = [
         ToolDefinition(
             id: "remctl.today",
@@ -144,8 +171,10 @@ enum RemCTLToolCatalog {
         )
     ]
 
+    static let builtInTools: [ToolDefinition] = [fullCLITool] + readOnlyTools
+
     static func tool(id: String) -> ToolDefinition? {
-        readOnlyTools.first { $0.id == id }
+        builtInTools.first { $0.id == id }
     }
 
     static func arguments(for toolID: String, parameters: [String: String] = [:]) throws -> [String] {
@@ -153,5 +182,12 @@ enum RemCTLToolCatalog {
             throw ToolValidationError.unknownTool(toolID)
         }
         return try ToolArgumentResolver.arguments(for: tool, stringParameters: parameters)
+    }
+
+    static func arguments(for toolID: String, parameters: [String: ToolArgumentValue]) throws -> [String] {
+        guard let tool = tool(id: toolID) else {
+            throw ToolValidationError.unknownTool(toolID)
+        }
+        return try ToolArgumentResolver.arguments(for: tool, parameters: parameters)
     }
 }
