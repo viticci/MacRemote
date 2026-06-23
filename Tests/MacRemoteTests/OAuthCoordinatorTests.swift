@@ -28,6 +28,89 @@ final class OAuthCoordinatorTests: XCTestCase {
         }
     }
 
+    func testPendingAuthorizationsAreCapped() throws {
+        let coordinator = OAuthCoordinator()
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp/test-instance"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Pending Cap",
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+
+        for index in 0..<OAuthCoordinator.maxPendingAuthorizations {
+            _ = try coordinator.beginAuthorization(
+                queryItems: [
+                    "response_type": "code",
+                    "client_id": clientID,
+                    "redirect_uri": "http://127.0.0.1/callback",
+                    "scope": "mcp:tools",
+                    "state": "state-\(index)",
+                    "code_challenge": OAuthCoordinator.pkceChallenge(for: "verifier-\(index)"),
+                    "code_challenge_method": "S256",
+                    "resource": resource
+                ],
+                issuer: issuer,
+                resource: resource
+            )
+        }
+
+        XCTAssertThrowsError(
+            try coordinator.beginAuthorization(
+                queryItems: [
+                    "response_type": "code",
+                    "client_id": clientID,
+                    "redirect_uri": "http://127.0.0.1/callback",
+                    "scope": "mcp:tools",
+                    "state": "overflow",
+                    "code_challenge": OAuthCoordinator.pkceChallenge(for: "overflow-verifier"),
+                    "code_challenge_method": "S256",
+                    "resource": resource
+                ],
+                issuer: issuer,
+                resource: resource
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? OAuthError,
+                .invalidRequest("Too many pending authorization requests. Approve, deny, or wait for expiration.")
+            )
+        }
+    }
+
+    func testResolvedAuthorizationsArePruned() throws {
+        let coordinator = OAuthCoordinator()
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp/test-instance"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Retention",
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+
+        for index in 0..<(OAuthCoordinator.maxStoredAuthorizations + 20) {
+            let requestID = try coordinator.beginAuthorization(
+                queryItems: [
+                    "response_type": "code",
+                    "client_id": clientID,
+                    "redirect_uri": "http://127.0.0.1/callback",
+                    "scope": "mcp:tools",
+                    "state": "state-\(index)",
+                    "code_challenge": OAuthCoordinator.pkceChallenge(for: "verifier-\(index)"),
+                    "code_challenge_method": "S256",
+                    "resource": resource
+                ],
+                issuer: issuer,
+                resource: resource
+            )
+            XCTAssertTrue(coordinator.deny(requestID: requestID))
+        }
+
+        XCTAssertLessThanOrEqual(coordinator.approvalSnapshot().count, OAuthCoordinator.maxStoredAuthorizations)
+    }
+
     func testHostApprovalRequiredBeforeTokenExchange() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "test-verifier-\(UUID().uuidString)"

@@ -211,6 +211,9 @@ Security requirements:
   approved tool profile.
 - Dynamic OAuth client registration is capped in memory; the host can revoke
   grants when the cap is reached.
+- Pending host authorization requests are capped, and resolved authorization
+  history is pruned, so a leaked URL cannot create unbounded approval spam or
+  memory growth.
 - The `WWW-Authenticate` challenge includes path-specific protected-resource
   metadata and an `mcp:tools` scope hint.
 - A leaked public URL is insufficient. The host Mac must approve each new client.

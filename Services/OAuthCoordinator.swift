@@ -17,6 +17,8 @@ final class OAuthCoordinator: @unchecked Sendable {
     typealias ChangeHandler = @Sendable ([ApprovalRequest]) -> Void
 
     static let maxRegisteredClients = 64
+    static let maxPendingAuthorizations = 16
+    static let maxStoredAuthorizations = 64
 
     private struct Client {
         let id: String
@@ -154,8 +156,15 @@ final class OAuthCoordinator: @unchecked Sendable {
             status: .pending
         )
 
-        let snapshot: [ApprovalRequest] = lock.withLock {
+        let snapshot: [ApprovalRequest] = try lock.withLock {
             expirePendingAuthorizations(now: Date())
+            pruneResolvedAuthorizations(keeping: Self.maxStoredAuthorizations - 1)
+            guard authorizations.values.filter({ $0.status == .pending }).count < Self.maxPendingAuthorizations else {
+                throw OAuthError.invalidRequest("Too many pending authorization requests. Approve, deny, or wait for expiration.")
+            }
+            guard authorizations.count < Self.maxStoredAuthorizations else {
+                throw OAuthError.invalidRequest("Too many authorization requests. Revoke grants and try again.")
+            }
             authorizations[id] = authorization
             return approvalSnapshotLocked()
         }
@@ -521,6 +530,18 @@ final class OAuthCoordinator: @unchecked Sendable {
             }
         }
         pruneExpiredTokens(now: now)
+    }
+
+    private func pruneResolvedAuthorizations(keeping limit: Int) {
+        let resolved = authorizations
+            .filter { $0.value.status != .pending }
+            .sorted { $0.value.createdAt > $1.value.createdAt }
+
+        guard resolved.count > limit else { return }
+
+        for (id, _) in resolved.dropFirst(limit) {
+            authorizations.removeValue(forKey: id)
+        }
     }
 
     private func pruneExpiredTokens(now: Date) {
