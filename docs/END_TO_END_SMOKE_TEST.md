@@ -52,9 +52,11 @@ MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
 The script will:
 
 1. Register a temporary OAuth client with MacRemote.
-2. Open a host approval request in MacRemote > Approvals.
+2. Open a host approval request in MacRemote > Approvals, including the public
+   MCP URL as the OAuth `resource` indicator.
 3. Poll MacRemote until the request is approved.
-4. Exchange the authorization code for an access token.
+4. Exchange the authorization code for an access token bound to that same MCP
+   resource.
 5. Call Anthropic's Messages API with the MacRemote MCP URL.
 6. Enable only the selected tool, defaulting to `remctl.today`.
 7. Report whether Claude produced `mcp_tool_use` and `mcp_tool_result` blocks.

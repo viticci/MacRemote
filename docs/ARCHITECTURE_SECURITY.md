@@ -61,6 +61,7 @@ Required endpoints:
 
 - `GET /health`
 - `GET /.well-known/oauth-protected-resource`
+- `GET /.well-known/oauth-protected-resource/mcp/<instance-id>`
 - `GET /.well-known/oauth-authorization-server`
 - `POST /register`
 - `GET /authorize`
@@ -152,10 +153,11 @@ The public URL should include an instance-specific high-entropy component:
 - current quick-tunnel shape: `https://<trycloudflare-host>/mcp/<instance-id>`;
 - future named-domain shape: `https://<random-instance>.<configured-domain>/mcp`.
 
-The random instance id must be generated with at least 128 bits of entropy and
-stored in the user keychain or app support directory with file mode protection.
-The URL is not a secret by itself; it is a routing hardening layer. OAuth and
-host-side approval remain mandatory.
+The random instance id must be generated with at least 128 bits of entropy.
+Public forwarded requests must use `/mcp/<instance-id>`; the legacy `/mcp`
+compatibility route is accepted only on loopback. The URL is not a secret by
+itself; it is a routing hardening layer. OAuth and host-side approval remain
+mandatory.
 
 ## Authorization Design
 
@@ -168,12 +170,13 @@ Flow:
    metadata.
 3. Client discovers authorization metadata.
 4. Client uses dynamic client registration or an allowed redirect URI.
-5. Client opens `/authorize` with PKCE.
+5. Client opens `/authorize` with PKCE and the MCP `resource` parameter.
 6. MacRemote creates a pending authorization request and shows it in the Mac app.
 7. The browser page waits. It cannot approve itself.
 8. User approves or denies on the host Mac.
 9. On approval, the server issues a short-lived authorization code.
-10. Client exchanges code plus PKCE verifier for access and refresh tokens.
+10. Client exchanges code plus PKCE verifier plus the MCP `resource` parameter
+    for access and refresh tokens.
 11. Tool calls require a valid bearer token scoped to the instance and tool set.
 
 Security requirements:
@@ -185,6 +188,8 @@ Security requirements:
 - Stored tokens are hashed or encrypted.
 - Tokens are bound to client id, redirect URI, resource URI, instance id, and
   approved tool profile.
+- The `WWW-Authenticate` challenge includes path-specific protected-resource
+  metadata and an `mcp:tools` scope hint.
 - A leaked public URL is insufficient. The host Mac must approve each new client.
 - Pending authorization requests expire automatically.
 - Denials are logged.

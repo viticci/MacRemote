@@ -23,6 +23,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         let codeChallenge: String
         let createdAt: Date
         let issuer: String
+        let resource: String
         var status: ApprovalRequest.State
         var codeHash: String?
         var codeExpiresAt: Date?
@@ -44,6 +45,7 @@ final class OAuthCoordinator: @unchecked Sendable {
     private struct AccessTokenRecord {
         let clientID: String
         let issuer: String
+        let resource: String
         let scopes: Set<String>
         let expiresAt: Date
     }
@@ -51,6 +53,7 @@ final class OAuthCoordinator: @unchecked Sendable {
     private struct RefreshTokenRecord {
         let clientID: String
         let issuer: String
+        let resource: String
         let scopes: Set<String>
         let expiresAt: Date
     }
@@ -98,7 +101,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         ]
     }
 
-    func beginAuthorization(queryItems: [String: String], issuer: String) throws -> UUID {
+    func beginAuthorization(queryItems: [String: String], issuer: String, resource: String) throws -> UUID {
         guard queryItems["response_type"] == "code" else {
             throw OAuthError.invalidRequest("Only authorization code flow is supported.")
         }
@@ -117,6 +120,7 @@ final class OAuthCoordinator: @unchecked Sendable {
 
         let requestedScopes = parseScopes(queryItems["scope"])
         let client = try clientForAuthorization(clientID: clientID, redirectURI: redirectURI, requestedScopes: requestedScopes)
+        let resolvedResource = try resolveRequestedResource(queryItems["resource"], expectedResource: resource)
         let id = UUID()
         let authorization = PendingAuthorization(
             id: id,
@@ -128,6 +132,7 @@ final class OAuthCoordinator: @unchecked Sendable {
             codeChallenge: codeChallenge,
             createdAt: Date(),
             issuer: issuer,
+            resource: resolvedResource,
             status: .pending
         )
 
@@ -210,24 +215,27 @@ final class OAuthCoordinator: @unchecked Sendable {
         return result.changed
     }
 
-    func exchangeToken(form: [String: String], issuer: String) throws -> [String: Any] {
+    func exchangeToken(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {
         switch form["grant_type"] {
         case "authorization_code":
-            return try exchangeAuthorizationCode(form: form, issuer: issuer)
+            return try exchangeAuthorizationCode(form: form, issuer: issuer, resource: resource)
         case "refresh_token":
-            return try exchangeRefreshToken(form: form, issuer: issuer)
+            return try exchangeRefreshToken(form: form, issuer: issuer, resource: resource)
         default:
             throw OAuthError.invalidRequest("Unsupported grant_type.")
         }
     }
 
-    func validateAccessToken(_ token: String, issuer: String, requiredScope: String = "mcp:tools") -> Bool {
+    func validateAccessToken(_ token: String, issuer: String, resource: String, requiredScope: String = "mcp:tools") -> Bool {
         let tokenHash = Self.sha256Hex(token)
         let now = Date()
         return lock.withLock {
             pruneExpiredTokens(now: now)
             guard let record = accessTokensByHash[tokenHash] else { return false }
-            return record.expiresAt > now && record.issuer == issuer && record.scopes.contains(requiredScope)
+            return record.expiresAt > now &&
+                record.issuer == issuer &&
+                record.resource == resource &&
+                record.scopes.contains(requiredScope)
         }
     }
 
@@ -238,7 +246,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         }
     }
 
-    private func exchangeAuthorizationCode(form: [String: String], issuer: String) throws -> [String: Any] {
+    private func exchangeAuthorizationCode(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {
         guard let code = form["code"], !code.isEmpty else {
             throw OAuthError.invalidRequest("Missing code.")
         }
@@ -275,6 +283,10 @@ final class OAuthCoordinator: @unchecked Sendable {
             guard authorization.issuer == issuer else {
                 throw OAuthError.invalidGrant("Issuer mismatch.")
             }
+            let requestedResource = try resolveRequestedResource(form["resource"], expectedResource: resource)
+            guard authorization.resource == requestedResource else {
+                throw OAuthError.invalidGrant("Resource mismatch.")
+            }
             guard let codeExpiresAt = authorization.codeExpiresAt, codeExpiresAt > now else {
                 throw OAuthError.invalidGrant("Authorization code expired.")
             }
@@ -291,10 +303,10 @@ final class OAuthCoordinator: @unchecked Sendable {
         let scopes = lock.withLock {
             authorizations[authorizationID]?.scopes ?? ["mcp:tools"]
         }
-        return issueTokenResponse(clientID: clientID, issuer: issuer, scopes: scopes, now: now)
+        return issueTokenResponse(clientID: clientID, issuer: issuer, resource: resource, scopes: scopes, now: now)
     }
 
-    private func exchangeRefreshToken(form: [String: String], issuer: String) throws -> [String: Any] {
+    private func exchangeRefreshToken(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {
         guard let refreshToken = form["refresh_token"], !refreshToken.isEmpty else {
             throw OAuthError.invalidRequest("Missing refresh_token.")
         }
@@ -312,14 +324,18 @@ final class OAuthCoordinator: @unchecked Sendable {
             guard record.issuer == issuer else {
                 throw OAuthError.invalidGrant("Issuer mismatch.")
             }
+            let requestedResource = try resolveRequestedResource(form["resource"], expectedResource: resource)
+            guard record.resource == requestedResource else {
+                throw OAuthError.invalidGrant("Resource mismatch.")
+            }
             refreshTokensByHash.removeValue(forKey: refreshHash)
             return record
         }
 
-        return issueTokenResponse(clientID: record.clientID, issuer: issuer, scopes: record.scopes, now: now)
+        return issueTokenResponse(clientID: record.clientID, issuer: issuer, resource: resource, scopes: record.scopes, now: now)
     }
 
-    private func issueTokenResponse(clientID: String, issuer: String, scopes: Set<String>, now: Date) -> [String: Any] {
+    private func issueTokenResponse(clientID: String, issuer: String, resource: String, scopes: Set<String>, now: Date) -> [String: Any] {
         let accessToken = Self.randomToken(byteCount: 32)
         let refreshToken = Self.randomToken(byteCount: 32)
         let accessHash = Self.sha256Hex(accessToken)
@@ -331,12 +347,14 @@ final class OAuthCoordinator: @unchecked Sendable {
             accessTokensByHash[accessHash] = AccessTokenRecord(
                 clientID: clientID,
                 issuer: issuer,
+                resource: resource,
                 scopes: scopes,
                 expiresAt: now.addingTimeInterval(TimeInterval(accessExpiresIn))
             )
             refreshTokensByHash[refreshHash] = RefreshTokenRecord(
                 clientID: clientID,
                 issuer: issuer,
+                resource: resource,
                 scopes: scopes,
                 expiresAt: now.addingTimeInterval(TimeInterval(refreshExpiresIn))
             )
@@ -348,8 +366,50 @@ final class OAuthCoordinator: @unchecked Sendable {
             "token_type": "Bearer",
             "expires_in": accessExpiresIn,
             "refresh_expires_in": refreshExpiresIn,
-            "scope": scopes.sorted().joined(separator: " ")
+            "scope": scopes.sorted().joined(separator: " "),
+            "resource": resource
         ]
+    }
+
+    private func resolveRequestedResource(_ rawResource: String?, expectedResource: String) throws -> String {
+        let expected = try Self.canonicalResourceURI(expectedResource)
+        guard let rawResource, !rawResource.isEmpty else {
+            return expected
+        }
+
+        let requested = try Self.canonicalResourceURI(rawResource)
+        guard requested == expected else {
+            throw OAuthError.invalidRequest("Unsupported resource.")
+        }
+        return requested
+    }
+
+    private static func canonicalResourceURI(_ rawValue: String) throws -> String {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: value),
+              let rawScheme = components.scheme,
+              let rawHost = components.host,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil else {
+            throw OAuthError.invalidRequest("Invalid resource.")
+        }
+
+        let scheme = rawScheme.lowercased()
+        guard scheme == "http" || scheme == "https" else {
+            throw OAuthError.invalidRequest("Invalid resource.")
+        }
+
+        var canonical = URLComponents()
+        canonical.scheme = scheme
+        canonical.host = rawHost.lowercased()
+        canonical.port = components.port
+        canonical.path = components.path
+        guard let string = canonical.string else {
+            throw OAuthError.invalidRequest("Invalid resource.")
+        }
+        return string
     }
 
     private func clientForAuthorization(clientID: String, redirectURI: String, requestedScopes: Set<String>) throws -> Client {

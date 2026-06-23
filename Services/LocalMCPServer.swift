@@ -118,7 +118,7 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         let base = baseURL(for: request, activePort: activePort)
-        let mcpResourceURL = "\(base)\(mcpEndpointPath)"
+        let mcpResourceURL = mcpResourceURL(base: base)
         guard isAllowedOrigin(for: request, base: base, activePort: activePort) else {
             return jsonErrorResponse(
                 status: .forbidden,
@@ -127,7 +127,11 @@ final class LocalMCPServer: @unchecked Sendable {
             )
         }
 
-        if isMCPPath(request.path) {
+        if request.method == "GET", isProtectedResourceMetadataPath(request.path) {
+            return jsonResponse(protectedResourceMetadata(base: base))
+        }
+
+        if isMCPPath(request.path, allowLegacyPath: allowsLegacyMCPPath(base: base, activePort: activePort)) {
             switch request.method {
             case "POST":
                 return await mcp(request: request, base: base)
@@ -148,16 +152,6 @@ final class LocalMCPServer: @unchecked Sendable {
                 "tool_count": tools.count,
                 "auth": "host-approved-oauth-pkce"
             ])
-        case ("GET", "/.well-known/oauth-protected-resource"):
-            return jsonResponse([
-                "resource": mcpResourceURL,
-                "authorization_servers": [base],
-                "scopes_supported": ["mcp:tools"],
-                "bearer_methods_supported": ["header"],
-                "resource_type": "mcp-server",
-                "mcp_protocol_version": Self.latestProtocolVersion,
-                "mcp_protocol_versions_supported": Self.supportedProtocolVersions
-            ])
         case ("GET", "/.well-known/oauth-authorization-server"):
             return jsonResponse([
                 "issuer": base,
@@ -168,16 +162,17 @@ final class LocalMCPServer: @unchecked Sendable {
                 "grant_types_supported": ["authorization_code", "refresh_token"],
                 "code_challenge_methods_supported": ["S256"],
                 "token_endpoint_auth_methods_supported": ["none"],
-                "scopes_supported": ["mcp:tools"]
+                "scopes_supported": ["mcp:tools"],
+                "resource_indicators_supported": true
             ])
         case ("POST", "/register"):
             return registerClient(request)
         case ("GET", "/authorize"):
-            return beginAuthorization(request: request, issuer: base)
+            return beginAuthorization(request: request, issuer: base, resource: mcpResourceURL)
         case ("GET", "/authorize/status"):
             return authorizationStatus(request)
         case ("POST", "/token"):
-            return token(request, issuer: base)
+            return token(request, issuer: base, resource: mcpResourceURL)
         default:
             return jsonErrorResponse(status: .notFound, error: "not_found", description: "Route not found.")
         }
@@ -187,8 +182,37 @@ final class LocalMCPServer: @unchecked Sendable {
         "/mcp/\(instanceID)"
     }
 
-    private func isMCPPath(_ path: String) -> Bool {
-        path == "/mcp" || path == mcpEndpointPath
+    private func mcpResourceURL(base: String) -> String {
+        "\(base)\(mcpEndpointPath)"
+    }
+
+    private func protectedResourceMetadataURL(base: String) -> String {
+        "\(base)/.well-known/oauth-protected-resource\(mcpEndpointPath)"
+    }
+
+    private func protectedResourceMetadata(base: String) -> [String: Any] {
+        [
+            "resource": mcpResourceURL(base: base),
+            "authorization_servers": [base],
+            "scopes_supported": ["mcp:tools"],
+            "bearer_methods_supported": ["header"],
+            "resource_type": "mcp-server",
+            "mcp_protocol_version": Self.latestProtocolVersion,
+            "mcp_protocol_versions_supported": Self.supportedProtocolVersions
+        ]
+    }
+
+    private func isProtectedResourceMetadataPath(_ path: String) -> Bool {
+        path == "/.well-known/oauth-protected-resource" ||
+            path == "/.well-known/oauth-protected-resource\(mcpEndpointPath)"
+    }
+
+    private func isMCPPath(_ path: String, allowLegacyPath: Bool) -> Bool {
+        path == mcpEndpointPath || (allowLegacyPath && path == "/mcp")
+    }
+
+    private func allowsLegacyMCPPath(base: String, activePort: UInt16) -> Bool {
+        base == "http://127.0.0.1:\(activePort)"
     }
 
     private func methodNotAllowedForMCP() -> Data {
@@ -310,11 +334,12 @@ final class LocalMCPServer: @unchecked Sendable {
         }
     }
 
-    private func beginAuthorization(request: HTTPRequest, issuer: String) -> Data {
+    private func beginAuthorization(request: HTTPRequest, issuer: String, resource: String) -> Data {
         do {
             let requestID = try authCoordinator.beginAuthorization(
                 queryItems: request.queryItems,
-                issuer: issuer
+                issuer: issuer,
+                resource: resource
             )
             eventHandler?(.approvalsChanged(authCoordinator.approvalSnapshot()))
             eventHandler?(.log(.info, "Authorization request created for host approval."))
@@ -338,9 +363,13 @@ final class LocalMCPServer: @unchecked Sendable {
         return jsonResponse(status)
     }
 
-    private func token(_ request: HTTPRequest, issuer: String) -> Data {
+    private func token(_ request: HTTPRequest, issuer: String, resource: String) -> Data {
         do {
-            let response = try authCoordinator.exchangeToken(form: request.formURLEncodedBody(), issuer: issuer)
+            let response = try authCoordinator.exchangeToken(
+                form: request.formURLEncodedBody(),
+                issuer: issuer,
+                resource: resource
+            )
             eventHandler?(.log(.info, "OAuth token issued after host approval."))
             return jsonResponse(response)
         } catch {
@@ -359,11 +388,11 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         guard let bearerToken = request.bearerToken,
-              authCoordinator.validateAccessToken(bearerToken, issuer: base) else {
+              authCoordinator.validateAccessToken(bearerToken, issuer: base, resource: mcpResourceURL(base: base)) else {
             return HTTPResponse(
                 status: .unauthorized,
                 headers: [
-                    "WWW-Authenticate": "Bearer realm=\"mcp\", resource_metadata=\"\(base)/.well-known/oauth-protected-resource\""
+                    "WWW-Authenticate": "Bearer realm=\"mcp\", resource_metadata=\"\(protectedResourceMetadataURL(base: base))\", scope=\"mcp:tools\""
                 ],
                 body: "{\"ok\":false,\"error\":\"authorization_required\"}"
             ).data

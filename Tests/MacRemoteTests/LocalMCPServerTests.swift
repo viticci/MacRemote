@@ -41,12 +41,20 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(protectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
         XCTAssertEqual(protectedResource.json["mcp_protocol_version"] as? String, "2025-11-25")
 
+        let pathProtectedResource = try await getJSON(
+            url: base.appendingPathComponent(".well-known/oauth-protected-resource/mcp/test-instance"),
+            headers: forwardedHeaders
+        )
+        XCTAssertEqual(pathProtectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp/test-instance")
+        XCTAssertEqual(pathProtectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
+
         let authorizationServer = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-authorization-server"),
             headers: forwardedHeaders
         )
         XCTAssertEqual(authorizationServer.json["issuer"] as? String, "https://macremote-test.trycloudflare.com")
         XCTAssertEqual(authorizationServer.json["registration_endpoint"] as? String, "https://macremote-test.trycloudflare.com/register")
+        XCTAssertEqual(authorizationServer.json["resource_indicators_supported"] as? Bool, true)
     }
 
     func testOAuthProtectedMCPToolFlowOverHTTP() async throws {
@@ -91,6 +99,9 @@ final class LocalMCPServerTests: XCTestCase {
             ]
         )
         XCTAssertEqual(noAuth.statusCode, 401)
+        let challenge = try XCTUnwrap(headerValue(noAuth.headers, named: "WWW-Authenticate"))
+        XCTAssertTrue(challenge.contains("resource_metadata=\"http://127.0.0.1:\(port)/.well-known/oauth-protected-resource/mcp/test-instance\""))
+        XCTAssertTrue(challenge.contains("scope=\"mcp:tools\""))
 
         let invalidOrigin = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -220,6 +231,67 @@ final class LocalMCPServerTests: XCTestCase {
             ]
         )
         XCTAssertEqual(legacyMCPPath.statusCode, 200)
+    }
+
+    func testPublicForwardedRequestsMustUseInstanceMCPPath() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let forwardedHeaders = [
+            "X-Forwarded-Host": "macremote-test.trycloudflare.com",
+            "X-Forwarded-Proto": "https"
+        ]
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(
+            base: base,
+            coordinator: coordinator,
+            server: server,
+            headers: forwardedHeaders
+        )
+
+        let legacyPublicPath = try await postJSON(
+            url: base.appendingPathComponent("mcp"),
+            bearerToken: accessToken,
+            headers: forwardedHeaders,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "legacy-public",
+                "method": "ping"
+            ]
+        )
+        XCTAssertEqual(legacyPublicPath.statusCode, 404)
+
+        let instancePublicPath = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: forwardedHeaders,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "instance-public",
+                "method": "ping"
+            ]
+        )
+        XCTAssertEqual(instancePublicPath.statusCode, 200)
     }
 
     func testForwardedIssuerBindsBearerTokenToOrigin() async throws {
@@ -388,6 +460,7 @@ private func authorizedAccessToken(
     headers: [String: String] = [:]
 ) async throws -> String {
     let verifier = "server-flow-verifier"
+    let resource = resourceURL(base: base, headers: headers, instanceID: "test-instance")
     let registered = try await postJSON(
         url: base.appendingPathComponent("register"),
         headers: headers,
@@ -408,7 +481,8 @@ private func authorizedAccessToken(
         URLQueryItem(name: "scope", value: "mcp:tools"),
         URLQueryItem(name: "state", value: "state-token"),
         URLQueryItem(name: "code_challenge", value: OAuthCoordinator.pkceChallenge(for: verifier)),
-        URLQueryItem(name: "code_challenge_method", value: "S256")
+        URLQueryItem(name: "code_challenge_method", value: "S256"),
+        URLQueryItem(name: "resource", value: resource)
     ]
     let authorizationPage = try await get(url: try XCTUnwrap(authorize.url), headers: headers)
     XCTAssertEqual(authorizationPage.statusCode, 200)
@@ -430,7 +504,8 @@ private func authorizedAccessToken(
             "client_id": clientID,
             "redirect_uri": "http://127.0.0.1/callback",
             "code": code,
-            "code_verifier": verifier
+            "code_verifier": verifier,
+            "resource": resource
         ]
     )
     XCTAssertEqual(token.statusCode, 200)
@@ -473,7 +548,7 @@ private func postJSON(
     bearerToken: String? = nil,
     headers: [String: String] = [:],
     body: [String: Any]
-) async throws -> (statusCode: Int, json: [String: Any]) {
+) async throws -> (statusCode: Int, json: [String: Any], headers: [AnyHashable: Any]) {
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -486,7 +561,7 @@ private func postJSON(
     request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
     let (data, response) = try await URLSession.shared.data(for: request)
     let http = try XCTUnwrap(response as? HTTPURLResponse)
-    return (http.statusCode, (try? decodeJSON(data)) ?? [:])
+    return (http.statusCode, (try? decodeJSON(data)) ?? [:], http.allHeaderFields)
 }
 
 private func postForm(
@@ -517,4 +592,19 @@ private func decodeJSON(_ data: Data) throws -> [String: Any] {
 
 private func percentEncode(_ value: String) -> String {
     value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+}
+
+private func headerValue(_ headers: [AnyHashable: Any], named name: String) -> String? {
+    headers.first { key, _ in
+        guard let key = key as? String else { return false }
+        return key.caseInsensitiveCompare(name) == .orderedSame
+    }?.value as? String
+}
+
+private func resourceURL(base: URL, headers: [String: String], instanceID: String) -> String {
+    if let forwardedHost = headers["X-Forwarded-Host"] {
+        let scheme = headers["X-Forwarded-Proto"] ?? "https"
+        return "\(scheme)://\(forwardedHost)/mcp/\(instanceID)"
+    }
+    return "\(base.absoluteString)/mcp/\(instanceID)"
 }

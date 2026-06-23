@@ -56,10 +56,14 @@ the user selects one, reviews the executable/argv template, and saves it.
 MacRemote targets the latest stable MCP specification, `2025-11-25`, while
 keeping compatibility with `2025-06-18` and `2025-03-26` clients.
 
-- Streamable HTTP endpoint at `/mcp/<instance-id>`, with `/mcp` retained as a
-  compatibility route.
+- Streamable HTTP endpoint at `/mcp/<instance-id>`. `/mcp` is retained only as
+  a loopback compatibility route; public forwarded requests must use the
+  instance-specific path.
 - OAuth 2.1-style authorization code flow with PKCE and host approval.
-- RFC 9728 protected-resource metadata and authorization-server discovery.
+- RFC 9728 protected-resource metadata at the root and MCP endpoint well-known
+  paths, plus authorization-server discovery.
+- OAuth Resource Indicators bind authorization codes, access tokens, and
+  refresh tokens to the exact MCP resource URL.
 - `MCP-Protocol-Version` validation on MCP requests.
 - `Origin` validation to reduce DNS rebinding and browser CSRF risk.
 - Tool `inputSchema`, `outputSchema`, structured results, and risk annotations.

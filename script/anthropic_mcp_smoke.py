@@ -140,6 +140,7 @@ def main() -> int:
 
 def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
     base_url = macremote_base_url(mcp_url)
+    resource = canonical_mcp_resource_url(mcp_url)
     verifier = secrets.token_urlsafe(48)
     challenge = pkce_challenge(verifier)
     redirect_uri = "http://127.0.0.1/callback"
@@ -167,6 +168,7 @@ def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
+            "resource": resource,
         }
     )
     authorize_result = http_request("GET", f"{base_url}/authorize?{authorize_query}")
@@ -203,6 +205,7 @@ def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
             "redirect_uri": redirect_uri,
             "code": code,
             "code_verifier": verifier,
+            "resource": resource,
         },
     )
     access_token = token.get("access_token")
@@ -277,6 +280,22 @@ def macremote_base_url(mcp_url: str) -> str:
     if parsed.scheme != "https" or not parsed.netloc:
         fail("MCP URL must be an absolute HTTPS URL.")
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+
+
+def canonical_mcp_resource_url(mcp_url: str) -> str:
+    parsed = urllib.parse.urlparse(mcp_url)
+    if parsed.scheme != "https" or not parsed.netloc or not parsed.path:
+        fail("MCP URL must be an absolute HTTPS URL with a path.")
+    return urllib.parse.urlunparse(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path.rstrip("/") or "/",
+            "",
+            "",
+            "",
+        )
+    )
 
 
 def pkce_challenge(verifier: str) -> str:
