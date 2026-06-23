@@ -45,9 +45,7 @@ struct TunnelView: View {
                     HStack {
                         switch appModel.tunnelStatus {
                         case .ready:
-                            Button("Start Tunnel", systemImage: "point.3.connected.trianglepath.dotted") {
-                                appModel.startTunnel()
-                            }
+                            StartTunnelButton(title: "Start Tunnel")
                             .buttonStyle(.borderedProminent)
                         case .running:
                             Button("Stop Tunnel", systemImage: "stop.fill") {

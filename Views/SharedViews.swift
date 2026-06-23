@@ -54,6 +54,35 @@ struct StatusPanel<Actions: View>: View {
     }
 }
 
+struct StartTunnelButton: View {
+    @Environment(AppModel.self) private var appModel
+    let title: String
+    @State private var isShowingStartConfirmation = false
+
+    var body: some View {
+        Button(title, systemImage: "point.3.connected.trianglepath.dotted") {
+            isShowingStartConfirmation = true
+        }
+        .confirmationDialog(
+            "Start Public Tunnel?",
+            isPresented: $isShowingStartConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Start Tunnel", role: .destructive) {
+                appModel.startTunnel()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(confirmationMessage)
+        }
+    }
+
+    private var confirmationMessage: String {
+        let summary = appModel.toolExposureSummary
+        return "Cloudflare will create a public HTTPS route to MacRemote's local MCP server, not to the whole Mac. The exposed surface is \(summary.total) tools: \(summary.readOnly) read-only and \(summary.gatedToolCount) write/destructive tools requiring per-call host approval. OAuth host approval is still required before any remote client receives tokens."
+    }
+}
+
 extension View {
     func panelStyle() -> some View {
         self

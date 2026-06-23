@@ -27,6 +27,8 @@ the full RemCTL CLI plus narrow read helper tools.
   and changes the public MCP URL path.
 - Tunnel view summarizes the exposed tool surface before public access: total
   tools, custom tools, generic adapters, and host-gated write/destructive tools.
+- Starting the public tunnel requires explicit confirmation of the exposed tool
+  surface.
 
 ## CLI Adapter Model
 
@@ -151,6 +153,8 @@ MacRemote should fail closed:
   keeping the current MCP URL. Clients must reauthorize on the host Mac.
 - Tunnel shows the currently exposed tool surface and can copy the direct MCP
   preflight command once a public URL exists.
+- Starting Cloudflare Tunnel requires a confirmation that restates the tool
+  surface and the remaining OAuth/per-call approval gates.
 - Before starting the local MCP server, MacRemote runs
   `remctl doctor --for-agent --json` from its own process context. If macOS
   privacy blocks Reminders CoreData access, startup is blocked and Settings

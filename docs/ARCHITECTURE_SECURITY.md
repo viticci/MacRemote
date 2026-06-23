@@ -54,6 +54,9 @@ The tunnel UI must show the tool surface that will be reachable through the
 public URL: total tools, custom tools, generic CLI adapters, and write or
 destructive tools that require per-call host approval.
 
+Starting a public tunnel must require explicit host confirmation that restates
+the tool surface and that OAuth plus per-call approval gates still apply.
+
 The main UI is a native `NavigationSplitView` with these sections:
 
 - Dashboard: server, tunnel, and auth status.

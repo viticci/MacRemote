@@ -38,9 +38,7 @@ struct DashboardView: View {
                     ) {
                         switch appModel.tunnelStatus {
                         case .ready:
-                            Button("Start", systemImage: "point.3.connected.trianglepath.dotted") {
-                                appModel.startTunnel()
-                            }
+                            StartTunnelButton(title: "Start")
                             .buttonStyle(.borderedProminent)
                         case .running:
                             Button("Stop", systemImage: "stop.fill") {
@@ -110,7 +108,8 @@ private struct SecurityChecklistView: View {
         "Full Disk Access checked before server start",
         "No arbitrary shell commands",
         "Full RemCTL CLI runs as direct argv",
-        "Cloudflare Tunnel forwards one local port"
+        "Cloudflare Tunnel forwards one local port",
+        "Public tunnel start requires confirmation"
     ]
 
     var body: some View {
