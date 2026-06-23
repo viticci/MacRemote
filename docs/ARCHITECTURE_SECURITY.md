@@ -41,6 +41,10 @@ The SwiftUI app owns configuration and user intent:
 - audit log;
 - settings for Cloudflare and local server preferences.
 
+Client authorization approvals must show the token-bound issuer and exact MCP
+resource URL. A friendly client name is not enough because leaked or replayed
+URLs are part of the threat model.
+
 The main UI is a native `NavigationSplitView` with these sections:
 
 - Dashboard: server, tunnel, and auth status.

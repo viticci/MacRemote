@@ -35,6 +35,8 @@ final class OAuthCoordinator: @unchecked Sendable {
                 id: id,
                 clientName: clientName,
                 redirectURI: redirectURI,
+                issuer: issuer,
+                resource: resource,
                 requestedScopes: scopes.sorted(),
                 createdAt: createdAt,
                 state: status

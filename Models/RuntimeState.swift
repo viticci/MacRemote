@@ -55,6 +55,8 @@ struct ApprovalRequest: Identifiable, Hashable, Sendable {
     let id: UUID
     let clientName: String
     let redirectURI: String
+    let issuer: String
+    let resource: String
     let requestedScopes: [String]
     let createdAt: Date
     var state: State

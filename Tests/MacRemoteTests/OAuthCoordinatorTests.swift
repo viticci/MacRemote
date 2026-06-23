@@ -28,7 +28,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        XCTAssertEqual(coordinator.approvalSnapshot().first?.state, .pending)
+        let pendingApproval = try XCTUnwrap(coordinator.approvalSnapshot().first)
+        XCTAssertEqual(pendingApproval.state, .pending)
+        XCTAssertEqual(pendingApproval.issuer, issuer)
+        XCTAssertEqual(pendingApproval.resource, resource)
+        XCTAssertEqual(pendingApproval.redirectURI, "http://127.0.0.1/callback")
         XCTAssertThrowsError(
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",

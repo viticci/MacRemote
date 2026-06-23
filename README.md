@@ -15,6 +15,8 @@ the full RemCTL CLI plus narrow read helper tools.
 - No shell execution for tool calls. Commands run as exact executable paths plus
   validated argv arrays.
 - Host-side approval before a remote client receives OAuth tokens.
+- Host approval shows the token-bound issuer and MCP resource URL before a
+  client can receive tokens.
 - Per-call host approval before write or destructive tools execute.
 - Full Disk Access preflight before the full RemCTL profile can be exposed.
 - Cloudflare Tunnel for public reachability. The tunnel forwards only to the

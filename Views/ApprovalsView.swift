@@ -52,9 +52,11 @@ private struct AuthorizationApprovalRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(request.clientName)
                         .font(.headline)
-                    Text(request.redirectURI)
+                    Text(request.resource)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                         .textSelection(.enabled)
                 }
 
@@ -64,6 +66,8 @@ private struct AuthorizationApprovalRow: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(color(for: request.state))
             }
+
+            ApprovalDetailGrid(request: request)
 
             if !request.requestedScopes.isEmpty {
                 Text(request.requestedScopes.joined(separator: ", "))
@@ -93,6 +97,36 @@ private struct AuthorizationApprovalRow: View {
         case .approved: .green
         case .denied: .red
         case .expired: .secondary
+        }
+    }
+}
+
+private struct ApprovalDetailGrid: View {
+    let request: ApprovalRequest
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+            ApprovalDetailRow(title: "Resource", value: request.resource)
+            ApprovalDetailRow(title: "Issuer", value: request.issuer)
+            ApprovalDetailRow(title: "Redirect", value: request.redirectURI)
+        }
+        .font(.caption)
+    }
+}
+
+private struct ApprovalDetailRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        GridRow {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
         }
     }
 }

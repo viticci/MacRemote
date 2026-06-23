@@ -46,6 +46,8 @@ final class TunnelServiceTests: XCTestCase {
                 id: UUID(),
                 clientName: "Client",
                 redirectURI: "https://example.com/callback",
+                issuer: "https://quiet-river-123.trycloudflare.com",
+                resource: "https://quiet-river-123.trycloudflare.com/mcp/\(originalInstanceID)",
                 requestedScopes: ["mcp:tools"],
                 createdAt: Date(),
                 state: .pending
