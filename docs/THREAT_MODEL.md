@@ -83,7 +83,8 @@ Tunnel setup is high risk. A bug that binds the local server to `0.0.0.0` or
 forwards a broad local service would expose more than the intended MCP process.
 Mitigations include loopback-only listeners, health checks before tunnel start,
 single-origin tunnel routing, high-entropy instance identifiers, and explicit
-stop/rotate controls in the UI.
+stop and instance rotation controls in the UI. Rotation stops the local server
+and tunnel, clears in-memory OAuth grants, and changes the public MCP URL path.
 
 Logs and diagnostics can leak secrets. Audit logs must redact tokens,
 authorization codes, refresh tokens, Cloudflare credentials, request headers,

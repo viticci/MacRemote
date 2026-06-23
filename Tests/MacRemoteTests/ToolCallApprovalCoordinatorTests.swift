@@ -63,6 +63,32 @@ final class ToolCallApprovalCoordinatorTests: XCTestCase {
         XCTAssertFalse(approved)
         XCTAssertEqual(coordinator.approvalSnapshot().first?.state, .denied)
     }
+
+    func testDenyAllPendingResolvesWaitingApprovals() async throws {
+        let coordinator = ToolCallApprovalCoordinator(timeoutSeconds: 30)
+        let tool = ToolDefinition(
+            id: "test.destructive",
+            name: "Destructive",
+            summary: "Destructive action.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{args}"],
+            parameters: [],
+            capability: .destructive,
+            timeoutSeconds: 5,
+            outputByteLimit: 1024
+        )
+
+        let approvalTask = Task {
+            await coordinator.requestApproval(tool: tool, parameters: ["args": .stringArray(["delete"])])
+        }
+
+        _ = try await waitForPendingApproval(in: coordinator)
+        coordinator.denyAllPending()
+
+        let approved = await approvalTask.value
+        XCTAssertFalse(approved)
+        XCTAssertEqual(coordinator.approvalSnapshot().first?.state, .denied)
+    }
 }
 
 private func waitForPendingApproval(

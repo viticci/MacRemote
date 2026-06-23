@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var appModel
+    @State private var isShowingRotateInstanceConfirmation = false
 
     var body: some View {
         Form {
@@ -15,6 +16,17 @@ struct SettingsView: View {
                     Text(appModel.instanceID)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
+                }
+
+                HStack {
+                    Button("Rotate Instance ID", systemImage: "arrow.triangle.2.circlepath") {
+                        isShowingRotateInstanceConfirmation = true
+                    }
+                    .buttonStyle(.bordered)
+
+                    Text("Stops exposure, clears grants, and changes the public MCP path.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -128,6 +140,18 @@ struct SettingsView: View {
         .padding(24)
         .frame(minWidth: 620, minHeight: 420)
         .navigationTitle("Settings")
+        .confirmationDialog(
+            "Rotate Instance ID?",
+            isPresented: $isShowingRotateInstanceConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Rotate Instance ID", role: .destructive) {
+                appModel.rotateInstanceID()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("MacRemote will stop the local server and tunnel, clear pending OAuth and tool approvals, and require remote clients to use a new MCP URL path.")
+        }
     }
 
     private func copyPath(_ path: String) {

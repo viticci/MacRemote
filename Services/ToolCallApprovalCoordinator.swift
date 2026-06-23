@@ -59,6 +59,26 @@ final class ToolCallApprovalCoordinator: @unchecked Sendable {
         }
     }
 
+    func denyAllPending() {
+        let denied: (continuations: [CheckedContinuation<Bool, Never>], snapshot: [ToolCallApprovalRequest]) = lock.withLock {
+            var continuations: [CheckedContinuation<Bool, Never>] = []
+
+            for requestID in pendingCalls.keys {
+                if var request = requests[requestID], request.state == .pending {
+                    request.state = .denied
+                    requests[requestID] = request
+                }
+            }
+
+            continuations = pendingCalls.values.map(\.continuation)
+            pendingCalls.removeAll()
+            return (continuations, snapshotLocked())
+        }
+
+        notify(denied.snapshot)
+        denied.continuations.forEach { $0.resume(returning: false) }
+    }
+
     private func resolve(requestID: UUID, state: ToolCallApprovalRequest.State, result: Bool) -> Bool {
         let resolved: (continuation: CheckedContinuation<Bool, Never>?, snapshot: [ToolCallApprovalRequest], changed: Bool) = lock.withLock {
             guard var request = requests[requestID],

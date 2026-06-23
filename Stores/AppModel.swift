@@ -12,17 +12,24 @@ final class AppModel {
     var serverStatus: ServerStatus = .stopped
     var tunnelStatus: TunnelStatus = .stopped
     var localServerURL: URL?
-    var instanceID: String = AppModel.makeInstanceID()
+    var instanceID: String
     var fullDiskAccessReport = FullDiskAccessReport()
 
+    private static let instanceIDKey = "MacRemote.instanceID"
+
+    private let userDefaults: UserDefaults
     private let tunnelService = TunnelService()
     private let toolStore = ToolRegistryStore()
     private let fullDiskAccessService = FullDiskAccessService()
     private var authCoordinator: OAuthCoordinator!
     private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
     private var localServer: LocalMCPServer?
+    private var approvalCoordinatorGeneration = 0
 
-    init() {
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        self.instanceID = AppModel.makeInstanceID(userDefaults: userDefaults)
+
         do {
             let customTools = try toolStore.loadUserDefinedTools()
             tools = RemCTLToolCatalog.builtInTools + customTools
@@ -31,21 +38,32 @@ final class AppModel {
             logs.insert(AppLogEntry(date: Date(), level: .error, message: "Could not load custom tools: \(error.localizedDescription)"), at: 0)
         }
 
+        installApprovalCoordinators()
+        tunnelStatus = tunnelService.status(localServerURL: nil)
+        appendLog(level: .info, "MacRemote initialized with full RemCTL CLI profile.")
+    }
+
+    private func installApprovalCoordinators() {
+        approvalCoordinatorGeneration += 1
+        let generation = approvalCoordinatorGeneration
+
         authCoordinator = OAuthCoordinator { [weak self] approvals in
             Task { @MainActor in
+                guard self?.approvalCoordinatorGeneration == generation else { return }
                 self?.approvals = approvals
             }
         }
         toolCallApprovalCoordinator = ToolCallApprovalCoordinator { [weak self] approvals in
             Task { @MainActor in
+                guard self?.approvalCoordinatorGeneration == generation else { return }
                 self?.toolCallApprovals = approvals
                 if approvals.contains(where: { $0.state == .pending }) {
                     self?.selection = .approvals
                 }
             }
         }
-        tunnelStatus = tunnelService.status(localServerURL: nil)
-        appendLog(level: .info, "MacRemote initialized with full RemCTL CLI profile.")
+        approvals = []
+        toolCallApprovals = []
     }
 
     func startLocalServer() {
@@ -110,6 +128,26 @@ final class AppModel {
         serverStatus = .stopped
         tunnelStatus = tunnelService.status(localServerURL: nil)
         appendLog(level: .info, "Local MCP server stopped.")
+    }
+
+    func rotateInstanceID() {
+        let previousInstanceID = instanceID
+
+        stopExposureForInstanceRotation()
+
+        var nextInstanceID = Self.newInstanceID()
+        while nextInstanceID == previousInstanceID {
+            nextInstanceID = Self.newInstanceID()
+        }
+
+        instanceID = nextInstanceID
+        userDefaults.set(nextInstanceID, forKey: Self.instanceIDKey)
+        installApprovalCoordinators()
+        selection = .settings
+        appendLog(
+            level: .warning,
+            "Rotated instance ID from \(Self.shortInstanceID(previousInstanceID)) to \(Self.shortInstanceID(nextInstanceID)); stopped exposure and cleared OAuth grants."
+        )
     }
 
     func runRemCTLTodayTest() {
@@ -290,17 +328,24 @@ final class AppModel {
         }
     }
 
-    private static func makeInstanceID() -> String {
-        let key = "MacRemote.instanceID"
-        if let existing = UserDefaults.standard.string(forKey: key),
+    private static func makeInstanceID(userDefaults: UserDefaults) -> String {
+        if let existing = userDefaults.string(forKey: instanceIDKey),
            existing.range(of: #"^[a-f0-9]{32}$"#, options: .regularExpression) != nil {
             return existing
         }
 
-        let bytes = (0..<16).map { _ in UInt8.random(in: UInt8.min...UInt8.max) }
-        let instanceID = bytes.map { String(format: "%02x", $0) }.joined()
-        UserDefaults.standard.set(instanceID, forKey: key)
+        let instanceID = newInstanceID()
+        userDefaults.set(instanceID, forKey: instanceIDKey)
         return instanceID
+    }
+
+    private static func newInstanceID() -> String {
+        let bytes = (0..<16).map { _ in UInt8.random(in: UInt8.min...UInt8.max) }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func shortInstanceID(_ value: String) -> String {
+        "\(value.prefix(8))..."
     }
 
     private static var toolEnvironment: [String: String] {
@@ -343,6 +388,16 @@ final class AppModel {
 
     private func toolExecutorSnapshot() -> ConfiguredToolExecutor {
         ConfiguredToolExecutor(tools: tools, environment: AppModel.toolEnvironment)
+    }
+
+    private func stopExposureForInstanceRotation() {
+        toolCallApprovalCoordinator.denyAllPending()
+        tunnelService.stop()
+        localServer?.stop()
+        localServer = nil
+        localServerURL = nil
+        serverStatus = .stopped
+        tunnelStatus = tunnelService.status(localServerURL: nil)
     }
 
     private func refreshFullDiskAccessStatus() async -> FullDiskAccessReport {

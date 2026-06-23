@@ -19,6 +19,8 @@ the full RemCTL CLI plus narrow read helper tools.
 - Full Disk Access preflight before the full RemCTL profile can be exposed.
 - Cloudflare Tunnel for public reachability. The tunnel forwards only to the
   local MCP server port, not to the Mac as a whole.
+- Instance ID rotation that stops public exposure, clears in-memory OAuth grants,
+  and changes the public MCP URL path.
 
 ## CLI Adapter Model
 
@@ -136,6 +138,9 @@ MacRemote should fail closed:
 - Write and destructive tool calls are paused until they are approved in the
   Approvals view on the host Mac. Denied or expired calls do not reach the
   process runner.
+- Settings includes a rotate action for the instance-specific MCP path. Rotation
+  stops the local server and tunnel, clears pending approvals and OAuth grants,
+  and forces remote clients to use a new URL path.
 - Before starting the local MCP server, MacRemote runs
   `remctl doctor --for-agent --json` from its own process context. If macOS
   privacy blocks Reminders CoreData access, startup is blocked and Settings

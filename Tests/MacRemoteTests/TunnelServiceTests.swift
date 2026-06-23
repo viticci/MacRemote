@@ -16,8 +16,11 @@ final class TunnelServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testAppModelCurrentPublicMCPURLAddsInstancePath() {
-        let model = AppModel()
+    func testAppModelCurrentPublicMCPURLAddsInstancePath() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = AppModel(userDefaults: defaults)
         model.instanceID = "abc123"
         model.tunnelStatus = .running(URL(string: "https://quiet-river-123.trycloudflare.com")!)
 
@@ -26,4 +29,70 @@ final class TunnelServiceTests: XCTestCase {
             "https://quiet-river-123.trycloudflare.com/mcp/abc123"
         )
     }
+
+    @MainActor
+    func testRotateInstanceIDStopsExposureClearsApprovalsAndPersistsNewID() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let originalInstanceID = "0123456789abcdef0123456789abcdef"
+        defaults.set(originalInstanceID, forKey: "MacRemote.instanceID")
+        let model = AppModel(userDefaults: defaults)
+        model.serverStatus = .running(URL(string: "http://127.0.0.1:60123")!)
+        model.localServerURL = URL(string: "http://127.0.0.1:60123")!
+        model.tunnelStatus = .running(URL(string: "https://quiet-river-123.trycloudflare.com")!)
+        model.approvals = [
+            ApprovalRequest(
+                id: UUID(),
+                clientName: "Client",
+                redirectURI: "https://example.com/callback",
+                requestedScopes: ["mcp:tools"],
+                createdAt: Date(),
+                state: .pending
+            )
+        ]
+        model.toolCallApprovals = [
+            ToolCallApprovalRequest(
+                id: UUID(),
+                toolID: "remctl.run",
+                toolName: "Run RemCTL",
+                capability: .destructive,
+                argumentsPreview: "args=add Test -l Work",
+                createdAt: Date(),
+                state: .pending
+            )
+        ]
+
+        XCTAssertEqual(model.currentPublicMCPURL?.absoluteString, "https://quiet-river-123.trycloudflare.com/mcp/\(originalInstanceID)")
+
+        model.rotateInstanceID()
+
+        XCTAssertNotEqual(model.instanceID, originalInstanceID)
+        XCTAssertEqual(model.instanceID.count, 32)
+        XCTAssertEqual(defaults.string(forKey: "MacRemote.instanceID"), model.instanceID)
+        XCTAssertEqual(model.serverStatus, .stopped)
+        XCTAssertNil(model.localServerURL)
+        XCTAssertNil(model.currentPublicMCPURL)
+        XCTAssertTrue(model.approvals.isEmpty)
+        XCTAssertTrue(model.toolCallApprovals.isEmpty)
+        XCTAssertEqual(model.selection, .settings)
+        XCTAssertTrue(model.logs.first?.message.contains("Rotated instance ID") == true)
+    }
+}
+
+private func makeIsolatedDefaults(
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws -> UserDefaults {
+    let suiteName = "MacRemoteTests.\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+        XCTFail("Could not create isolated UserDefaults suite.", file: file, line: line)
+        throw NSError(domain: "MacRemoteTests", code: 1)
+    }
+    defaults.set(suiteName, forKey: "MacRemoteTests.suiteName")
+    return defaults
+}
+
+private func defaultsSuiteName(_ defaults: UserDefaults) -> String {
+    defaults.string(forKey: "MacRemoteTests.suiteName") ?? ""
 }

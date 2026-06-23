@@ -67,7 +67,7 @@ Required endpoints:
 - `GET /authorize`
 - `POST /authorize/decision`
 - `POST /token`
-- `POST /mcp`
+- `POST /mcp/<instance-id>`
 
 The app can implement the server natively in Swift or manage a helper process,
 but the trust boundary is the same: the public tunnel may reach only this local
@@ -213,12 +213,15 @@ Every sensitive event is logged locally:
 The audit log must not store bearer tokens, authorization codes, refresh tokens,
 or full command output by default.
 
-The app should provide:
+The app provides:
 
 - disable tunnel;
 - stop server;
-- revoke client;
 - rotate instance id;
+
+Future controls should add:
+
+- revoke client;
 - rotate local signing keys;
 - export redacted logs.
 
