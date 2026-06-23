@@ -39,6 +39,9 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
    https://<host>.trycloudflare.com/mcp/<instance-id>
    ```
 
+   The Tunnel view can also copy the exact preflight and full Anthropic smoke
+   test commands once the public MCP URL exists.
+
 ## Anthropic Smoke Test
 
 Run the script from the repository root. Do not paste or store secrets in files.
