@@ -16,7 +16,7 @@ struct CommandRunResult: Sendable, Equatable {
     }
 }
 
-struct ProcessRunner {
+struct ProcessRunner: Sendable {
     func run(
         executablePath: String,
         arguments: [String],

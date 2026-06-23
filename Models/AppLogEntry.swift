@@ -1,7 +1,7 @@
 import Foundation
 
-struct AppLogEntry: Identifiable, Hashable {
-    enum Level: String {
+struct AppLogEntry: Identifiable, Hashable, Sendable {
+    enum Level: String, Sendable {
         case info
         case warning
         case error

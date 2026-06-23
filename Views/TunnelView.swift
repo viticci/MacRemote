@@ -23,14 +23,36 @@ struct TunnelView: View {
                             .foregroundStyle(appModel.localServerURL == nil ? .secondary : .primary)
                     }
                     LabeledContent("Public URL") {
-                        Text("Not created yet")
-                            .foregroundStyle(.secondary)
+                        Text(publicURLText)
+                            .foregroundStyle(appModel.tunnelStatus.isRunning ? .primary : .secondary)
+                            .textSelection(.enabled)
                     }
 
                     Divider()
 
-                    Text("The first implementation detects `cloudflared` and proves local server readiness. Tunnel creation stays gated until OAuth host approval is implemented.")
+                    Text("The public endpoint forwards only to the local MCP server port. OAuth registration, PKCE, bearer tokens, and host approval still gate every tool call.")
                         .foregroundStyle(.secondary)
+
+                    HStack {
+                        switch appModel.tunnelStatus {
+                        case .ready:
+                            Button("Start Tunnel", systemImage: "point.3.connected.trianglepath.dotted") {
+                                appModel.startTunnel()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        case .running:
+                            Button("Stop Tunnel", systemImage: "stop.fill") {
+                                appModel.stopTunnel()
+                            }
+                        case .starting:
+                            ProgressView()
+                                .controlSize(.small)
+                        default:
+                            Button("Refresh", systemImage: "arrow.clockwise") {
+                                appModel.refreshTunnelStatus()
+                            }
+                        }
+                    }
                 }
                 .panelStyle()
 
@@ -45,5 +67,18 @@ struct TunnelView: View {
             .padding(24)
         }
         .navigationTitle("Tunnel")
+    }
+
+    private var publicURLText: String {
+        switch appModel.tunnelStatus {
+        case .running(let url):
+            return url.appendingPathComponent("mcp").absoluteString
+        case .starting:
+            return "Waiting for Cloudflare"
+        case .failed(let message):
+            return message
+        default:
+            return "Not created yet"
+        }
     }
 }

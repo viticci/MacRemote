@@ -36,8 +36,23 @@ struct DashboardView: View {
                         systemImage: "point.3.connected.trianglepath.dotted",
                         detail: tunnelDetail
                     ) {
-                        Button("Refresh", systemImage: "arrow.clockwise") {
-                            appModel.refreshTunnelStatus()
+                        switch appModel.tunnelStatus {
+                        case .ready:
+                            Button("Start", systemImage: "point.3.connected.trianglepath.dotted") {
+                                appModel.startTunnel()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        case .running:
+                            Button("Stop", systemImage: "stop.fill") {
+                                appModel.stopTunnel()
+                            }
+                        case .starting:
+                            ProgressView()
+                                .controlSize(.small)
+                        default:
+                            Button("Refresh", systemImage: "arrow.clockwise") {
+                                appModel.refreshTunnelStatus()
+                            }
                         }
                     }
 
@@ -73,10 +88,12 @@ struct DashboardView: View {
         switch appModel.tunnelStatus {
         case .unavailable:
             return "`cloudflared` was not found in Homebrew paths."
+        case .starting:
+            return "Waiting for Cloudflare to assign a public URL."
         case .ready:
             return "Cloudflare can forward to the local server."
         case .running(let url):
-            return url.absoluteString
+            return url.appendingPathComponent("mcp").absoluteString
         case .failed(let message):
             return message
         case .stopped:

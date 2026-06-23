@@ -1,6 +1,6 @@
 import Foundation
 
-enum ServerStatus: Equatable {
+enum ServerStatus: Equatable, Sendable {
     case stopped
     case starting
     case running(URL)
@@ -20,8 +20,9 @@ enum ServerStatus: Equatable {
     }
 }
 
-enum TunnelStatus: Equatable {
+enum TunnelStatus: Equatable, Sendable {
     case stopped
+    case starting
     case unavailable
     case ready
     case running(URL)
@@ -30,16 +31,21 @@ enum TunnelStatus: Equatable {
     var title: String {
         switch self {
         case .stopped: "Stopped"
+        case .starting: "Starting"
         case .unavailable: "Unavailable"
         case .ready: "Ready"
         case .running: "Running"
         case .failed: "Failed"
         }
     }
+
+    var isRunning: Bool {
+        if case .running = self { true } else { false }
+    }
 }
 
-struct ApprovalRequest: Identifiable, Hashable {
-    enum State: String {
+struct ApprovalRequest: Identifiable, Hashable, Sendable {
+    enum State: String, Sendable {
         case pending
         case approved
         case denied
@@ -52,4 +58,13 @@ struct ApprovalRequest: Identifiable, Hashable {
     let requestedScopes: [String]
     let createdAt: Date
     var state: State
+
+    var stateTitle: String {
+        switch state {
+        case .pending: "Pending"
+        case .approved: "Approved"
+        case .denied: "Denied"
+        case .expired: "Expired"
+        }
+    }
 }

@@ -13,11 +13,17 @@ final class AppModel {
     var localServerURL: URL?
     var instanceID: String = AppModel.makeInstanceID()
 
-    private let runner = ProcessRunner()
     private let tunnelService = TunnelService()
+    private let toolExecutor = RemCTLToolExecutor(environment: AppModel.toolEnvironment)
+    private var authCoordinator: OAuthCoordinator!
     private var localServer: LocalMCPServer?
 
     init() {
+        authCoordinator = OAuthCoordinator { [weak self] approvals in
+            Task { @MainActor in
+                self?.approvals = approvals
+            }
+        }
         tunnelStatus = tunnelService.status(localServerURL: nil)
         appendLog(level: .info, "MacRemote initialized with RemCTL read-only profile.")
     }
@@ -27,7 +33,16 @@ final class AppModel {
         serverStatus = .starting
 
         do {
-            let server = LocalMCPServer(instanceID: instanceID, tools: tools)
+            let server = LocalMCPServer(
+                instanceID: instanceID,
+                tools: tools,
+                authCoordinator: authCoordinator,
+                toolExecutor: toolExecutor
+            ) { [weak self] event in
+                Task { @MainActor in
+                    self?.handleServerEvent(event)
+                }
+            }
             let port = try server.start()
             let url = URL(string: "http://127.0.0.1:\(port)")!
             localServer = server
@@ -43,9 +58,11 @@ final class AppModel {
     }
 
     func stopLocalServer() {
+        tunnelService.stop()
         localServer?.stop()
         localServer = nil
         localServerURL = nil
+        approvals = authCoordinator.approvalSnapshot()
         serverStatus = .stopped
         tunnelStatus = tunnelService.status(localServerURL: nil)
         appendLog(level: .info, "Local MCP server stopped.")
@@ -58,33 +75,60 @@ final class AppModel {
     }
 
     func runToolTest(toolID: String, parameters: [String: String] = [:]) async {
-        guard let tool = RemCTLToolCatalog.tool(id: toolID) else {
-            appendLog(level: .error, "Unknown tool test requested: \(toolID)")
-            return
-        }
-
         do {
-            let arguments = try RemCTLToolCatalog.arguments(for: toolID, parameters: parameters)
-            let result = try await runner.run(
-                executablePath: tool.executablePath,
-                arguments: arguments,
-                timeoutSeconds: tool.timeoutSeconds,
-                outputByteLimit: tool.outputByteLimit,
-                environment: toolEnvironment
-            )
-            let outputBytes = result.stdout.utf8.count
+            let result = try await toolExecutor.execute(toolID: toolID, parameters: parameters)
             if result.succeeded {
-                appendLog(level: .info, "\(tool.name) completed in \(result.duration.formattedDuration) with \(outputBytes) bytes.")
+                appendLog(level: .info, "\(result.toolName) completed in \(result.duration.formattedDuration) with \(result.outputByteCount) bytes.")
             } else {
-                appendLog(level: .warning, "\(tool.name) exited \(result.exitCode) in \(result.duration.formattedDuration). \(failureDetail(from: result))")
+                appendLog(level: .warning, "\(result.toolName) exited \(result.exitCode) in \(result.duration.formattedDuration). \(failureDetail(from: result))")
             }
         } catch {
-            appendLog(level: .error, "\(tool.name) test failed: \(error.localizedDescription)")
+            appendLog(level: .error, "Tool test failed: \(error.localizedDescription)")
+        }
+    }
+
+    func approveAuthorizationRequest(_ id: UUID) {
+        if localServer?.approveAuthorizationRequest(id: id) == true {
+            appendLog(level: .info, "Authorization request approved on host Mac.")
+        }
+    }
+
+    func denyAuthorizationRequest(_ id: UUID) {
+        if localServer?.denyAuthorizationRequest(id: id) == true {
+            appendLog(level: .warning, "Authorization request denied on host Mac.")
         }
     }
 
     func refreshTunnelStatus() {
         tunnelStatus = tunnelService.status(localServerURL: localServerURL)
+    }
+
+    func startTunnel() {
+        guard let localServerURL else {
+            tunnelStatus = .stopped
+            appendLog(level: .warning, "Start the local MCP server before creating a tunnel.")
+            return
+        }
+
+        tunnelStatus = .starting
+        do {
+            try tunnelService.startQuickTunnel(localServerURL: localServerURL) { [weak self] event in
+                Task { @MainActor in
+                    self?.handleTunnelEvent(event)
+                }
+            }
+            appendLog(level: .info, "Starting Cloudflare Tunnel for \(localServerURL.absoluteString).")
+        } catch {
+            let message = error.localizedDescription
+            tunnelStatus = .failed(message)
+            appendLog(level: .error, "Cloudflare Tunnel failed to start: \(message)")
+        }
+    }
+
+    func stopTunnel() {
+        tunnelService.stop()
+        tunnelStatus = localServerURL == nil ? .stopped : .ready
+        appendLog(level: .info, "Cloudflare Tunnel stopped.")
     }
 
     func appendLog(level: AppLogEntry.Level, _ message: String) {
@@ -99,7 +143,7 @@ final class AppModel {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
-    private var toolEnvironment: [String: String] {
+    private static var toolEnvironment: [String: String] {
         [
             "HOME": "/Users/viticci",
             "LANG": "C.UTF-8",
@@ -118,7 +162,7 @@ final class AppModel {
         ]
     }
 
-    private func failureDetail(from result: CommandRunResult) -> String {
+    private func failureDetail(from result: ToolExecutionOutcome) -> String {
         let stderr = result.stderr
             .split(whereSeparator: \.isNewline)
             .first
@@ -131,5 +175,33 @@ final class AppModel {
 
         let capped = String(stderr.prefix(180))
         return "stderr: \(capped)"
+    }
+
+    private func handleServerEvent(_ event: LocalMCPServerEvent) {
+        switch event {
+        case .log(let level, let message):
+            appendLog(level: level, message)
+        case .approvalsChanged(let approvals):
+            self.approvals = approvals
+            if approvals.contains(where: { $0.state == .pending }) {
+                selection = .approvals
+            }
+        }
+    }
+
+    private func handleTunnelEvent(_ event: TunnelServiceEvent) {
+        switch event {
+        case .log(let message):
+            appendLog(level: .info, message)
+        case .started(let publicURL):
+            tunnelStatus = .running(publicURL)
+            appendLog(level: .info, "Cloudflare Tunnel ready at \(publicURL.absoluteString).")
+        case .stopped:
+            tunnelStatus = tunnelService.status(localServerURL: localServerURL)
+            appendLog(level: .info, "Cloudflare Tunnel process exited.")
+        case .failed(let message):
+            tunnelStatus = .failed(message)
+            appendLog(level: .error, message)
+        }
     }
 }

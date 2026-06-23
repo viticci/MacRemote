@@ -1,6 +1,6 @@
 import Foundation
 
-enum ToolCapability: String, Codable, CaseIterable {
+enum ToolCapability: String, Codable, CaseIterable, Sendable {
     case readOnly
     case write
     case destructive
@@ -14,12 +14,12 @@ enum ToolCapability: String, Codable, CaseIterable {
     }
 }
 
-enum ToolParameterKind: String, Codable {
+enum ToolParameterKind: String, Codable, Sendable {
     case string
     case integer
 }
 
-struct ToolParameter: Identifiable, Codable, Hashable {
+struct ToolParameter: Identifiable, Codable, Hashable, Sendable {
     var id: String { name }
     let name: String
     let title: String
@@ -87,7 +87,7 @@ struct ToolParameter: Identifiable, Codable, Hashable {
     }
 }
 
-struct ToolDefinition: Identifiable, Codable, Hashable {
+struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let name: String
     let summary: String
@@ -103,7 +103,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable {
     }
 }
 
-enum ToolValidationError: LocalizedError, Equatable {
+enum ToolValidationError: LocalizedError, Equatable, Sendable {
     case unknownTool(String)
     case missingParameter(String)
     case invalidInteger(String)
