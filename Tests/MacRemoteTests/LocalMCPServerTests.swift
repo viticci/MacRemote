@@ -47,6 +47,73 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertNil(publicHealth.json["tool_profile"])
     }
 
+    func testPublicOAuthRegistrationIsRateLimitedButLoopbackIsNot() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let forwardedHeaders = [
+            "X-Forwarded-Host": "macremote-test.trycloudflare.com",
+            "X-Forwarded-Proto": "https"
+        ]
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        for index in 0..<20 {
+            let response = try await postJSON(
+                url: base.appendingPathComponent("register"),
+                headers: forwardedHeaders,
+                body: [
+                    "client_name": "Public HTTP Test \(index)",
+                    "redirect_uris": ["http://127.0.0.1/callback"],
+                    "scope": "mcp:tools"
+                ]
+            )
+            XCTAssertEqual(response.statusCode, 201)
+        }
+
+        let limited = try await postJSON(
+            url: base.appendingPathComponent("register"),
+            headers: forwardedHeaders,
+            body: [
+                "client_name": "Public HTTP Test Limited",
+                "redirect_uris": ["http://127.0.0.1/callback"],
+                "scope": "mcp:tools"
+            ]
+        )
+        XCTAssertEqual(limited.statusCode, 429)
+        XCTAssertEqual(limited.json["error"] as? String, "rate_limited")
+        XCTAssertNotNil(headerValue(limited.headers, named: "Retry-After"))
+
+        let loopback = try await postJSON(
+            url: base.appendingPathComponent("register"),
+            body: [
+                "client_name": "Loopback HTTP Test",
+                "redirect_uris": ["http://127.0.0.1/callback"],
+                "scope": "mcp:tools"
+            ]
+        )
+        XCTAssertEqual(loopback.statusCode, 201)
+    }
+
     func testForwardedHTTPSHostIsUsedForOAuthMetadata() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(

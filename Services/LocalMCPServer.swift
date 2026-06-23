@@ -23,6 +23,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private let toolCallApprovalCoordinator: ToolCallApprovalCoordinator?
     private let toolExecutor: any ToolExecuting
     private let eventHandler: EventHandler?
+    private let publicRateLimiter = PublicRequestRateLimiter()
 
     init(
         instanceID: String,
@@ -127,6 +128,12 @@ final class LocalMCPServer: @unchecked Sendable {
             )
         }
 
+        let isPublicRequest = base != localBaseURL(activePort: activePort)
+        if let group = publicRateLimitGroup(for: request, isPublicRequest: isPublicRequest),
+           let response = publicRateLimitResponseIfNeeded(for: group) {
+            return response
+        }
+
         if request.method == "GET", isProtectedResourceMetadataPath(request.path) {
             return jsonResponse(protectedResourceMetadata(base: base))
         }
@@ -134,7 +141,7 @@ final class LocalMCPServer: @unchecked Sendable {
         if isMCPPath(request.path, allowLegacyPath: allowsLegacyMCPPath(base: base, activePort: activePort)) {
             switch request.method {
             case "POST":
-                return await mcp(request: request, base: base)
+                return await mcp(request: request, base: base, isPublicRequest: isPublicRequest)
             case "GET", "DELETE":
                 return methodNotAllowedForMCP()
             default:
@@ -179,6 +186,10 @@ final class LocalMCPServer: @unchecked Sendable {
         "\(base)\(mcpEndpointPath)"
     }
 
+    private func localBaseURL(activePort: UInt16) -> String {
+        "http://127.0.0.1:\(activePort)"
+    }
+
     private func protectedResourceMetadataURL(base: String) -> String {
         "\(base)/.well-known/oauth-protected-resource\(mcpEndpointPath)"
     }
@@ -205,7 +216,7 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     private func allowsLegacyMCPPath(base: String, activePort: UInt16) -> Bool {
-        base == "http://127.0.0.1:\(activePort)"
+        base == localBaseURL(activePort: activePort)
     }
 
     private func methodNotAllowedForMCP() -> Data {
@@ -220,7 +231,7 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     private func baseURL(for request: HTTPRequest, activePort: UInt16) -> String {
-        let localBase = "http://127.0.0.1:\(activePort)"
+        let localBase = localBaseURL(activePort: activePort)
 
         guard let publicHost = request.forwardedHost ?? request.hostHeader,
               let normalizedHost = Self.normalizedHost(publicHost),
@@ -258,16 +269,52 @@ final class LocalMCPServer: @unchecked Sendable {
             "ok": true,
             "service": "MacRemote",
             "auth": "host-approved-oauth-pkce",
-            "public_metadata": base != "http://127.0.0.1:\(activePort)"
+            "public_metadata": base != localBaseURL(activePort: activePort)
         ]
 
-        if base == "http://127.0.0.1:\(activePort)" {
+        if base == localBaseURL(activePort: activePort) {
             payload["instance_id"] = instanceID
             payload["tool_profile"] = "remctl-full-cli"
             payload["tool_count"] = tools.count
         }
 
         return payload
+    }
+
+    private func publicRateLimitGroup(for request: HTTPRequest, isPublicRequest: Bool) -> PublicRateLimitGroup? {
+        guard isPublicRequest else { return nil }
+
+        switch (request.method, request.path) {
+        case ("GET", "/health"):
+            return .health
+        case ("GET", "/.well-known/oauth-authorization-server"):
+            return .metadata
+        case ("GET", _) where isProtectedResourceMetadataPath(request.path):
+            return .metadata
+        case ("POST", "/register"):
+            return .registration
+        case ("GET", "/authorize"):
+            return .authorization
+        case ("GET", "/authorize/status"):
+            return .authorizationStatus
+        case ("POST", "/token"):
+            return .token
+        default:
+            return nil
+        }
+    }
+
+    private func publicRateLimitResponseIfNeeded(for group: PublicRateLimitGroup) -> Data? {
+        let decision = publicRateLimiter.check(group: group)
+        guard !decision.allowed else { return nil }
+
+        eventHandler?(.log(.warning, "Rate limited public \(group.displayName) request."))
+        return jsonErrorResponse(
+            status: .tooManyRequests,
+            error: "rate_limited",
+            description: "Too many public requests. Try again later.",
+            headers: ["Retry-After": String(decision.retryAfterSeconds)]
+        )
     }
 
     private static func normalizedHost(_ value: String) -> String? {
@@ -387,7 +434,7 @@ final class LocalMCPServer: @unchecked Sendable {
         }
     }
 
-    private func mcp(request: HTTPRequest, base: String) async -> Data {
+    private func mcp(request: HTTPRequest, base: String, isPublicRequest: Bool) async -> Data {
         guard isSupportedProtocolVersionHeader(request) else {
             return jsonRPCError(
                 id: nil,
@@ -399,6 +446,11 @@ final class LocalMCPServer: @unchecked Sendable {
 
         guard let bearerToken = request.bearerToken,
               authCoordinator.validateAccessToken(bearerToken, issuer: base, resource: mcpResourceURL(base: base)) else {
+            if isPublicRequest,
+               let response = publicRateLimitResponseIfNeeded(for: .unauthorizedMCP) {
+                return response
+            }
+
             return HTTPResponse(
                 status: .unauthorized,
                 headers: [
@@ -717,11 +769,16 @@ final class LocalMCPServer: @unchecked Sendable {
         )
     }
 
-    private func jsonErrorResponse(status: HTTPResponse.Status, error: String, description: String) -> Data {
+    private func jsonErrorResponse(
+        status: HTTPResponse.Status,
+        error: String,
+        description: String,
+        headers: [String: String] = [:]
+    ) -> Data {
         jsonResponse([
             "error": error,
             "error_description": description
-        ], status: status)
+        ], status: status, headers: headers)
     }
 
     private func jsonResponse(
@@ -813,6 +870,83 @@ enum LocalMCPServerError: LocalizedError {
         switch self {
         case .portUnavailable: "Could not allocate a local server port."
         }
+    }
+}
+
+private enum PublicRateLimitGroup: String, Hashable {
+    case health
+    case metadata
+    case registration
+    case authorization
+    case authorizationStatus
+    case token
+    case unauthorizedMCP
+
+    var displayName: String {
+        switch self {
+        case .health: "health"
+        case .metadata: "metadata"
+        case .registration: "registration"
+        case .authorization: "authorization"
+        case .authorizationStatus: "authorization status"
+        case .token: "token"
+        case .unauthorizedMCP: "unauthorized MCP"
+        }
+    }
+
+    var rule: PublicRateLimitRule {
+        switch self {
+        case .health:
+            PublicRateLimitRule(maxRequests: 120, windowSeconds: 60)
+        case .metadata:
+            PublicRateLimitRule(maxRequests: 240, windowSeconds: 60)
+        case .registration:
+            PublicRateLimitRule(maxRequests: 20, windowSeconds: 60)
+        case .authorization:
+            PublicRateLimitRule(maxRequests: 20, windowSeconds: 60)
+        case .authorizationStatus:
+            PublicRateLimitRule(maxRequests: 300, windowSeconds: 60)
+        case .token:
+            PublicRateLimitRule(maxRequests: 60, windowSeconds: 60)
+        case .unauthorizedMCP:
+            PublicRateLimitRule(maxRequests: 60, windowSeconds: 60)
+        }
+    }
+}
+
+private struct PublicRateLimitRule: Sendable {
+    let maxRequests: Int
+    let windowSeconds: TimeInterval
+}
+
+private struct PublicRateLimitDecision: Sendable {
+    let allowed: Bool
+    let retryAfterSeconds: Int
+}
+
+private final class PublicRequestRateLimiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buckets = [PublicRateLimitGroup: [TimeInterval]]()
+
+    func check(group: PublicRateLimitGroup, now: Date = Date()) -> PublicRateLimitDecision {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let rule = group.rule
+        let nowSeconds = now.timeIntervalSince1970
+        let cutoff = nowSeconds - rule.windowSeconds
+        var timestamps = buckets[group, default: []].filter { $0 > cutoff }
+
+        guard timestamps.count < rule.maxRequests else {
+            buckets[group] = timestamps
+            let oldest = timestamps.first ?? nowSeconds
+            let retryAfter = max(1, Int(ceil(oldest + rule.windowSeconds - nowSeconds)))
+            return PublicRateLimitDecision(allowed: false, retryAfterSeconds: retryAfter)
+        }
+
+        timestamps.append(nowSeconds)
+        buckets[group] = timestamps
+        return PublicRateLimitDecision(allowed: true, retryAfterSeconds: 0)
     }
 }
 
@@ -963,6 +1097,7 @@ private struct HTTPResponse {
         case forbidden
         case methodNotAllowed
         case unauthorized
+        case tooManyRequests
         case notFound
         case internalServerError
 
@@ -975,6 +1110,7 @@ private struct HTTPResponse {
             case .forbidden: "403 Forbidden"
             case .methodNotAllowed: "405 Method Not Allowed"
             case .unauthorized: "401 Unauthorized"
+            case .tooManyRequests: "429 Too Many Requests"
             case .notFound: "404 Not Found"
             case .internalServerError: "500 Internal Server Error"
             }

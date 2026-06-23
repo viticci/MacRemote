@@ -90,6 +90,13 @@ tool-surface details for local verification, but public forwarded health must
 only report generic service readiness and must not disclose the instance id,
 tool profile, or tool count.
 
+Public forwarded unauthenticated routes are rate limited in memory by route
+group before they can create OAuth state or approval spam. Registration and
+authorization creation have tighter windows; metadata, health, token exchange,
+authorization polling, and unauthorized MCP attempts have separate buckets.
+Loopback requests are not rate limited by this guard because they are local
+diagnostics and tests, not the public attack surface.
+
 The app can implement the server natively in Swift or manage a helper process,
 but the trust boundary is the same: the public tunnel may reach only this local
 server, and the local server may run only approved tool definitions.
@@ -214,6 +221,8 @@ Security requirements:
 - Pending host authorization requests are capped, and resolved authorization
   history is pruned, so a leaked URL cannot create unbounded approval spam or
   memory growth.
+- Public forwarded OAuth and metadata routes have bounded request windows and
+  return `429 Too Many Requests` with `Retry-After` when exceeded.
 - The `WWW-Authenticate` challenge includes path-specific protected-resource
   metadata and an `mcp:tools` scope hint.
 - A leaked public URL is insufficient. The host Mac must approve each new client.
