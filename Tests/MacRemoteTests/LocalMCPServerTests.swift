@@ -3,6 +3,50 @@ import XCTest
 @testable import MacRemote
 
 final class LocalMCPServerTests: XCTestCase {
+    func testPublicHealthDoesNotDiscloseInstanceOrToolSurface() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let forwardedHeaders = [
+            "X-Forwarded-Host": "macremote-test.trycloudflare.com",
+            "X-Forwarded-Proto": "https"
+        ]
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let localHealth = try await getJSON(url: base.appendingPathComponent("health"))
+        XCTAssertEqual(localHealth.json["ok"] as? Bool, true)
+        XCTAssertEqual(localHealth.json["public_metadata"] as? Bool, false)
+        XCTAssertEqual(localHealth.json["instance_id"] as? String, "test-instance")
+        XCTAssertEqual(localHealth.json["tool_count"] as? Int, 1)
+
+        let publicHealth = try await getJSON(url: base.appendingPathComponent("health"), headers: forwardedHeaders)
+        XCTAssertEqual(publicHealth.json["ok"] as? Bool, true)
+        XCTAssertEqual(publicHealth.json["public_metadata"] as? Bool, true)
+        XCTAssertNil(publicHealth.json["instance_id"])
+        XCTAssertNil(publicHealth.json["tool_count"])
+        XCTAssertNil(publicHealth.json["tool_profile"])
+    }
+
     func testForwardedHTTPSHostIsUsedForOAuthMetadata() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(

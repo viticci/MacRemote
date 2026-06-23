@@ -144,14 +144,7 @@ final class LocalMCPServer: @unchecked Sendable {
 
         switch (request.method, request.path) {
         case ("GET", "/health"):
-            return jsonResponse([
-                "ok": true,
-                "service": "MacRemote",
-                "instance_id": instanceID,
-                "tool_profile": "remctl-full-cli",
-                "tool_count": tools.count,
-                "auth": "host-approved-oauth-pkce"
-            ])
+            return jsonResponse(healthPayload(base: base, activePort: activePort))
         case ("GET", "/.well-known/oauth-authorization-server"):
             return jsonResponse([
                 "issuer": base,
@@ -258,6 +251,23 @@ final class LocalMCPServer: @unchecked Sendable {
             "http://localhost:\(activePort)"
         ]
         return allowedOrigins.contains(normalizedOrigin)
+    }
+
+    private func healthPayload(base: String, activePort: UInt16) -> [String: Any] {
+        var payload: [String: Any] = [
+            "ok": true,
+            "service": "MacRemote",
+            "auth": "host-approved-oauth-pkce",
+            "public_metadata": base != "http://127.0.0.1:\(activePort)"
+        ]
+
+        if base == "http://127.0.0.1:\(activePort)" {
+            payload["instance_id"] = instanceID
+            payload["tool_profile"] = "remctl-full-cli"
+            payload["tool_count"] = tools.count
+        }
+
+        return payload
     }
 
     private static func normalizedHost(_ value: String) -> String? {

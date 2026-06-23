@@ -2,6 +2,32 @@ import XCTest
 @testable import MacRemote
 
 final class OAuthCoordinatorTests: XCTestCase {
+    func testRegisteredClientsAreCapped() throws {
+        let coordinator = OAuthCoordinator()
+
+        for index in 0..<OAuthCoordinator.maxRegisteredClients {
+            let client = try coordinator.registerClient(from: [
+                "client_name": "Client \(index)",
+                "redirect_uris": ["http://127.0.0.1/callback/\(index)"],
+                "scope": "mcp:tools"
+            ])
+            XCTAssertNotNil(client["client_id"] as? String)
+        }
+
+        XCTAssertThrowsError(
+            try coordinator.registerClient(from: [
+                "client_name": "Overflow",
+                "redirect_uris": ["http://127.0.0.1/callback/overflow"],
+                "scope": "mcp:tools"
+            ])
+        ) { error in
+            XCTAssertEqual(
+                error as? OAuthError,
+                .invalidRequest("Too many registered OAuth clients. Revoke grants and try again.")
+            )
+        }
+    }
+
     func testHostApprovalRequiredBeforeTokenExchange() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "test-verifier-\(UUID().uuidString)"

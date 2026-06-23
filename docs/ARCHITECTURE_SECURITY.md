@@ -85,6 +85,11 @@ Required endpoints:
 - `POST /token`
 - `POST /mcp/<instance-id>`
 
+`/health` is diagnostic, not discovery. Loopback health may include instance and
+tool-surface details for local verification, but public forwarded health must
+only report generic service readiness and must not disclose the instance id,
+tool profile, or tool count.
+
 The app can implement the server natively in Swift or manage a helper process,
 but the trust boundary is the same: the public tunnel may reach only this local
 server, and the local server may run only approved tool definitions.
@@ -204,6 +209,8 @@ Security requirements:
 - Stored tokens are hashed or encrypted.
 - Tokens are bound to client id, redirect URI, resource URI, instance id, and
   approved tool profile.
+- Dynamic OAuth client registration is capped in memory; the host can revoke
+  grants when the cap is reached.
 - The `WWW-Authenticate` challenge includes path-specific protected-resource
   metadata and an `mcp:tools` scope hint.
 - A leaked public URL is insufficient. The host Mac must approve each new client.

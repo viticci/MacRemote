@@ -16,6 +16,8 @@ struct OAuthRevocationSummary: Equatable, Sendable {
 final class OAuthCoordinator: @unchecked Sendable {
     typealias ChangeHandler = @Sendable ([ApprovalRequest]) -> Void
 
+    static let maxRegisteredClients = 64
+
     private struct Client {
         let id: String
         let name: String
@@ -99,7 +101,10 @@ final class OAuthCoordinator: @unchecked Sendable {
             createdAt: Date()
         )
 
-        lock.withLock {
+        try lock.withLock {
+            guard clients.count < Self.maxRegisteredClients else {
+                throw OAuthError.invalidRequest("Too many registered OAuth clients. Revoke grants and try again.")
+            }
             clients[clientID] = client
         }
 
