@@ -44,6 +44,8 @@
 ## Phase 4: Remote Model Smoke Test
 
 - Get a provider API key from 1Password at runtime.
+- Use `script/anthropic_mcp_smoke.py` so OAuth approval, token exchange, and
+  Anthropic MCP connector calls are reproducible.
 - Use the public HTTPS MCP URL in an Anthropic or OpenAI API call.
 - Confirm the model can discover the RemCTL tool.
 - Approve the auth request on the Mac.

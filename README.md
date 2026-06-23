@@ -99,7 +99,7 @@ MacRemote/
 ├── Support/              Utilities and small glue types
 ├── Views/                SwiftUI views
 ├── docs/                 Architecture and security notes
-└── script/               Build and run entrypoints
+└── script/               Build, run, and smoke-test entrypoints
 ```
 
 ## Security Bias
@@ -136,6 +136,8 @@ MacRemote should fail closed:
   `remctl doctor --for-agent --json` from its own process context. If macOS
   privacy blocks Reminders CoreData access, startup is blocked and Settings
   offers RemCTL's guided Full Disk Access helper.
+- After FDA is granted, run the remote Anthropic MCP smoke test with
+  [docs/END_TO_END_SMOKE_TEST.md](docs/END_TO_END_SMOKE_TEST.md).
 
 ## Research Notes
 
