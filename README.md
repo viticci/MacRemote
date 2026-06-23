@@ -17,6 +17,8 @@ the full RemCTL CLI plus narrow read helper tools.
 - Host-side approval before a remote client receives OAuth tokens.
 - Host approval shows the token-bound issuer and MCP resource URL before a
   client can receive tokens.
+- OAuth grant revocation for cutting off approved clients without changing the
+  public MCP path.
 - Per-call host approval before write or destructive tools execute.
 - Full Disk Access preflight before the full RemCTL profile can be exposed.
 - Cloudflare Tunnel for public reachability. The tunnel forwards only to the
@@ -143,6 +145,8 @@ MacRemote should fail closed:
 - Settings includes a rotate action for the instance-specific MCP path. Rotation
   stops the local server and tunnel, clears pending approvals and OAuth grants,
   and forces remote clients to use a new URL path.
+- Settings can revoke registered OAuth clients and bearer/refresh tokens while
+  keeping the current MCP URL. Clients must reauthorize on the host Mac.
 - Before starting the local MCP server, MacRemote runs
   `remctl doctor --for-agent --json` from its own process context. If macOS
   privacy blocks Reminders CoreData access, startup is blocked and Settings

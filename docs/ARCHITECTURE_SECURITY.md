@@ -45,6 +45,11 @@ Client authorization approvals must show the token-bound issuer and exact MCP
 resource URL. A friendly client name is not enough because leaked or replayed
 URLs are part of the threat model.
 
+The app must let the host revoke all registered OAuth clients, authorization
+codes, access tokens, and refresh tokens without requiring an instance path
+rotation. Rotation is still available when the public MCP URL itself should be
+invalidated.
+
 The main UI is a native `NavigationSplitView` with these sections:
 
 - Dashboard: server, tunnel, and auth status.
@@ -221,11 +226,11 @@ The app provides:
 
 - disable tunnel;
 - stop server;
+- revoke clients and OAuth grants;
 - rotate instance id;
 
 Future controls should add:
 
-- revoke client;
 - rotate local signing keys;
 - export redacted logs.
 

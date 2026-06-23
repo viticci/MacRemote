@@ -150,6 +150,15 @@ final class AppModel {
         )
     }
 
+    func revokeOAuthGrants() {
+        let summary = authCoordinator.revokeAllGrants()
+        approvals = []
+        appendLog(
+            level: .warning,
+            "Revoked OAuth grants: \(summary.clients) clients, \(summary.authorizations) authorizations, \(summary.accessTokens) access tokens, \(summary.refreshTokens) refresh tokens."
+        )
+    }
+
     func runRemCTLTodayTest() {
         Task {
             let report = await refreshFullDiskAccessStatus()

@@ -2,6 +2,17 @@ import CryptoKit
 import Foundation
 import Security
 
+struct OAuthRevocationSummary: Equatable, Sendable {
+    let clients: Int
+    let authorizations: Int
+    let accessTokens: Int
+    let refreshTokens: Int
+
+    var total: Int {
+        clients + authorizations + accessTokens + refreshTokens
+    }
+}
+
 final class OAuthCoordinator: @unchecked Sendable {
     typealias ChangeHandler = @Sendable ([ApprovalRequest]) -> Void
 
@@ -246,6 +257,24 @@ final class OAuthCoordinator: @unchecked Sendable {
             expirePendingAuthorizations(now: Date())
             return approvalSnapshotLocked()
         }
+    }
+
+    func revokeAllGrants() -> OAuthRevocationSummary {
+        let summary: OAuthRevocationSummary = lock.withLock {
+            let summary = OAuthRevocationSummary(
+                clients: clients.count,
+                authorizations: authorizations.count,
+                accessTokens: accessTokensByHash.count,
+                refreshTokens: refreshTokensByHash.count
+            )
+            clients.removeAll()
+            authorizations.removeAll()
+            accessTokensByHash.removeAll()
+            refreshTokensByHash.removeAll()
+            return summary
+        }
+        notify([])
+        return summary
     }
 
     private func exchangeAuthorizationCode(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {

@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var isShowingRotateInstanceConfirmation = false
+    @State private var isShowingRevokeOAuthConfirmation = false
 
     var body: some View {
         Form {
@@ -28,6 +29,16 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("OAuth Grants") {
+                Text("Revokes registered remote clients, authorization codes, access tokens, and refresh tokens. The MCP URL stays the same; clients must authorize again on this Mac.")
+                    .foregroundStyle(.secondary)
+
+                Button("Revoke OAuth Grants", systemImage: "person.crop.circle.badge.xmark") {
+                    isShowingRevokeOAuthConfirmation = true
+                }
+                .buttonStyle(.bordered)
             }
 
             Section("Tool Profile") {
@@ -151,6 +162,18 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("MacRemote will stop the local server and tunnel, clear pending OAuth and tool approvals, and require remote clients to use a new MCP URL path.")
+        }
+        .confirmationDialog(
+            "Revoke OAuth Grants?",
+            isPresented: $isShowingRevokeOAuthConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Revoke Grants", role: .destructive) {
+                appModel.revokeOAuthGrants()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("MacRemote will invalidate all registered clients and OAuth tokens. The public MCP URL will stay unchanged, and clients must request host approval again.")
         }
     }
 
