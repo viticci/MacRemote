@@ -15,6 +15,7 @@ final class AppModel {
     var instanceID: String
     var fullDiskAccessReport = FullDiskAccessReport()
     var smokeTestState: SmokeTestState = .idle
+    var anthropicCredentialState: AnthropicCredentialState = .unknown
 
     private static let instanceIDKey = "MacRemote.instanceID"
 
@@ -319,9 +320,36 @@ final class AppModel {
         appendLog(level: .info, "Cloudflare Tunnel stopped.")
     }
 
+    func checkSmokeReadiness() {
+        guard !smokeTestState.isRunning else {
+            appendLog(level: .warning, "Wait for the current smoke test before checking readiness again.")
+            return
+        }
+
+        anthropicCredentialState = .checking
+        appendLog(level: .info, "Checking remote MCP smoke test readiness.")
+
+        Task {
+            let fdaReport = await refreshFullDiskAccessStatus()
+            let credentialState = await smokeTestService.checkAnthropicAPIKey(environment: AppModel.toolEnvironment)
+            anthropicCredentialState = credentialState
+
+            let fdaMessage = fdaReport.isReady ? "Full Disk Access ready" : "Full Disk Access not ready"
+            let credentialMessage = credentialState.isReady ? "Anthropic key ready" : "Anthropic key not ready"
+            appendLog(level: credentialState.isReady && fdaReport.isReady ? .info : .warning, "\(fdaMessage); \(credentialMessage).")
+        }
+    }
+
     func runSmokeTest(mode: SmokeTestMode) {
         guard let mcpURL = currentPublicMCPURL else {
             appendLog(level: .warning, "Create a public MCP URL before running the \(mode.logTitle).")
+            return
+        }
+
+        let readiness = smokeReadiness
+        let canRun = mode == .preflight ? readiness.canRunPreflight : readiness.canRunAnthropicAPI
+        guard canRun else {
+            appendLog(level: .warning, "\(mode.logTitle) blocked: \(readiness.blockingDetails.first ?? "check readiness first").")
             return
         }
 
@@ -371,6 +399,28 @@ final class AppModel {
 
     var toolExposureSummary: ToolExposureSummary {
         ToolExposureSummary(tools: tools)
+    }
+
+    var smokeReadiness: SmokeReadiness {
+        let exposureSummary = toolExposureSummary
+        let fdaReady = fullDiskAccessReport.isReady || serverStatus.isRunning
+        let remCTLOnly = exposureSummary.custom == 0
+        let publicMCPURL = currentPublicMCPURL
+
+        let checks = [
+            fullDiskAccessReadinessCheck(isReady: fdaReady),
+            localServerReadinessCheck(),
+            tunnelReadinessCheck(publicMCPURL: publicMCPURL),
+            toolSurfaceReadinessCheck(summary: exposureSummary, remCTLOnly: remCTLOnly),
+            anthropicCredentialReadinessCheck()
+        ]
+
+        let commonReady = fdaReady && serverStatus.isRunning && publicMCPURL != nil && remCTLOnly
+        return SmokeReadiness(
+            checks: checks,
+            canRunPreflight: commonReady && !smokeTestState.isRunning,
+            canRunAnthropicAPI: commonReady && anthropicCredentialState.isReady && !smokeTestState.isRunning
+        )
     }
 
     func appendLog(level: AppLogEntry.Level, _ message: String) {
@@ -440,6 +490,167 @@ final class AppModel {
 
     private func toolExecutorSnapshot() -> ConfiguredToolExecutor {
         ConfiguredToolExecutor(tools: tools, environment: AppModel.toolEnvironment)
+    }
+
+    private func fullDiskAccessReadinessCheck(isReady: Bool) -> SmokeReadinessCheck {
+        if isReady {
+            return SmokeReadinessCheck(
+                id: "full-disk-access",
+                title: "Full Disk Access",
+                status: .ready,
+                detail: "RemCTL can read the local Reminders database from MacRemote."
+            )
+        }
+
+        switch fullDiskAccessReport.state {
+        case .checking:
+            return SmokeReadinessCheck(
+                id: "full-disk-access",
+                title: "Full Disk Access",
+                status: .checking,
+                detail: "MacRemote is running remctl doctor."
+            )
+        case .required:
+            return SmokeReadinessCheck(
+                id: "full-disk-access",
+                title: "Full Disk Access",
+                status: .blocked,
+                detail: "Grant FDA to every target shown in Settings, then relaunch MacRemote."
+            )
+        case .failed(let message):
+            return SmokeReadinessCheck(
+                id: "full-disk-access",
+                title: "Full Disk Access",
+                status: .blocked,
+                detail: message
+            )
+        default:
+            return SmokeReadinessCheck(
+                id: "full-disk-access",
+                title: "Full Disk Access",
+                status: .blocked,
+                detail: "Run Check Readiness or Check Access before exposing the MCP server."
+            )
+        }
+    }
+
+    private func localServerReadinessCheck() -> SmokeReadinessCheck {
+        switch serverStatus {
+        case .running(let url):
+            return SmokeReadinessCheck(
+                id: "local-server",
+                title: "Local MCP Server",
+                status: .ready,
+                detail: "Listening on \(url.absoluteString)."
+            )
+        case .starting:
+            return SmokeReadinessCheck(
+                id: "local-server",
+                title: "Local MCP Server",
+                status: .checking,
+                detail: "Server is starting."
+            )
+        case .failed(let message):
+            return SmokeReadinessCheck(
+                id: "local-server",
+                title: "Local MCP Server",
+                status: .blocked,
+                detail: message
+            )
+        case .stopped:
+            return SmokeReadinessCheck(
+                id: "local-server",
+                title: "Local MCP Server",
+                status: .blocked,
+                detail: "Start the local MCP server after FDA passes."
+            )
+        }
+    }
+
+    private func tunnelReadinessCheck(publicMCPURL: URL?) -> SmokeReadinessCheck {
+        if let publicMCPURL {
+            return SmokeReadinessCheck(
+                id: "public-tunnel",
+                title: "Public MCP URL",
+                status: .ready,
+                detail: publicMCPURL.absoluteString
+            )
+        }
+
+        switch tunnelStatus {
+        case .starting:
+            return SmokeReadinessCheck(
+                id: "public-tunnel",
+                title: "Public MCP URL",
+                status: .checking,
+                detail: "Waiting for Cloudflare Tunnel."
+            )
+        case .failed(let message):
+            return SmokeReadinessCheck(
+                id: "public-tunnel",
+                title: "Public MCP URL",
+                status: .blocked,
+                detail: message
+            )
+        default:
+            return SmokeReadinessCheck(
+                id: "public-tunnel",
+                title: "Public MCP URL",
+                status: .blocked,
+                detail: "Start the public tunnel after the local server is running."
+            )
+        }
+    }
+
+    private func toolSurfaceReadinessCheck(summary: ToolExposureSummary, remCTLOnly: Bool) -> SmokeReadinessCheck {
+        if remCTLOnly {
+            return SmokeReadinessCheck(
+                id: "tool-surface",
+                title: "Tool Surface",
+                status: .ready,
+                detail: "\(summary.total) RemCTL tools exposed: \(summary.capabilityDescription)."
+            )
+        }
+
+        return SmokeReadinessCheck(
+            id: "tool-surface",
+            title: "Tool Surface",
+            status: .blocked,
+            detail: "Remove \(summary.custom) custom tools before the RemCTL-only remote proof."
+        )
+    }
+
+    private func anthropicCredentialReadinessCheck() -> SmokeReadinessCheck {
+        switch anthropicCredentialState {
+        case .ready:
+            return SmokeReadinessCheck(
+                id: "anthropic-key",
+                title: "Anthropic API Key",
+                status: .ready,
+                detail: "1Password returned a non-empty key."
+            )
+        case .checking:
+            return SmokeReadinessCheck(
+                id: "anthropic-key",
+                title: "Anthropic API Key",
+                status: .checking,
+                detail: "Checking 1Password via op-get."
+            )
+        case .failed(let message):
+            return SmokeReadinessCheck(
+                id: "anthropic-key",
+                title: "Anthropic API Key",
+                status: .blocked,
+                detail: message
+            )
+        case .unknown:
+            return SmokeReadinessCheck(
+                id: "anthropic-key",
+                title: "Anthropic API Key",
+                status: .blocked,
+                detail: "Run Check Readiness before the full API smoke test."
+            )
+        }
     }
 
     private func stopExposureForInstanceRotation() {

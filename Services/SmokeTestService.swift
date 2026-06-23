@@ -61,6 +61,15 @@ struct SmokeTestService: Sendable {
         return SmokeTestRunResult(mode: mode, processResult: result)
     }
 
+    func checkAnthropicAPIKey(environment: [String: String]) async -> AnthropicCredentialState {
+        do {
+            _ = try await loadAnthropicAPIKey(environment: environment)
+            return .ready
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
     static func arguments(for mode: SmokeTestMode) -> [String] {
         switch mode {
         case .preflight:

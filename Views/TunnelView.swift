@@ -134,6 +134,8 @@ private struct SmokeTestPanel: View {
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
+        let readiness = appModel.smokeReadiness
+
         VStack(alignment: .leading, spacing: 12) {
             Text("Remote MCP Verification")
                 .font(.headline)
@@ -153,16 +155,27 @@ private struct SmokeTestPanel: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(readiness.checks) { check in
+                    SmokeReadinessRow(check: check)
+                }
+            }
+
             HStack {
+                Button("Check Readiness", systemImage: "checklist") {
+                    appModel.checkSmokeReadiness()
+                }
+                .disabled(appModel.smokeTestState.isRunning)
+
                 Button("Run Preflight", systemImage: "checkmark.seal") {
                     appModel.runSmokeTest(mode: .preflight)
                 }
-                .disabled(!canRun || appModel.smokeTestState.isRunning)
+                .disabled(!readiness.canRunPreflight)
 
                 Button("Run API Smoke", systemImage: "network.badge.shield.half.filled") {
                     appModel.runSmokeTest(mode: .anthropicAPI)
                 }
-                .disabled(!canRun || appModel.smokeTestState.isRunning)
+                .disabled(!readiness.canRunAnthropicAPI)
             }
         }
         .panelStyle()
@@ -178,6 +191,49 @@ private struct SmokeTestPanel: View {
         }
 
         return appModel.smokeTestState.detail
+    }
+}
+
+private struct SmokeReadinessRow: View {
+    let check: SmokeReadinessCheck
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbolName)
+                .foregroundStyle(color)
+                .frame(width: 18)
+
+            Text(check.title)
+                .fontWeight(.medium)
+                .frame(width: 128, alignment: .leading)
+
+            Text(check.status.title)
+                .foregroundStyle(color)
+                .frame(width: 72, alignment: .leading)
+
+            Text(check.detail)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .font(.caption)
+    }
+
+    private var symbolName: String {
+        switch check.status {
+        case .ready: "checkmark.circle.fill"
+        case .checking: "arrow.triangle.2.circlepath.circle"
+        case .warning: "exclamationmark.triangle.fill"
+        case .blocked: "xmark.octagon.fill"
+        }
+    }
+
+    private var color: Color {
+        switch check.status {
+        case .ready: .green
+        case .checking: .blue
+        case .warning: .orange
+        case .blocked: .red
+        }
     }
 }
 

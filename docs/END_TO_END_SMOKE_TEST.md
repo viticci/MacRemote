@@ -42,6 +42,14 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
    The Tunnel view can also run or copy the exact preflight and full Anthropic
    smoke test commands once the public MCP URL exists.
 
+6. In MacRemote > Tunnel, run **Check Readiness**. The RemCTL-only proof requires:
+
+   - Full Disk Access ready for the app-launched RemCTL process;
+   - local MCP server running;
+   - public MCP URL created;
+   - no custom tools exposed;
+   - Anthropic API key available from `/Users/viticci/bin/op-get`.
+
 ## Anthropic Smoke Test
 
 Run the script from the repository root. Do not paste or store secrets in files.

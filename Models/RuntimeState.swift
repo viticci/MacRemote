@@ -184,6 +184,61 @@ enum SmokeTestState: Equatable, Sendable {
     }
 }
 
+enum AnthropicCredentialState: Equatable, Sendable {
+    case unknown
+    case checking
+    case ready
+    case failed(String)
+
+    var title: String {
+        switch self {
+        case .unknown: "Unknown"
+        case .checking: "Checking"
+        case .ready: "Ready"
+        case .failed: "Failed"
+        }
+    }
+
+    var isReady: Bool {
+        if case .ready = self { true } else { false }
+    }
+}
+
+enum SmokeReadinessStatus: String, Equatable, Sendable {
+    case ready
+    case checking
+    case warning
+    case blocked
+
+    var title: String {
+        switch self {
+        case .ready: "Ready"
+        case .checking: "Checking"
+        case .warning: "Warning"
+        case .blocked: "Blocked"
+        }
+    }
+}
+
+struct SmokeReadinessCheck: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let status: SmokeReadinessStatus
+    let detail: String
+}
+
+struct SmokeReadiness: Equatable, Sendable {
+    let checks: [SmokeReadinessCheck]
+    let canRunPreflight: Bool
+    let canRunAnthropicAPI: Bool
+
+    var blockingDetails: [String] {
+        checks
+            .filter { $0.status == .blocked }
+            .map { "\($0.title): \($0.detail)" }
+    }
+}
+
 struct ToolExposureSummary: Equatable, Sendable {
     let total: Int
     let readOnly: Int
