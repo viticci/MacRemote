@@ -16,6 +16,7 @@ final class AppModel {
     var fullDiskAccessReport = FullDiskAccessReport()
     var smokeTestState: SmokeTestState = .idle
     var anthropicCredentialState: AnthropicCredentialState = .unknown
+    var lastSmokeProof: SmokeProofRecord?
 
     private static let instanceIDKey = "MacRemote.instanceID"
 
@@ -360,6 +361,8 @@ final class AppModel {
 
         smokeTestState = .running(mode)
         appendLog(level: .info, "Started \(mode.logTitle).")
+        let toolSurface = smokeProofToolSurfaceDescription
+        let mcpURLString = mcpURL.absoluteString
 
         Task {
             do {
@@ -376,9 +379,31 @@ final class AppModel {
                     smokeTestState = .failed(mode, result.summary)
                     appendLog(level: .warning, "\(mode.logTitle) failed: \(result.summary)")
                 }
+                lastSmokeProof = SmokeProofRecord(
+                    date: Date(),
+                    mode: mode,
+                    mcpURL: mcpURLString,
+                    toolSurface: toolSurface,
+                    succeeded: result.succeeded,
+                    resultSummary: result.summary,
+                    exitCode: result.processResult.exitCode,
+                    duration: result.duration,
+                    markers: SmokeTestService.proofMarkers(for: result.processResult)
+                )
             } catch {
                 let message = error.localizedDescription
                 smokeTestState = .failed(mode, message)
+                lastSmokeProof = SmokeProofRecord(
+                    date: Date(),
+                    mode: mode,
+                    mcpURL: mcpURLString,
+                    toolSurface: toolSurface,
+                    succeeded: false,
+                    resultSummary: message,
+                    exitCode: nil,
+                    duration: nil,
+                    markers: []
+                )
                 appendLog(level: .error, "\(mode.logTitle) failed: \(message)")
             }
         }
@@ -490,6 +515,11 @@ final class AppModel {
 
     private func toolExecutorSnapshot() -> ConfiguredToolExecutor {
         ConfiguredToolExecutor(tools: tools, environment: AppModel.toolEnvironment)
+    }
+
+    private var smokeProofToolSurfaceDescription: String {
+        let summary = toolExposureSummary
+        return "\(summary.total) tools; \(summary.capabilityDescription); \(summary.custom) custom; \(summary.genericAdapters) generic adapters"
     }
 
     private func fullDiskAccessReadinessCheck(isReady: Bool) -> SmokeReadinessCheck {

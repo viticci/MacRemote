@@ -56,6 +56,9 @@ Run the script from the repository root. Do not paste or store secrets in files.
 You can also run both checks directly from MacRemote > Tunnel. The full API
 smoke path reads the Anthropic key with `/Users/viticci/bin/op-get` at runtime
 and does not write it to the audit log.
+After a run completes, MacRemote > Tunnel records a redacted **Last Proof** with
+timestamp, public MCP URL, tool surface, exit code, duration, and script markers.
+Use **Copy Proof** for the final verification note.
 
 To validate MacRemote before calling Anthropic:
 

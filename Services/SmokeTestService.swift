@@ -118,6 +118,20 @@ struct SmokeTestService: Sendable {
         return "\(mode.title) exited \(result.exitCode)."
     }
 
+    static func proofMarkers(for result: CommandRunResult) -> [String] {
+        var markers = result.stdout
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter(isProofLine)
+
+        if !result.succeeded,
+           let failure = firstMeaningfulLine(in: result.stderr) {
+            markers.append("stderr=\(failure)")
+        }
+
+        return markers
+    }
+
     private static func timeoutSeconds(for mode: SmokeTestMode) -> TimeInterval {
         switch mode {
         case .preflight: 240
@@ -149,6 +163,28 @@ struct SmokeTestService: Sendable {
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
             .map { String($0.prefix(220)) }
+    }
+
+    private static func isProofLine(_ line: String) -> Bool {
+        let exactPrefixes = [
+            "model=",
+            "mcp_url=",
+            "tool=",
+            "oauth_status=",
+            "mcp_preflight=",
+            "mcp_protocol_version=",
+            "mcp_tool_count=",
+            "mcp_tool_use_count=",
+            "mcp_tool_result_count=",
+            "anthropic_call=",
+            "smoke_test="
+        ]
+
+        if exactPrefixes.contains(where: line.hasPrefix) {
+            return true
+        }
+
+        return line.hasPrefix("tool_use[") || line.hasPrefix("tool_result[")
     }
 
     private func loadAnthropicAPIKey(environment: [String: String]) async throws -> String {

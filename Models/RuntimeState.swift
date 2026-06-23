@@ -239,6 +239,74 @@ struct SmokeReadiness: Equatable, Sendable {
     }
 }
 
+struct SmokeProofRecord: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let date: Date
+    let mode: SmokeTestMode
+    let mcpURL: String
+    let toolSurface: String
+    let succeeded: Bool
+    let resultSummary: String
+    let exitCode: Int32?
+    let duration: TimeInterval?
+    let markers: [String]
+
+    init(
+        id: UUID = UUID(),
+        date: Date,
+        mode: SmokeTestMode,
+        mcpURL: String,
+        toolSurface: String,
+        succeeded: Bool,
+        resultSummary: String,
+        exitCode: Int32?,
+        duration: TimeInterval?,
+        markers: [String]
+    ) {
+        self.id = id
+        self.date = date
+        self.mode = mode
+        self.mcpURL = mcpURL
+        self.toolSurface = toolSurface
+        self.succeeded = succeeded
+        self.resultSummary = resultSummary
+        self.exitCode = exitCode
+        self.duration = duration
+        self.markers = markers
+    }
+
+    var statusTitle: String {
+        succeeded ? "Passed" : "Failed"
+    }
+
+    var clipboardText: String {
+        var lines = [
+            "MacRemote Remote MCP Proof",
+            "Date: \(ISO8601DateFormatter().string(from: date))",
+            "Mode: \(mode.title)",
+            "Status: \(statusTitle)",
+            "MCP URL: \(mcpURL)",
+            "Tool surface: \(toolSurface)",
+            "Result: \(resultSummary)"
+        ]
+
+        if let exitCode {
+            lines.append("Exit code: \(exitCode)")
+        }
+
+        if let duration {
+            lines.append("Duration: \(duration.formattedDuration)")
+        }
+
+        if !markers.isEmpty {
+            lines.append("Markers:")
+            lines.append(contentsOf: markers.map { "- \($0)" })
+        }
+
+        return lines.joined(separator: "\n")
+    }
+}
+
 struct ToolExposureSummary: Equatable, Sendable {
     let total: Int
     let readOnly: Int

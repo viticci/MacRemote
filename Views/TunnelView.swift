@@ -79,6 +79,8 @@ struct TunnelView: View {
 
                 SmokeTestPanel()
 
+                SmokeProofPanel(record: appModel.lastSmokeProof)
+
                 ExposureSummaryPanel(summary: appModel.toolExposureSummary)
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -234,6 +236,75 @@ private struct SmokeReadinessRow: View {
         case .warning: .orange
         case .blocked: .red
         }
+    }
+}
+
+private struct SmokeProofPanel: View {
+    @Environment(AppModel.self) private var appModel
+    let record: SmokeProofRecord?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Last Proof")
+                    .font(.headline)
+
+                Spacer()
+
+                if let record {
+                    Button("Copy Proof", systemImage: "doc.on.doc") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(record.clipboardText, forType: .string)
+                        appModel.appendLog(level: .info, "Copied redacted remote MCP proof.")
+                    }
+                }
+            }
+
+            if let record {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+                    ProofRow(label: "Status", value: record.statusTitle)
+                    ProofRow(label: "Mode", value: record.mode.title)
+                    ProofRow(label: "MCP URL", value: record.mcpURL)
+                    ProofRow(label: "Tool surface", value: record.toolSurface)
+                    ProofRow(label: "Result", value: record.resultSummary)
+                }
+
+                if !record.markers.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Markers")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ForEach(record.markers, id: \.self) { marker in
+                            Text(marker)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            } else {
+                Text("No remote MCP proof has been captured yet.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .panelStyle()
+    }
+}
+
+private struct ProofRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        GridRow {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+        .font(.caption)
     }
 }
 
