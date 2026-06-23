@@ -39,12 +39,15 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
    https://<host>.trycloudflare.com/mcp/<instance-id>
    ```
 
-   The Tunnel view can also copy the exact preflight and full Anthropic smoke
-   test commands once the public MCP URL exists.
+   The Tunnel view can also run or copy the exact preflight and full Anthropic
+   smoke test commands once the public MCP URL exists.
 
 ## Anthropic Smoke Test
 
 Run the script from the repository root. Do not paste or store secrets in files.
+You can also run both checks directly from MacRemote > Tunnel. The full API
+smoke path reads the Anthropic key with `/Users/viticci/bin/op-get` at runtime
+and does not write it to the audit log.
 
 To validate MacRemote before calling Anthropic:
 

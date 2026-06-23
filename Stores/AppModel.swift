@@ -14,6 +14,7 @@ final class AppModel {
     var localServerURL: URL?
     var instanceID: String
     var fullDiskAccessReport = FullDiskAccessReport()
+    var smokeTestState: SmokeTestState = .idle
 
     private static let instanceIDKey = "MacRemote.instanceID"
 
@@ -21,6 +22,7 @@ final class AppModel {
     private let tunnelService = TunnelService()
     private let toolStore = ToolRegistryStore()
     private let fullDiskAccessService = FullDiskAccessService()
+    private let smokeTestService = SmokeTestService()
     private var authCoordinator: OAuthCoordinator!
     private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
     private var localServer: LocalMCPServer?
@@ -315,6 +317,43 @@ final class AppModel {
         tunnelService.stop()
         tunnelStatus = localServerURL == nil ? .stopped : .ready
         appendLog(level: .info, "Cloudflare Tunnel stopped.")
+    }
+
+    func runSmokeTest(mode: SmokeTestMode) {
+        guard let mcpURL = currentPublicMCPURL else {
+            appendLog(level: .warning, "Create a public MCP URL before running the \(mode.logTitle).")
+            return
+        }
+
+        guard !smokeTestState.isRunning else {
+            appendLog(level: .warning, "A MacRemote smoke test is already running.")
+            return
+        }
+
+        smokeTestState = .running(mode)
+        appendLog(level: .info, "Started \(mode.logTitle).")
+
+        Task {
+            do {
+                let result = try await smokeTestService.run(
+                    mode: mode,
+                    mcpURL: mcpURL,
+                    environment: AppModel.toolEnvironment
+                )
+
+                if result.succeeded {
+                    smokeTestState = .passed(mode, "\(result.summary) in \(result.duration.formattedDuration).")
+                    appendLog(level: .info, "\(mode.logTitle) passed in \(result.duration.formattedDuration).")
+                } else {
+                    smokeTestState = .failed(mode, result.summary)
+                    appendLog(level: .warning, "\(mode.logTitle) failed: \(result.summary)")
+                }
+            } catch {
+                let message = error.localizedDescription
+                smokeTestState = .failed(mode, message)
+                appendLog(level: .error, "\(mode.logTitle) failed: \(message)")
+            }
+        }
     }
 
     func publicMCPURL(for tunnelBaseURL: URL) -> URL {

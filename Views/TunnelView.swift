@@ -66,16 +66,18 @@ struct TunnelView: View {
 
                         if appModel.currentPublicMCPURL != nil {
                             Button("Copy Preflight", systemImage: "doc.on.clipboard") {
-                                copySmokeTestCommand(preflightOnly: true)
+                                copySmokeTestCommand(mode: .preflight)
                             }
 
                             Button("Copy API Smoke", systemImage: "key.fill") {
-                                copySmokeTestCommand(preflightOnly: false)
+                                copySmokeTestCommand(mode: .anthropicAPI)
                             }
                         }
                     }
                 }
                 .panelStyle()
+
+                SmokeTestPanel()
 
                 ExposureSummaryPanel(summary: appModel.toolExposureSummary)
 
@@ -119,29 +121,63 @@ struct TunnelView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private func smokeTestCommand(preflightOnly: Bool) -> String? {
-        guard let url = appModel.currentPublicMCPURL else { return nil }
-
-        if preflightOnly {
-            return """
-            MACREMOTE_MCP_URL="\(url.absoluteString)" \\
-            ./script/anthropic_mcp_smoke.py --mcp-preflight-only
-            """
-        }
-
-        return """
-        ANTHROPIC_API_KEY="$(/Users/viticci/bin/op-get "Anthropic API Key")" \\
-        MACREMOTE_MCP_URL="\(url.absoluteString)" \\
-        ./script/anthropic_mcp_smoke.py
-        """
-    }
-
-    private func copySmokeTestCommand(preflightOnly: Bool) {
-        guard let command = smokeTestCommand(preflightOnly: preflightOnly) else { return }
+    private func copySmokeTestCommand(mode: SmokeTestMode) {
+        guard let url = appModel.currentPublicMCPURL else { return }
+        let command = SmokeTestService.copyCommand(for: mode, mcpURL: url)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
-        let label = preflightOnly ? "preflight" : "Anthropic API smoke test"
-        appModel.appendLog(level: .info, "Copied MacRemote MCP \(label) command.")
+        appModel.appendLog(level: .info, "Copied \(mode.logTitle) command.")
+    }
+}
+
+private struct SmokeTestPanel: View {
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Remote MCP Verification")
+                .font(.headline)
+
+            LabeledContent("Status") {
+                HStack(spacing: 8) {
+                    if appModel.smokeTestState.isRunning {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    Text(appModel.smokeTestState.title)
+                }
+            }
+
+            Text(detailText)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Run Preflight", systemImage: "checkmark.seal") {
+                    appModel.runSmokeTest(mode: .preflight)
+                }
+                .disabled(!canRun || appModel.smokeTestState.isRunning)
+
+                Button("Run API Smoke", systemImage: "network.badge.shield.half.filled") {
+                    appModel.runSmokeTest(mode: .anthropicAPI)
+                }
+                .disabled(!canRun || appModel.smokeTestState.isRunning)
+            }
+        }
+        .panelStyle()
+    }
+
+    private var canRun: Bool {
+        appModel.currentPublicMCPURL != nil
+    }
+
+    private var detailText: String {
+        if !canRun {
+            return "Start the local server and public tunnel before running remote MCP verification."
+        }
+
+        return appModel.smokeTestState.detail
     }
 }
 

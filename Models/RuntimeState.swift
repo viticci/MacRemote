@@ -134,6 +134,56 @@ struct FullDiskAccessReport: Equatable, Sendable {
     }
 }
 
+enum SmokeTestMode: String, Equatable, Sendable {
+    case preflight
+    case anthropicAPI
+
+    var title: String {
+        switch self {
+        case .preflight: "MCP Preflight"
+        case .anthropicAPI: "Anthropic API Smoke"
+        }
+    }
+
+    var logTitle: String {
+        switch self {
+        case .preflight: "MacRemote MCP preflight"
+        case .anthropicAPI: "Anthropic API smoke test"
+        }
+    }
+}
+
+enum SmokeTestState: Equatable, Sendable {
+    case idle
+    case running(SmokeTestMode)
+    case passed(SmokeTestMode, String)
+    case failed(SmokeTestMode, String)
+
+    var isRunning: Bool {
+        if case .running = self { true } else { false }
+    }
+
+    var title: String {
+        switch self {
+        case .idle: "Not Run"
+        case .running(let mode): "Running \(mode.title)"
+        case .passed(let mode, _): "\(mode.title) Passed"
+        case .failed(let mode, _): "\(mode.title) Failed"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .idle:
+            "Run a direct MCP preflight first, then the full Anthropic API smoke test."
+        case .running(let mode):
+            "\(mode.title) is running. Approve the OAuth request in Approvals when prompted."
+        case .passed(_, let message), .failed(_, let message):
+            message
+        }
+    }
+}
+
 struct ToolExposureSummary: Equatable, Sendable {
     let total: Int
     let readOnly: Int
