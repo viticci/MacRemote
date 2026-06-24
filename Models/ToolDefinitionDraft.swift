@@ -1,6 +1,6 @@
 import Foundation
 
-enum ToolAdapterMode: String, CaseIterable, Identifiable {
+enum ToolAdapterMode: String, CaseIterable, Identifiable, Sendable {
     case cliAdapter
     case commandTemplate
 
@@ -24,6 +24,7 @@ struct ToolDefinitionDraft: Equatable {
     var category: ToolCategory = .utilities
     var timeoutSeconds: Double = 10
     var outputLimitKB: Int = 512
+    var requiresFullDiskAccess = false
 
     var argumentPattern: [String] {
         if mode == .cliAdapter {
@@ -48,7 +49,8 @@ struct ToolDefinitionDraft: Equatable {
             timeoutSeconds: timeoutSeconds,
             outputByteLimit: outputLimitKB * 1024,
             origin: .userDefined,
-            category: category
+            category: category,
+            permissionRequirements: requiresFullDiskAccess ? [.fullDiskAccess] : []
         )
         try ToolArgumentResolver.validate(tool)
         return tool

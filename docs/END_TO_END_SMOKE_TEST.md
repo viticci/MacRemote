@@ -2,7 +2,7 @@
 
 This is the final verification path for proving that Anthropic can reach
 MacRemote over a public MCP URL, complete MacRemote OAuth with host approval,
-discover a RemCTL tool, call it, and receive a tool result.
+discover the selected smoke tool, call it, and receive a tool result.
 
 The script follows Anthropic's current remote MCP connector shape:
 `mcp_servers` plus a matching `tools: [{ "type": "mcp_toolset", ... }]` entry
@@ -18,21 +18,29 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
    ./script/build_and_run.sh --verify
    ```
 
-2. In MacRemote > Settings, run **Check Access**.
+2. Choose the exposed surface in MacRemote > Tools. The default is the full
+   RemCTL profile. To test PocketCTL or another custom CLI without RemCTL's
+   Full Disk Access requirement, add the preset/custom tool and turn off
+   **Full RemCTL Profile** under Exposure.
 
-3. If Full Disk Access is required, grant access to the exact targets shown in
-   Settings, then relaunch MacRemote and check again. In the current development
-   build those targets are typically:
+3. In MacRemote > Settings, run **Check Access** when the exposed surface
+   includes FDA-required tools. You can also run **Check Readiness** in
+   MacRemote > Tunnel; when Full Disk Access blocks the remote proof, Tunnel
+   shows the same exact target list inline.
+
+4. If Full Disk Access is required, grant access to every listed target, then
+   relaunch MacRemote and check again. In the current development build those
+   targets are typically:
 
    ```text
    /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13
    /Users/viticci/Projects/MacRemote/dist/MacRemote.app
    ```
 
-4. Start the local MCP server in Dashboard. This remains blocked until
-   `remctl doctor --for-agent --json` passes from MacRemote's process context.
+5. Start the local MCP server in Dashboard. This remains blocked until required
+   permission checks pass from MacRemote's process context.
 
-5. Start the Cloudflare Tunnel in MacRemote and copy the public MCP URL shown in
+6. Start the Cloudflare Tunnel in MacRemote and copy the public MCP URL shown in
    Tunnel. It should look like:
 
    ```text
@@ -42,12 +50,13 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
    The Tunnel view can also run or copy the exact preflight and full Anthropic
    smoke test commands once the public MCP URL exists.
 
-6. In MacRemote > Tunnel, run **Check Readiness**. The RemCTL-only proof requires:
+7. In MacRemote > Tunnel, run **Check Readiness**. Remote proof requires:
 
-   - Full Disk Access ready for the app-launched RemCTL process;
+   - Full Disk Access ready only when the exposed smoke surface requires it;
    - local MCP server running;
    - public MCP URL created;
-   - no custom tools exposed;
+   - at least one exposed tool, and at least one read-only tool for the full
+     API smoke test;
    - Anthropic API key available from `/Users/viticci/bin/op-get`.
 
 ## Anthropic Smoke Test
@@ -93,7 +102,9 @@ The script will:
 4. Exchange the authorization code for an access token bound to that same MCP
    resource.
 5. Call Anthropic's Messages API with the MacRemote MCP URL.
-6. Enable only the selected tool, defaulting to `remctl.today`.
+6. Enable only the selected smoke tool. MacRemote picks `remctl.today` when the
+   RemCTL profile is exposed, otherwise it picks the first exposed read-only
+   custom tool.
 7. Report whether Claude produced `mcp_tool_use` and `mcp_tool_result` blocks.
 
 Before the Anthropic call, the script also performs a direct MCP preflight
@@ -134,6 +145,14 @@ MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
 
 For `remctl.run`, MacRemote will pause execution until the host approves that
 specific command in Approvals.
+
+## PocketCTL Variant
+
+To prove a non-RemCTL CLI path, add **PocketCTL Triage** or **PocketCTL Now** in
+MacRemote > Tools, turn off **Full RemCTL Profile**, then start the local server
+and tunnel. The in-app smoke runner and copied smoke commands will target the
+PocketCTL tool via `MACREMOTE_SMOKE_TOOL`, and no RemCTL Full Disk Access check
+will run unless the custom tool itself is marked FDA-required.
 
 Use `--skip-mcp-preflight` only when debugging Anthropic connector behavior
 after the direct MacRemote preflight has already passed.

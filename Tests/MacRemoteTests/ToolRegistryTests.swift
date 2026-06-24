@@ -38,6 +38,19 @@ final class ToolRegistryTests: XCTestCase {
             ),
             ["hello", "world"]
         )
+        XCTAssertEqual(tool.permissionRequirements, [])
+    }
+
+    func testDraftCanRequireFullDiskAccess() throws {
+        var draft = ToolDefinitionDraft()
+        draft.name = "Echo"
+        draft.summary = "Generic echo adapter."
+        draft.executablePath = "/bin/echo"
+        draft.requiresFullDiskAccess = true
+
+        let tool = try draft.makeTool(id: "custom.echo")
+
+        XCTAssertEqual(tool.permissionRequirements, [.fullDiskAccess])
     }
 
     func testShellExecutablesAreBlocked() throws {
@@ -101,6 +114,7 @@ final class ToolRegistryTests: XCTestCase {
         let tool = try JSONDecoder().decode(ToolDefinition.self, from: data)
         XCTAssertEqual(tool.origin, .userDefined)
         XCTAssertEqual(tool.category, .utilities)
+        XCTAssertEqual(tool.permissionRequirements, [])
     }
 
     func testDefaultPresetsCreateValidUserDefinedTools() throws {
@@ -111,7 +125,20 @@ final class ToolRegistryTests: XCTestCase {
             XCTAssertEqual(tool.origin, .userDefined)
             XCTAssertEqual(tool.category, preset.category)
             XCTAssertEqual(tool.capability, preset.capability)
+            XCTAssertEqual(tool.permissionRequirements, preset.requiresFullDiskAccess ? [.fullDiskAccess] : [])
         }
+    }
+
+    func testPocketCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
+        guard let executablePath = DefaultToolPresetCatalog.pocketCTLExecutablePath else {
+            throw XCTSkip("PocketCTL is not installed on this Mac.")
+        }
+
+        let presets = DefaultToolPresetCatalog.presets(in: .podcasts)
+        XCTAssertFalse(presets.isEmpty)
+        XCTAssertTrue(presets.allSatisfy { $0.executablePath == executablePath })
+        XCTAssertTrue(presets.contains { $0.id == "preset.pocketctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
+        XCTAssertTrue(DefaultToolPresetCatalog.categories.contains(.podcasts))
     }
 
     func testFilesystemPresetsAvoidDestructiveCommands() {

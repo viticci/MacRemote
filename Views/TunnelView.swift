@@ -125,7 +125,7 @@ struct TunnelView: View {
 
     private func copySmokeTestCommand(mode: SmokeTestMode) {
         guard let url = appModel.currentPublicMCPURL else { return }
-        let command = SmokeTestService.copyCommand(for: mode, mcpURL: url)
+        let command = appModel.smokeTestCopyCommand(for: mode, mcpURL: url)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
         appModel.appendLog(level: .info, "Copied \(mode.logTitle) command.")
@@ -163,6 +163,8 @@ private struct SmokeTestPanel: View {
                 }
             }
 
+            FullDiskAccessReadinessTargetsPanel()
+
             HStack {
                 Button("Check Readiness", systemImage: "checklist") {
                     appModel.checkSmokeReadiness()
@@ -193,6 +195,83 @@ private struct SmokeTestPanel: View {
         }
 
         return appModel.smokeTestState.detail
+    }
+}
+
+private struct FullDiskAccessReadinessTargetsPanel: View {
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        if shouldShow {
+            VStack(alignment: .leading, spacing: 10) {
+                Divider()
+
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Full Disk Access Targets", systemImage: "lock.shield")
+                        .font(.subheadline.weight(.semibold))
+
+                    Spacer()
+
+                    Button("Settings", systemImage: "gearshape") {
+                        appModel.selection = .settings
+                    }
+                    .controlSize(.small)
+                }
+
+                Text("Remote MCP verification is blocked until every target below has Full Disk Access and MacRemote has been relaunched.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ForEach(appModel.fullDiskAccessReport.targets) { target in
+                    FullDiskAccessTargetRow(
+                        target: target,
+                        copyAction: {
+                            copyPath(target.path)
+                            appModel.appendLog(level: .info, "Copied Full Disk Access target: \(target.title).")
+                        },
+                        revealAction: {
+                            NSWorkspace.shared.selectFile(target.path, inFileViewerRootedAtPath: "")
+                            appModel.appendLog(level: .info, "Revealed Full Disk Access target: \(target.title).")
+                        }
+                    )
+                }
+
+                HStack(spacing: 10) {
+                    Button("Copy All Paths", systemImage: "doc.on.clipboard") {
+                        copyAllTargetPaths(appModel.fullDiskAccessReport.targets)
+                        appModel.appendLog(level: .info, "Copied all Full Disk Access target paths.")
+                    }
+
+                    Button("Open Guided Setup", systemImage: "gearshape.2") {
+                        appModel.openFullDiskAccessHelper()
+                    }
+
+                    Text("Drag a row into Full Disk Access, or copy a path and use Command-Shift-G in the file picker.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var shouldShow: Bool {
+        !appModel.fullDiskAccessReport.isReady &&
+            !appModel.fullDiskAccessReport.targets.isEmpty
+    }
+
+    private func copyPath(_ path: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(path, forType: .string)
+        pasteboard.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
+    }
+
+    private func copyAllTargetPaths(_ targets: [FullDiskAccessTarget]) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(targets.map(\.path).joined(separator: "\n"), forType: .string)
     }
 }
 

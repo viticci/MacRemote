@@ -4,14 +4,17 @@ MacRemote is a native macOS app for exposing a deliberately small, user-approved
 set of local tools to remote MCP clients.
 
 The design goal is not "remote shell for your Mac." The server can only run
-tools that the user explicitly defines in the app, and the first live profile is
-the full RemCTL CLI plus narrow read helper tools.
+the active tool surface selected in the app. The default surface is the full
+RemCTL CLI plus narrow read helper tools, and the user can disable that profile
+to expose only custom CLI adapters such as PocketCTL.
 
 ## Product Shape
 
 - Native SwiftUI macOS app.
 - Local MCP server process bound to `127.0.0.1`.
 - Tool registry controlled from the app UI.
+- Selective exposure: registered tools can exist without being part of the
+  currently served MCP surface.
 - No shell execution for tool calls. Commands run as exact executable paths plus
   validated argv arrays.
 - Host-side approval before a remote client receives OAuth tokens.
@@ -20,7 +23,9 @@ the full RemCTL CLI plus narrow read helper tools.
 - OAuth grant revocation for cutting off approved clients without changing the
   public MCP path.
 - Per-call host approval before write or destructive tools execute.
-- Full Disk Access preflight before the full RemCTL profile can be exposed.
+- App-wide Full Disk Access prompt flow for tools that declare protected-data
+  requirements. The full RemCTL profile requires FDA; generic CLIs such as
+  PocketCTL do not inherit that requirement unless marked by the user.
 - Cloudflare Tunnel for public reachability. The tunnel forwards only to the
   local MCP server port, not to the Mac as a whole.
 - Instance ID rotation that stops public exposure, clears in-memory OAuth grants,
@@ -57,9 +62,14 @@ templates:
   templates via `sips`.
 - Text: word count, line count, and single-file grep.
 - Developer: read-only git status and recent log templates.
+- Podcasts: PocketCTL presets are shown when `pocketctl` is installed in a
+  standard user or Homebrew location. These include read-only `now`/`triage`
+  style templates and a host-gated full CLI adapter.
 
 These presets are not exposed automatically. They only become MCP tools after
 the user selects one, reviews the executable/argv template, and saves it.
+The full RemCTL profile can be toggled off so a saved custom CLI can be tested
+or served without inheriting RemCTL's Full Disk Access requirement.
 
 ## MCP Baseline
 
@@ -94,13 +104,16 @@ expanding the local command surface.
 The first end-to-end target is:
 
 1. Start MacRemote.
-2. Grant Full Disk Access to MacRemote with the guided RemCTL helper if needed.
-3. Start the local MCP server after `remctl doctor --for-agent --json` passes
-   from the app process.
-4. Expose it through a Cloudflare Tunnel.
-5. Connect a remote model client to the MCP URL.
-6. Approve the auth request on the Mac.
-7. Run a RemCTL tool call and verify the result.
+2. Choose the exposed surface: default full RemCTL, or disable RemCTL and save
+   a custom CLI preset such as PocketCTL.
+3. Grant Full Disk Access with the guided RemCTL helper only when the exposed
+   surface contains FDA-required tools.
+4. Start the local MCP server after required permission checks pass from the app
+   process.
+5. Expose it through a Cloudflare Tunnel.
+6. Connect a remote model client to the MCP URL.
+7. Approve the auth request on the Mac.
+8. Run the selected read-only smoke tool and verify the result.
 
 ## Repository Layout
 
@@ -129,8 +142,8 @@ MacRemote should fail closed:
 - no inherited broad environment;
 - no unbounded runtime or output;
 - no default filesystem delete commands;
-- no RemCTL exposure until Full Disk Access passes from MacRemote's own process
-  context.
+- no tool that declares Full Disk Access until the check passes from
+  MacRemote's own process context.
 
 ## Current Local Gates
 
@@ -140,6 +153,9 @@ MacRemote should fail closed:
 - The default RemCTL surface includes `remctl.run`, a full CLI adapter that
   passes validated argv arrays directly to `/Users/viticci/bin/remctl`, plus
   narrow read helper tools for common calls.
+- Tools > Exposure can disable the full RemCTL profile. Custom CLI tools remain
+  exposed, so PocketCTL-only or other non-FDA profiles can start the MCP server
+  without running RemCTL's FDA check.
 - `remctl.run` is marked destructive because the RemCTL CLI can create, edit,
   complete, or delete reminders and lists. It is still direct `Process`
   execution, never shell execution.
@@ -151,15 +167,21 @@ MacRemote should fail closed:
   and forces remote clients to use a new URL path.
 - Settings can revoke registered OAuth clients and bearer/refresh tokens while
   keeping the current MCP URL. Clients must reauthorize on the host Mac.
-- Tunnel shows the currently exposed tool surface and can copy the direct MCP
-  preflight command once a public URL exists.
+- Tunnel shows the currently exposed tool surface and can copy direct MCP
+  preflight/API smoke commands for the selected smoke tool once a public URL
+  exists.
 - Starting Cloudflare Tunnel requires a confirmation that restates the tool
   surface and the remaining OAuth/per-call approval gates.
 - Before starting the local MCP server, MacRemote runs
-  `remctl doctor --for-agent --json` from its own process context. If macOS
-  privacy blocks Reminders CoreData access, startup is blocked and Settings
-  offers RemCTL's guided Full Disk Access helper.
-- After FDA is granted, run the remote Anthropic MCP smoke test with
+  `remctl doctor --for-agent --json` from its own process context whenever the
+  exposed tool surface includes FDA-required tools. If macOS privacy blocks
+  Reminders CoreData access, startup is blocked and MacRemote shows an app-wide
+  permission sheet with the exact targets, copy/reveal actions, Settings
+  routing, and RemCTL's guided Full Disk Access helper.
+- PocketCTL is used as the first non-RemCTL CLI validation path. When installed,
+  MacRemote can add PocketCTL presets and the test suite runs a real
+  `pocketctl whoami --json` call through MCP after OAuth.
+- After required permission checks pass, run the remote Anthropic MCP smoke test with
   [docs/END_TO_END_SMOKE_TEST.md](docs/END_TO_END_SMOKE_TEST.md).
 
 ## Research Notes

@@ -27,7 +27,8 @@ enum RemCTLToolCatalog {
         capability: .destructive,
         timeoutSeconds: 30,
         outputByteLimit: 2 * 1024 * 1024,
-        category: .reminders
+        category: .reminders,
+        permissionRequirements: [.fullDiskAccess]
     )
 
     static let readOnlyTools: [ToolDefinition] = [
@@ -41,7 +42,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.upcoming",
@@ -62,7 +64,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 1024 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.overdue",
@@ -74,7 +77,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.lists",
@@ -86,7 +90,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.sections",
@@ -98,7 +103,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.stats",
@@ -110,7 +116,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.search",
@@ -129,7 +136,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 1024 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.show",
@@ -148,7 +156,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 1024 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         ),
         ToolDefinition(
             id: "remctl.info",
@@ -167,7 +176,8 @@ enum RemCTLToolCatalog {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
-            category: .reminders
+            category: .reminders,
+            permissionRequirements: [.fullDiskAccess]
         )
     ]
 

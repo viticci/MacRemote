@@ -134,6 +134,40 @@ struct FullDiskAccessReport: Equatable, Sendable {
     }
 }
 
+struct FullDiskAccessPrompt: Identifiable, Equatable, Sendable {
+    enum Reason: String, Sendable {
+        case serverStart
+        case remCTLTest
+        case remoteProof
+        case manualCheck
+
+        var title: String {
+            switch self {
+            case .serverStart: "Full Disk Access Required"
+            case .remCTLTest: "RemCTL Test Blocked"
+            case .remoteProof: "Remote MCP Proof Blocked"
+            case .manualCheck: "Full Disk Access Required"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .serverStart:
+                "MacRemote cannot start an MCP server with FDA-required tools until the app-launched CLI process can read its protected data."
+            case .remCTLTest:
+                "The safe RemCTL test must run from the same app process context that remote MCP calls will use."
+            case .remoteProof:
+                "Remote MCP verification is blocked until FDA-required tools pass their local permission check."
+            case .manualCheck:
+                "Grant access to every listed target, relaunch MacRemote, then check again."
+            }
+        }
+    }
+
+    let id = UUID()
+    let reason: Reason
+}
+
 enum SmokeTestMode: String, Equatable, Sendable {
     case preflight
     case anthropicAPI

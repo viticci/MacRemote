@@ -6,6 +6,7 @@ import Observation
 final class AppModel {
     var selection: NavigationSection? = .dashboard
     var tools: [ToolDefinition]
+    var isRemCTLProfileEnabled: Bool
     var logs: [AppLogEntry] = []
     var approvals: [ApprovalRequest] = []
     var toolCallApprovals: [ToolCallApprovalRequest] = []
@@ -14,11 +15,13 @@ final class AppModel {
     var localServerURL: URL?
     var instanceID: String
     var fullDiskAccessReport = FullDiskAccessReport()
+    var fullDiskAccessPrompt: FullDiskAccessPrompt?
     var smokeTestState: SmokeTestState = .idle
     var anthropicCredentialState: AnthropicCredentialState = .unknown
     var lastSmokeProof: SmokeProofRecord?
 
     private static let instanceIDKey = "MacRemote.instanceID"
+    private static let remCTLProfileEnabledKey = "MacRemote.remCTLProfileEnabled"
 
     private let userDefaults: UserDefaults
     private let tunnelService = TunnelService()
@@ -33,6 +36,7 @@ final class AppModel {
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
         self.instanceID = AppModel.makeInstanceID(userDefaults: userDefaults)
+        self.isRemCTLProfileEnabled = userDefaults.object(forKey: Self.remCTLProfileEnabledKey) as? Bool ?? true
 
         do {
             let customTools = try toolStore.loadUserDefinedTools()
@@ -44,7 +48,12 @@ final class AppModel {
 
         installApprovalCoordinators()
         tunnelStatus = tunnelService.status(localServerURL: nil)
-        appendLog(level: .info, "MacRemote initialized with full RemCTL CLI profile.")
+        appendLog(
+            level: .info,
+            isRemCTLProfileEnabled
+                ? "MacRemote initialized with full RemCTL CLI profile."
+                : "MacRemote initialized with full RemCTL profile disabled; custom tools remain exposed."
+        )
     }
 
     private func installApprovalCoordinators() {
@@ -80,13 +89,15 @@ final class AppModel {
 
         serverStatus = .starting
         Task {
-            let report = await refreshFullDiskAccessStatus()
-            guard report.isReady else {
-                serverStatus = .failed("Full Disk Access required for full RemCTL.")
-                tunnelStatus = tunnelService.status(localServerURL: localServerURL)
-                selection = .settings
-                appendLog(level: .warning, "Blocked server start: grant Full Disk Access to MacRemote before exposing the full RemCTL CLI.")
-                return
+            if exposedToolsRequireFullDiskAccess {
+                let report = await refreshFullDiskAccessStatus()
+                guard report.isReady else {
+                    serverStatus = .failed("Full Disk Access required for exposed tools.")
+                    tunnelStatus = tunnelService.status(localServerURL: localServerURL)
+                    presentFullDiskAccessPrompt(reason: .serverStart)
+                    appendLog(level: .warning, "Blocked server start: grant Full Disk Access before exposing FDA-required tools.")
+                    return
+                }
             }
 
             startLocalServerAfterPermissionCheck()
@@ -95,11 +106,17 @@ final class AppModel {
 
     private func startLocalServerAfterPermissionCheck() {
         guard !serverStatus.isRunning else { return }
+        let toolsToExpose = exposedTools
+        guard !toolsToExpose.isEmpty else {
+            serverStatus = .failed("Enable at least one tool before starting the local MCP server.")
+            appendLog(level: .warning, "Blocked server start: no tools are currently exposed.")
+            return
+        }
 
         do {
             let server = LocalMCPServer(
                 instanceID: instanceID,
-                tools: tools,
+                tools: toolsToExpose,
                 authCoordinator: authCoordinator,
                 toolCallApprovalCoordinator: toolCallApprovalCoordinator,
                 toolExecutor: toolExecutorSnapshot()
@@ -164,16 +181,46 @@ final class AppModel {
     }
 
     func runRemCTLTodayTest() {
+        guard isRemCTLProfileEnabled else {
+            appendLog(level: .warning, "Enable the full RemCTL profile before running the safe RemCTL test.")
+            return
+        }
+
         Task {
-            let report = await refreshFullDiskAccessStatus()
-            guard report.isReady else {
-                selection = .settings
-                appendLog(level: .warning, "Blocked RemCTL test: Full Disk Access is required for MacRemote's app-launched RemCTL process.")
-                return
+            if toolRequiresFullDiskAccess(toolID: "remctl.today") {
+                let report = await refreshFullDiskAccessStatus()
+                guard report.isReady else {
+                    presentFullDiskAccessPrompt(reason: .remCTLTest)
+                    appendLog(level: .warning, "Blocked RemCTL test: Full Disk Access is required for MacRemote's app-launched RemCTL process.")
+                    return
+                }
             }
 
             await runToolTest(toolID: "remctl.today")
         }
+    }
+
+    func setRemCTLProfileEnabled(_ enabled: Bool) -> String? {
+        guard !serverStatus.isRunning else {
+            return "Stop the local server before changing the exposed tool surface."
+        }
+
+        guard isRemCTLProfileEnabled != enabled else { return nil }
+
+        isRemCTLProfileEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.remCTLProfileEnabledKey)
+        if !enabled, !exposedToolsRequireFullDiskAccess {
+            fullDiskAccessPrompt = nil
+        }
+        appendLog(
+            level: enabled ? .info : .warning,
+            enabled ? "Enabled the full RemCTL profile." : "Disabled the full RemCTL profile; custom tools remain exposed."
+        )
+        return nil
+    }
+
+    func isToolExposed(_ tool: ToolDefinition) -> Bool {
+        tool.origin == .userDefined || isRemCTLProfileEnabled
     }
 
     func checkFullDiskAccess() {
@@ -181,10 +228,13 @@ final class AppModel {
             let report = await refreshFullDiskAccessStatus()
             switch report.state {
             case .ready:
+                fullDiskAccessPrompt = nil
                 appendLog(level: .info, "Full Disk Access check passed for MacRemote.")
             case .required:
+                presentFullDiskAccessPrompt(reason: .manualCheck)
                 appendLog(level: .warning, "Full Disk Access required: \(singleLine(report.detail))")
             case .failed(let message):
+                presentFullDiskAccessPrompt(reason: .manualCheck)
                 appendLog(level: .error, "Full Disk Access check failed: \(message)")
             default:
                 break
@@ -331,13 +381,18 @@ final class AppModel {
         appendLog(level: .info, "Checking remote MCP smoke test readiness.")
 
         Task {
-            let fdaReport = await refreshFullDiskAccessStatus()
+            let fdaRequired = exposedToolsRequireFullDiskAccess
+            let fdaReport = fdaRequired ? await refreshFullDiskAccessStatus() : fullDiskAccessReport
+            let fdaReady = !fdaRequired || fdaReport.isReady
             let credentialState = await smokeTestService.checkAnthropicAPIKey(environment: AppModel.toolEnvironment)
             anthropicCredentialState = credentialState
 
-            let fdaMessage = fdaReport.isReady ? "Full Disk Access ready" : "Full Disk Access not ready"
+            let fdaMessage = fdaReady ? "Full Disk Access ready" : "Full Disk Access not ready"
             let credentialMessage = credentialState.isReady ? "Anthropic key ready" : "Anthropic key not ready"
-            appendLog(level: credentialState.isReady && fdaReport.isReady ? .info : .warning, "\(fdaMessage); \(credentialMessage).")
+            if fdaRequired, !fdaReport.isReady {
+                presentFullDiskAccessPrompt(reason: .remoteProof)
+            }
+            appendLog(level: credentialState.isReady && fdaReady ? .info : .warning, "\(fdaMessage); \(credentialMessage).")
         }
     }
 
@@ -363,12 +418,14 @@ final class AppModel {
         appendLog(level: .info, "Started \(mode.logTitle).")
         let toolSurface = smokeProofToolSurfaceDescription
         let mcpURLString = mcpURL.absoluteString
+        let smokeToolID = smokeToolID(for: mode)
 
         Task {
             do {
                 let result = try await smokeTestService.run(
                     mode: mode,
                     mcpURL: mcpURL,
+                    toolID: smokeToolID,
                     environment: AppModel.toolEnvironment
                 )
 
@@ -415,6 +472,10 @@ final class AppModel {
             .appendingPathComponent(instanceID)
     }
 
+    func smokeTestCopyCommand(for mode: SmokeTestMode, mcpURL: URL) -> String {
+        SmokeTestService.copyCommand(for: mode, mcpURL: mcpURL, toolID: smokeToolID(for: mode))
+    }
+
     var currentPublicMCPURL: URL? {
         if case .running(let publicURL) = tunnelStatus {
             return self.publicMCPURL(for: publicURL)
@@ -423,29 +484,39 @@ final class AppModel {
     }
 
     var toolExposureSummary: ToolExposureSummary {
-        ToolExposureSummary(tools: tools)
+        ToolExposureSummary(tools: exposedTools)
     }
 
     var smokeReadiness: SmokeReadiness {
         let exposureSummary = toolExposureSummary
-        let fdaReady = fullDiskAccessReport.isReady || serverStatus.isRunning
-        let remCTLOnly = exposureSummary.custom == 0
+        let fdaRequired = exposedToolsRequireFullDiskAccess
+        let fdaReady = !fdaRequired || fullDiskAccessReport.isReady || serverStatus.isRunning
+        let preflightToolID = smokeToolID(for: .preflight)
+        let anthropicToolID = smokeToolID(for: .anthropicAPI)
         let publicMCPURL = currentPublicMCPURL
 
         let checks = [
-            fullDiskAccessReadinessCheck(isReady: fdaReady),
+            fullDiskAccessReadinessCheck(isRequired: fdaRequired, isReady: fdaReady),
             localServerReadinessCheck(),
             tunnelReadinessCheck(publicMCPURL: publicMCPURL),
-            toolSurfaceReadinessCheck(summary: exposureSummary, remCTLOnly: remCTLOnly),
+            toolSurfaceReadinessCheck(
+                summary: exposureSummary,
+                preflightToolID: preflightToolID,
+                anthropicToolID: anthropicToolID
+            ),
             anthropicCredentialReadinessCheck()
         ]
 
-        let commonReady = fdaReady && serverStatus.isRunning && publicMCPURL != nil && remCTLOnly
+        let commonReady = fdaReady && serverStatus.isRunning && publicMCPURL != nil && preflightToolID != nil
         return SmokeReadiness(
             checks: checks,
             canRunPreflight: commonReady && !smokeTestState.isRunning,
-            canRunAnthropicAPI: commonReady && anthropicCredentialState.isReady && !smokeTestState.isRunning
+            canRunAnthropicAPI: commonReady && anthropicToolID != nil && anthropicCredentialState.isReady && !smokeTestState.isRunning
         )
+    }
+
+    func dismissFullDiskAccessPrompt() {
+        fullDiskAccessPrompt = nil
     }
 
     func appendLog(level: AppLogEntry.Level, _ message: String) {
@@ -489,6 +560,7 @@ final class AppModel {
                 "/bin",
                 "/usr/sbin",
                 "/sbin",
+                "/Users/viticci/.local/bin",
                 "/Users/viticci/bin"
             ].joined(separator: ":")
         ]
@@ -514,7 +586,7 @@ final class AppModel {
     }
 
     private func toolExecutorSnapshot() -> ConfiguredToolExecutor {
-        ConfiguredToolExecutor(tools: tools, environment: AppModel.toolEnvironment)
+        ConfiguredToolExecutor(tools: exposedTools, environment: AppModel.toolEnvironment)
     }
 
     private var smokeProofToolSurfaceDescription: String {
@@ -522,7 +594,32 @@ final class AppModel {
         return "\(summary.total) tools; \(summary.capabilityDescription); \(summary.custom) custom; \(summary.genericAdapters) generic adapters"
     }
 
-    private func fullDiskAccessReadinessCheck(isReady: Bool) -> SmokeReadinessCheck {
+    private var exposedTools: [ToolDefinition] {
+        tools.filter(isToolExposed)
+    }
+
+    private var exposedToolsRequireFullDiskAccess: Bool {
+        exposedTools.contains { $0.permissionRequirements.contains(.fullDiskAccess) }
+    }
+
+    private func toolRequiresFullDiskAccess(toolID: String) -> Bool {
+        exposedTools.first { $0.id == toolID }?.permissionRequirements.contains(.fullDiskAccess) == true
+    }
+
+    private func presentFullDiskAccessPrompt(reason: FullDiskAccessPrompt.Reason) {
+        fullDiskAccessPrompt = FullDiskAccessPrompt(reason: reason)
+    }
+
+    private func fullDiskAccessReadinessCheck(isRequired: Bool, isReady: Bool) -> SmokeReadinessCheck {
+        guard isRequired else {
+            return SmokeReadinessCheck(
+                id: "full-disk-access",
+                title: "Full Disk Access",
+                status: .ready,
+                detail: "No exposed tools currently require Full Disk Access."
+            )
+        }
+
         if isReady {
             return SmokeReadinessCheck(
                 id: "full-disk-access",
@@ -592,7 +689,7 @@ final class AppModel {
                 id: "local-server",
                 title: "Local MCP Server",
                 status: .blocked,
-                detail: "Start the local MCP server after FDA passes."
+                detail: "Start the local MCP server after required permission checks pass."
             )
         }
     }
@@ -632,22 +729,57 @@ final class AppModel {
         }
     }
 
-    private func toolSurfaceReadinessCheck(summary: ToolExposureSummary, remCTLOnly: Bool) -> SmokeReadinessCheck {
-        if remCTLOnly {
+    private func toolSurfaceReadinessCheck(
+        summary: ToolExposureSummary,
+        preflightToolID: String?,
+        anthropicToolID: String?
+    ) -> SmokeReadinessCheck {
+        guard summary.total > 0, let preflightToolID else {
+            return SmokeReadinessCheck(
+                id: "tool-surface",
+                title: "Tool Surface",
+                status: .blocked,
+                detail: "Enable at least one tool before running the remote proof."
+            )
+        }
+
+        if let anthropicToolID {
             return SmokeReadinessCheck(
                 id: "tool-surface",
                 title: "Tool Surface",
                 status: .ready,
-                detail: "\(summary.total) RemCTL tools exposed: \(summary.capabilityDescription)."
+                detail: "\(summary.total) tools exposed: \(summary.capabilityDescription). Smoke tool: \(anthropicToolID)."
             )
         }
 
         return SmokeReadinessCheck(
             id: "tool-surface",
             title: "Tool Surface",
-            status: .blocked,
-            detail: "Remove \(summary.custom) custom tools before the RemCTL-only remote proof."
+            status: .warning,
+            detail: "\(summary.total) tools exposed for preflight with \(preflightToolID); add a read-only tool for the full API smoke test."
         )
+    }
+
+    private func smokeToolID(for mode: SmokeTestMode) -> String? {
+        switch mode {
+        case .preflight:
+            if exposedTools.contains(where: { $0.id == "remctl.today" }) {
+                return "remctl.today"
+            }
+            return smokeReadOnlyTool?.id ?? exposedTools.sorted { $0.name < $1.name }.first?.id
+        case .anthropicAPI:
+            return smokeReadOnlyTool?.id
+        }
+    }
+
+    private var smokeReadOnlyTool: ToolDefinition? {
+        if let remCTLToday = exposedTools.first(where: { $0.id == "remctl.today" && $0.capability == .readOnly }) {
+            return remCTLToday
+        }
+        return exposedTools
+            .filter { $0.capability == .readOnly }
+            .sorted { $0.name < $1.name }
+            .first
     }
 
     private func anthropicCredentialReadinessCheck() -> SmokeReadinessCheck {

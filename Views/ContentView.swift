@@ -24,5 +24,9 @@ struct ContentView: View {
                 SettingsView()
             }
         }
+        .sheet(item: $appModel.fullDiskAccessPrompt) { prompt in
+            FullDiskAccessPermissionSheet(prompt: prompt)
+                .environment(appModel)
+        }
     }
 }

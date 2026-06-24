@@ -10,12 +10,16 @@
 - Add the full RemCTL CLI adapter plus narrow read helper tool definitions.
 - Add a Full Disk Access flow that uses RemCTL's own permission helper and
   `remctl doctor --for-agent --json` from the app process.
+- Make permission requirements tool metadata and show one app-wide FDA prompt
+  from every blocked flow.
 - Add direct process runner that never invokes a shell.
 - Add unit tests for command validation and argv construction.
 - Add generic CLI adapter definitions: executable path + `{args}` array +
   optional `stdin`.
 - Add opt-in default command categories for Filesystem, Utilities, Image
-  Processing, Text, and Developer templates.
+  Processing, Text, Developer, and detected PocketCTL templates.
+- Add selective exposure so the full RemCTL profile can be disabled while
+  custom CLI adapters remain served.
 
 ## Phase 2: Local MCP Server
 
@@ -30,7 +34,10 @@
 - Add per-call host approval for write and destructive tool calls before the
   process runner executes them.
 - Wire user-defined generic CLI adapter tools through the same MCP handler.
-- Block local server startup until the app-launched RemCTL doctor check passes.
+- Block local server startup until the app-launched RemCTL doctor check passes
+  when any exposed tool declares Full Disk Access.
+- Add a PocketCTL MCP integration test that calls a real installed CLI through
+  OAuth-protected MCP.
 
 ## Phase 3: Tunnel
 
@@ -47,9 +54,9 @@
 - Use `script/anthropic_mcp_smoke.py` so OAuth approval, token exchange, and
   Anthropic MCP connector calls are reproducible.
 - Use the public HTTPS MCP URL in an Anthropic or OpenAI API call.
-- Confirm the model can discover the RemCTL tool.
+- Confirm the model can discover the selected exposed read-only smoke tool.
 - Approve the auth request on the Mac.
-- Confirm a full RemCTL CLI result returns through MCP.
+- Confirm a RemCTL, PocketCTL, or custom CLI result returns through MCP.
 
 ## Phase 5: Computer Use Verification
 
@@ -69,5 +76,5 @@
 - No OAuth token without host approval.
 - No write or destructive tool execution without per-call host approval.
 - No secrets in logs, git, screenshots, or command output.
-- No RemCTL exposure before Full Disk Access is explicitly granted and verified
-  from MacRemote's own process context.
+- No FDA-required tool exposure before Full Disk Access is explicitly granted
+  and verified from MacRemote's own process context.

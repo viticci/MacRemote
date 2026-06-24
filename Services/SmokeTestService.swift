@@ -41,10 +41,14 @@ struct SmokeTestService: Sendable {
     func run(
         mode: SmokeTestMode,
         mcpURL: URL,
+        toolID: String?,
         environment: [String: String]
     ) async throws -> SmokeTestRunResult {
         var smokeEnvironment = environment
         smokeEnvironment["MACREMOTE_MCP_URL"] = mcpURL.absoluteString
+        if let toolID {
+            smokeEnvironment["MACREMOTE_SMOKE_TOOL"] = toolID
+        }
 
         if mode == .anthropicAPI {
             smokeEnvironment["ANTHROPIC_API_KEY"] = try await loadAnthropicAPIKey(environment: environment)
@@ -79,20 +83,27 @@ struct SmokeTestService: Sendable {
         }
     }
 
-    static func copyCommand(for mode: SmokeTestMode, mcpURL: URL) -> String {
+    static func copyCommand(for mode: SmokeTestMode, mcpURL: URL, toolID: String? = nil) -> String {
+        var lines: [String] = []
         switch mode {
         case .preflight:
-            """
-            MACREMOTE_MCP_URL="\(mcpURL.absoluteString)" \\
-            ./script/anthropic_mcp_smoke.py --mcp-preflight-only
-            """
+            if let toolID {
+                lines.append("MACREMOTE_SMOKE_TOOL=\"\(toolID)\"")
+            }
+            lines.append("MACREMOTE_MCP_URL=\"\(mcpURL.absoluteString)\"")
+            lines.append("./script/anthropic_mcp_smoke.py --mcp-preflight-only")
         case .anthropicAPI:
-            """
-            ANTHROPIC_API_KEY="$(/Users/viticci/bin/op-get "Anthropic API Key")" \\
-            MACREMOTE_MCP_URL="\(mcpURL.absoluteString)" \\
-            ./script/anthropic_mcp_smoke.py
-            """
+            lines.append("ANTHROPIC_API_KEY=\"$(/Users/viticci/bin/op-get \"Anthropic API Key\")\"")
+            if let toolID {
+                lines.append("MACREMOTE_SMOKE_TOOL=\"\(toolID)\"")
+            }
+            lines.append("MACREMOTE_MCP_URL=\"\(mcpURL.absoluteString)\"")
+            lines.append("./script/anthropic_mcp_smoke.py")
         }
+        return lines.enumerated().map { index, line in
+            index == lines.count - 1 ? line : "\(line) \\"
+        }
+        .joined(separator: "\n")
     }
 
     static func summary(for result: CommandRunResult, mode: SmokeTestMode) -> String {

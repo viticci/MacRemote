@@ -26,6 +26,8 @@ struct ToolsView: View {
                     .disabled(appModel.serverStatus.isRunning)
                 }
 
+                ToolSurfaceControlPanel(errorMessage: $errorMessage)
+
                 if appModel.serverStatus.isRunning {
                     Text("Stop the local server before changing the exposed tool surface.")
                         .foregroundStyle(.secondary)
@@ -59,12 +61,57 @@ struct ToolsView: View {
     }
 }
 
+private struct ToolSurfaceControlPanel: View {
+    @Environment(AppModel.self) private var appModel
+    @Binding var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Exposure")
+                        .font(.headline)
+                    Text(exposureDetail)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Toggle(
+                    "Full RemCTL Profile",
+                    isOn: Binding(
+                        get: { appModel.isRemCTLProfileEnabled },
+                        set: { enabled in
+                            errorMessage = appModel.setRemCTLProfileEnabled(enabled)
+                        }
+                    )
+                )
+                .toggleStyle(.switch)
+                .disabled(appModel.serverStatus.isRunning)
+            }
+
+            if !appModel.isRemCTLProfileEnabled && appModel.toolExposureSummary.total == 0 {
+                Text("Add a custom CLI tool before starting the MCP server.")
+                    .foregroundStyle(.orange)
+            }
+        }
+        .panelStyle()
+    }
+
+    private var exposureDetail: String {
+        let summary = appModel.toolExposureSummary
+        return "\(summary.total) tools exposed: \(summary.capabilityDescription), \(summary.custom) custom, \(summary.genericAdapters) generic adapters."
+    }
+}
+
 private struct ToolPanel: View {
     @Environment(AppModel.self) private var appModel
     let tool: ToolDefinition
     let onDelete: () -> Void
 
     var body: some View {
+        let isExposed = appModel.isToolExposed(tool)
+
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -77,6 +124,12 @@ private struct ToolPanel: View {
                 Spacer()
 
                 HStack(spacing: 8) {
+                    Text(isExposed ? "Exposed" : "Disabled")
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(isExposed ? .green.opacity(0.16) : .secondary.opacity(0.12), in: Capsule())
+
                     Text(tool.category.title)
                         .font(.caption)
                         .padding(.horizontal, 8)
@@ -100,6 +153,14 @@ private struct ToolPanel: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(tool.capability == .readOnly ? .green.opacity(0.16) : .orange.opacity(0.18), in: Capsule())
+
+                    ForEach(tool.permissionRequirements, id: \.self) { requirement in
+                        Text(requirement.title)
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.red.opacity(0.14), in: Capsule())
+                    }
 
                     if tool.isUserDefined {
                         Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
@@ -133,6 +194,7 @@ private struct ToolPanel: View {
             }
         }
         .panelStyle()
+        .opacity(isExposed ? 1 : 0.62)
     }
 }
 
@@ -218,6 +280,7 @@ private struct ToolEditorSheet: View {
                     }
                     Stepper("Timeout: \(Int(draft.timeoutSeconds))s", value: $draft.timeoutSeconds, in: 1...60, step: 1)
                     Stepper("Output: \(draft.outputLimitKB) KB", value: $draft.outputLimitKB, in: 1...5120, step: 64)
+                    Toggle("Requires Full Disk Access", isOn: $draft.requiresFullDiskAccess)
                 }
             }
             .formStyle(.grouped)

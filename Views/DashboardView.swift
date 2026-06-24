@@ -8,7 +8,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HeaderView(
                     title: "Dashboard",
-                    subtitle: "Local MCP server, RemCTL profile, and tunnel readiness."
+                    subtitle: "Local MCP server, tool surface, and tunnel readiness."
                 )
 
                 HStack(alignment: .top, spacing: 14) {
@@ -58,11 +58,12 @@ struct DashboardView: View {
                         title: "Tools",
                         value: "\(appModel.toolExposureSummary.total) exposed",
                         systemImage: "wrench.and.screwdriver",
-                        detail: "\(appModel.toolExposureSummary.customDescription), \(appModel.toolExposureSummary.capabilityDescription)."
+                        detail: toolsDetail
                     ) {
                         Button("Run Safe Test", systemImage: "checkmark.circle") {
                             appModel.runRemCTLTodayTest()
                         }
+                        .disabled(!appModel.isRemCTLProfileEnabled)
                     }
                 }
 
@@ -97,6 +98,14 @@ struct DashboardView: View {
         case .stopped:
             return "Start the local server before creating a tunnel."
         }
+    }
+
+    private var toolsDetail: String {
+        let summary = appModel.toolExposureSummary
+        if appModel.isRemCTLProfileEnabled {
+            return "\(summary.customDescription), \(summary.capabilityDescription)."
+        }
+        return "RemCTL disabled, \(summary.customDescription), \(summary.capabilityDescription)."
     }
 }
 

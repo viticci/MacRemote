@@ -140,7 +140,9 @@ common operations: Filesystem, Utilities, Image Processing, Text, and Developer.
 Presets are convenience drafts, not an expanded default tool surface. Filesystem
 presets must remain read-only and must not include delete, unlink, or trash
 commands. Write-capable image presets must write to explicit output paths and be
-labeled as write tools.
+labeled as write tools. Registered tools are distinct from the active exposed
+surface: the full RemCTL profile is enabled by default, but the user can disable
+it and serve only selected custom CLI adapters.
 
 This follows the practical direction of projects such as `cli2mcp`, which wraps
 arbitrary CLI binaries as MCP tools, while avoiding shell wrappers and keeping
@@ -167,13 +169,23 @@ waits while the call is shown in the Approvals view with the tool name,
 capability, and argument preview. Denied or expired calls return a JSON-RPC
 error and never reach the process runner.
 
-Full RemCTL uses the local Reminders CoreData store for high-fidelity reads and
-normal RemCTL write paths for mutations. When launched from a GUI app bundle,
-macOS privacy controls can block that access unless the app has Full Disk
-Access. MacRemote blocks local server startup until `remctl doctor --for-agent
---json` passes from the app process context. If the check fails, Settings shows
-the exact RemCTL permission targets and can launch RemCTL's guided Full Disk
-Access helper.
+Tool definitions can declare permission requirements. Full RemCTL uses the
+local Reminders CoreData store for high-fidelity reads and normal RemCTL write
+paths for mutations, so every built-in RemCTL tool declares Full Disk Access.
+When launched from a GUI app bundle, macOS privacy controls can block that
+access unless the app has FDA. MacRemote blocks local server startup when the
+exposed surface contains FDA-required tools until `remctl doctor --for-agent
+--json` passes from the app process context. If the check fails, MacRemote shows
+an app-wide permission sheet with the exact RemCTL permission targets,
+copy/reveal actions, Settings routing, and RemCTL's guided Full Disk Access
+helper.
+
+Generic CLIs do not inherit RemCTL's FDA requirement. The user can mark a custom
+tool as FDA-required when its executable needs protected local data. PocketCTL is
+the first validation case for this separation: when `pocketctl` is installed,
+MacRemote offers PocketCTL presets, can expose a PocketCTL-only surface with the
+RemCTL profile disabled, and the test suite exercises a real
+`pocketctl whoami --json` call through MCP after OAuth.
 
 ### Tunnel Manager
 
@@ -271,7 +283,7 @@ The first useful build should include:
 
 - SwiftUI shell with Dashboard, Tools, Approvals, Tunnel, Logs, Settings;
 - local server lifecycle state;
-- RemCTL-only tool registry;
+- default RemCTL registry plus selectable custom CLI exposure;
 - generic CLI adapter for user-defined executable paths;
 - opt-in preset command categories for common CLI templates;
 - local RemCTL tool runner with tests;
@@ -279,7 +291,7 @@ The first useful build should include:
 - build/run script and Codex Run action.
 
 The first public tunnel and Anthropic/OpenAI MCP smoke test happen only after
-the local RemCTL profile passes process-runner tests and the auth gate is
+the selected exposed profile passes process-runner tests and the auth gate is
 present.
 
 ## Sources

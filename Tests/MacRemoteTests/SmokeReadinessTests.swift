@@ -39,7 +39,97 @@ final class SmokeReadinessTests: XCTestCase {
     }
 
     @MainActor
-    func testCustomToolsBlockRemCTLOnlyRemoteProof() throws {
+    func testFullDiskAccessDoesNotBlockProfilesWithoutFDARequiredTools() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = AppModel(userDefaults: defaults)
+        model.tools = [
+            ToolDefinition(
+                id: "custom.echo",
+                name: "Echo",
+                summary: "Echo test.",
+                executablePath: "/bin/echo",
+                argumentPattern: ["hello"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 5,
+                outputByteLimit: 1024,
+                origin: .userDefined
+            )
+        ]
+
+        let readiness = model.smokeReadiness
+
+        XCTAssertTrue(readiness.checks.contains { check in
+            check.id == "full-disk-access" &&
+                check.status == .ready &&
+                check.detail == "No exposed tools currently require Full Disk Access."
+        })
+    }
+
+    @MainActor
+    func testDisablingRemCTLProfileLeavesCustomReadOnlyToolsSmokeReadyWithoutFDA() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = AppModel(userDefaults: defaults)
+        model.tools.append(
+            ToolDefinition(
+                id: "custom.echo",
+                name: "Echo",
+                summary: "Echo test.",
+                executablePath: "/bin/echo",
+                argumentPattern: ["hello"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 5,
+                outputByteLimit: 1024,
+                origin: .userDefined
+            )
+        )
+        XCTAssertNil(model.setRemCTLProfileEnabled(false))
+        model.localServerURL = URL(string: "http://127.0.0.1:61234")!
+        model.serverStatus = .running(model.localServerURL!)
+        model.tunnelStatus = .running(URL(string: "https://quiet-river-123.trycloudflare.com")!)
+        model.anthropicCredentialState = .ready
+
+        let readiness = model.smokeReadiness
+
+        XCTAssertEqual(model.toolExposureSummary.total, 1)
+        XCTAssertEqual(model.toolExposureSummary.custom, 1)
+        XCTAssertTrue(readiness.canRunPreflight)
+        XCTAssertTrue(readiness.canRunAnthropicAPI)
+        XCTAssertTrue(readiness.checks.contains { check in
+            check.id == "full-disk-access" &&
+                check.status == .ready &&
+                check.detail == "No exposed tools currently require Full Disk Access."
+        })
+        XCTAssertTrue(readiness.checks.contains { check in
+            check.id == "tool-surface" &&
+                check.status == .ready &&
+                check.detail.contains("Smoke tool: custom.echo")
+        })
+    }
+
+    @MainActor
+    func testDisabledRemCTLProfileWithNoCustomToolsBlocksServerReadiness() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = AppModel(userDefaults: defaults)
+        XCTAssertNil(model.setRemCTLProfileEnabled(false))
+
+        let readiness = model.smokeReadiness
+
+        XCTAssertEqual(model.toolExposureSummary.total, 0)
+        XCTAssertFalse(readiness.canRunPreflight)
+        XCTAssertFalse(readiness.canRunAnthropicAPI)
+        XCTAssertTrue(readiness.checks.contains { $0.id == "tool-surface" && $0.status == .blocked })
+    }
+
+    @MainActor
+    func testCustomToolsNoLongerBlockRemoteProofWhenReadOnlyToolIsAvailable() throws {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
@@ -66,9 +156,9 @@ final class SmokeReadinessTests: XCTestCase {
 
         let readiness = model.smokeReadiness
 
-        XCTAssertFalse(readiness.canRunPreflight)
-        XCTAssertFalse(readiness.canRunAnthropicAPI)
-        XCTAssertTrue(readiness.checks.contains { $0.id == "tool-surface" && $0.status == .blocked })
+        XCTAssertTrue(readiness.canRunPreflight)
+        XCTAssertTrue(readiness.canRunAnthropicAPI)
+        XCTAssertTrue(readiness.checks.contains { $0.id == "tool-surface" && $0.status == .ready })
     }
 }
 

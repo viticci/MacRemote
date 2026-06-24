@@ -28,6 +28,14 @@ final class SmokeTestServiceTests: XCTestCase {
         XCTAssertFalse(command.contains("--mcp-preflight-only"))
     }
 
+    func testCopyCommandCanTargetCustomSmokeTool() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
+        let command = SmokeTestService.copyCommand(for: .preflight, mcpURL: url, toolID: "custom.pocketctl")
+
+        XCTAssertTrue(command.contains("MACREMOTE_SMOKE_TOOL=\"custom.pocketctl\""))
+        XCTAssertTrue(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
+    }
+
     func testSummaryPrefersSuccessMarker() {
         let result = CommandRunResult(
             executablePath: SmokeTestService.scriptPath,

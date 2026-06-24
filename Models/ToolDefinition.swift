@@ -21,6 +21,7 @@ enum ToolOrigin: String, Codable, Sendable {
 
 enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
     case reminders
+    case podcasts
     case filesystem
     case utilities
     case imageProcessing
@@ -32,11 +33,22 @@ enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .reminders: "Reminders"
+        case .podcasts: "Podcasts"
         case .filesystem: "Filesystem"
         case .utilities: "Utilities"
         case .imageProcessing: "Image Processing"
         case .text: "Text"
         case .developer: "Developer"
+        }
+    }
+}
+
+enum ToolPermissionRequirement: String, Codable, Hashable, Sendable {
+    case fullDiskAccess
+
+    var title: String {
+        switch self {
+        case .fullDiskAccess: "Full Disk Access"
         }
     }
 }
@@ -146,6 +158,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let outputByteLimit: Int
     let origin: ToolOrigin
     let category: ToolCategory
+    let permissionRequirements: [ToolPermissionRequirement]
 
     var preview: String {
         ([executablePath] + argumentPattern).joined(separator: " ")
@@ -171,6 +184,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         case outputByteLimit
         case origin
         case category
+        case permissionRequirements
     }
 
     init(
@@ -184,7 +198,8 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         timeoutSeconds: TimeInterval,
         outputByteLimit: Int,
         origin: ToolOrigin = .builtIn,
-        category: ToolCategory = .utilities
+        category: ToolCategory = .utilities,
+        permissionRequirements: [ToolPermissionRequirement] = []
     ) {
         self.id = id
         self.name = name
@@ -197,6 +212,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         self.outputByteLimit = outputByteLimit
         self.origin = origin
         self.category = category
+        self.permissionRequirements = permissionRequirements
     }
 
     init(from decoder: Decoder) throws {
@@ -212,6 +228,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         outputByteLimit = try container.decode(Int.self, forKey: .outputByteLimit)
         origin = try container.decodeIfPresent(ToolOrigin.self, forKey: .origin) ?? .userDefined
         category = try container.decodeIfPresent(ToolCategory.self, forKey: .category) ?? .utilities
+        permissionRequirements = try container.decodeIfPresent([ToolPermissionRequirement].self, forKey: .permissionRequirements) ?? []
     }
 }
 

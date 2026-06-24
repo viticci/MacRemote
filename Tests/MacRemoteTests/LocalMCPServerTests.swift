@@ -526,6 +526,68 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(replayed.statusCode, 401)
     }
 
+    func testMCPRunsInstalledPocketCTLReadOnlyCommand() async throws {
+        guard let pocketCTLPath = DefaultToolPresetCatalog.pocketCTLExecutablePath else {
+            throw XCTSkip("PocketCTL is not installed on this Mac.")
+        }
+
+        let tool = ToolDefinition(
+            id: "pocketctl.whoami",
+            name: "PocketCTL Whoami",
+            summary: "Return cached Pocket Casts account metadata.",
+            executablePath: pocketCTLPath,
+            argumentPattern: ["whoami", "--json"],
+            parameters: [],
+            capability: .readOnly,
+            timeoutSeconds: 10,
+            outputByteLimit: 512 * 1024,
+            category: .podcasts
+        )
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: ConfiguredToolExecutor(
+                tools: [tool],
+                environment: [
+                    "HOME": "/Users/viticci",
+                    "PATH": "/Users/viticci/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+                ]
+            )
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "pocketctl",
+                "method": "tools/call",
+                "params": [
+                    "name": "pocketctl.whoami",
+                    "arguments": [:]
+                ]
+            ]
+        )
+        XCTAssertEqual(toolCall.statusCode, 200)
+
+        let callResult = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try XCTUnwrap(callResult["structuredContent"] as? [String: Any])
+        XCTAssertEqual(structuredContent["succeeded"] as? Bool, true)
+        XCTAssertEqual(structuredContent["exitCode"] as? Int, 0)
+        let stdout = try XCTUnwrap(structuredContent["stdout"] as? String)
+        XCTAssertTrue(stdout.contains("\"email\""))
+        XCTAssertTrue(stdout.contains("\"user_uuid\""))
+    }
+
     func testDestructiveMCPToolCallRequiresHostApproval() async throws {
         let coordinator = OAuthCoordinator()
         let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 5)
