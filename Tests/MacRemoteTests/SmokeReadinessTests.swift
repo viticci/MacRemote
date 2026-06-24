@@ -8,6 +8,7 @@ final class SmokeReadinessTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
         let model = AppModel(userDefaults: defaults)
+        model.tools = RemCTLToolCatalog.builtInTools
         let readiness = model.smokeReadiness
 
         XCTAssertFalse(readiness.canRunPreflight)
@@ -25,6 +26,7 @@ final class SmokeReadinessTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
         let model = AppModel(userDefaults: defaults)
+        model.tools = RemCTLToolCatalog.builtInTools
         model.fullDiskAccessReport = FullDiskAccessReport(state: .ready, detail: "ready")
         model.localServerURL = URL(string: "http://127.0.0.1:61234")!
         model.serverStatus = .running(model.localServerURL!)
@@ -74,7 +76,7 @@ final class SmokeReadinessTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
         let model = AppModel(userDefaults: defaults)
-        model.tools.append(
+        model.tools = RemCTLToolCatalog.builtInTools + [
             ToolDefinition(
                 id: "custom.echo",
                 name: "Echo",
@@ -87,7 +89,7 @@ final class SmokeReadinessTests: XCTestCase {
                 outputByteLimit: 1024,
                 origin: .userDefined
             )
-        )
+        ]
         XCTAssertNil(model.setRemCTLProfileEnabled(false))
         model.localServerURL = URL(string: "http://127.0.0.1:61234")!
         model.serverStatus = .running(model.localServerURL!)
@@ -118,6 +120,7 @@ final class SmokeReadinessTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
         let model = AppModel(userDefaults: defaults)
+        model.tools = RemCTLToolCatalog.builtInTools
         XCTAssertNil(model.setRemCTLProfileEnabled(false))
 
         let readiness = model.smokeReadiness
@@ -139,7 +142,7 @@ final class SmokeReadinessTests: XCTestCase {
         model.serverStatus = .running(model.localServerURL!)
         model.tunnelStatus = .running(URL(string: "https://quiet-river-123.trycloudflare.com")!)
         model.anthropicCredentialState = .ready
-        model.tools.append(
+        model.tools = RemCTLToolCatalog.builtInTools + [
             ToolDefinition(
                 id: "custom.echo",
                 name: "Echo",
@@ -152,7 +155,7 @@ final class SmokeReadinessTests: XCTestCase {
                 outputByteLimit: 1024,
                 origin: .userDefined
             )
-        )
+        ]
 
         let readiness = model.smokeReadiness
 

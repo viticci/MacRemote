@@ -283,11 +283,34 @@ final class LocalMCPServer: @unchecked Sendable {
 
         if base == localBaseURL(activePort: activePort) {
             payload["instance_id"] = instanceID
-            payload["tool_profile"] = "remctl-full-cli"
+            payload["tool_profile"] = toolProfileName
             payload["tool_count"] = tools.count
         }
 
         return payload
+    }
+
+    private var toolProfileName: String {
+        guard !tools.isEmpty else { return "empty" }
+
+        let builtInCount = tools.filter { $0.origin == .builtIn }.count
+        let customCount = tools.filter { $0.origin == .userDefined }.count
+
+        if builtInCount == tools.count,
+           tools.contains(where: { $0.id == "remctl.run" }) {
+            return "remctl-full-cli"
+        }
+
+        if customCount == tools.count,
+           tools.allSatisfy({ URL(fileURLWithPath: $0.executablePath).lastPathComponent == "pocketctl" }) {
+            return "pocketctl-cli"
+        }
+
+        if customCount == tools.count {
+            return "custom-cli"
+        }
+
+        return "mixed"
     }
 
     private func publicRateLimitGroup(for request: HTTPRequest, isPublicRequest: Bool) -> PublicRateLimitGroup? {

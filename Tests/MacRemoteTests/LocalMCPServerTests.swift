@@ -17,7 +17,8 @@ final class LocalMCPServerTests: XCTestCase {
                     parameters: [],
                     capability: .readOnly,
                     timeoutSeconds: 2,
-                    outputByteLimit: 1024
+                    outputByteLimit: 1024,
+                    origin: .userDefined
                 )
             ],
             authCoordinator: coordinator,
@@ -38,6 +39,7 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(localHealth.json["public_metadata"] as? Bool, false)
         XCTAssertEqual(localHealth.json["instance_id"] as? String, "test-instance")
         XCTAssertEqual(localHealth.json["tool_count"] as? Int, 1)
+        XCTAssertEqual(localHealth.json["tool_profile"] as? String, "custom-cli")
 
         let publicHealth = try await getJSON(url: base.appendingPathComponent("health"), headers: forwardedHeaders)
         XCTAssertEqual(publicHealth.json["ok"] as? Bool, true)
@@ -541,6 +543,7 @@ final class LocalMCPServerTests: XCTestCase {
             capability: .readOnly,
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
+            origin: .userDefined,
             category: .podcasts
         )
         let coordinator = OAuthCoordinator()
@@ -561,6 +564,10 @@ final class LocalMCPServerTests: XCTestCase {
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
         try await Task.sleep(nanoseconds: 100_000_000)
+        let health = try await getJSON(url: base.appendingPathComponent("health"))
+        XCTAssertEqual(health.json["tool_profile"] as? String, "pocketctl-cli")
+        XCTAssertEqual(health.json["tool_count"] as? Int, 1)
+
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let toolCall = try await postJSON(
