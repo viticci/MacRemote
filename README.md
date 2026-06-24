@@ -1,218 +1,299 @@
 # MacRemote
 
-MacRemote is a native macOS app for exposing a deliberately small, user-approved
-set of local tools to remote MCP clients.
+MacRemote is a native macOS app that exposes user-approved local CLI tools to
+remote MCP clients. It is not a remote shell. Every exposed tool is an exact
+executable path plus argv behavior, every remote client must complete OAuth with
+host approval, and write-capable or broad CLI calls require host approval before
+execution unless the user explicitly grants that client a persistent policy.
 
-The design goal is not "remote shell for your Mac." The server can only run
-the active tool surface selected in the app. The default surface is the full
-RemCTL CLI plus narrow read helper tools, and the user can disable that profile
-to expose only custom CLI adapters such as PocketCTL.
+RemCTL, PocketCTL, Codex, Peekaboo, and other CLIs are all treated the same way:
+they are optional tools the user can add from detected presets or define by hand.
 
-## Product Shape
+## What You Get
 
-- Native SwiftUI macOS app.
-- Local MCP server process bound to `127.0.0.1`.
-- Tool registry controlled from the app UI.
-- Selective exposure: registered tools can exist without being part of the
-  currently served MCP surface.
-- No shell execution for tool calls. Commands run as exact executable paths plus
-  validated argv arrays.
-- Host-side approval before a remote client receives OAuth tokens.
-- Host approval shows the token-bound issuer and MCP resource URL before a
-  client can receive tokens.
-- OAuth grant revocation for cutting off approved clients without changing the
-  public MCP path.
-- Per-call host approval before write or destructive tools execute.
-- App-wide Full Disk Access prompt flow for tools that declare protected-data
-  requirements. The full RemCTL profile requires FDA; generic CLIs such as
-  PocketCTL do not inherit that requirement unless marked by the user.
-- Cloudflare Tunnel for public reachability. The tunnel forwards only to the
-  local MCP server port, not to the Mac as a whole.
-- Instance ID rotation that stops public exposure, clears in-memory OAuth grants,
-  and changes the public MCP URL path.
-- Tunnel view summarizes the exposed tool surface before public access: total
-  tools, custom tools, generic adapters, and host-gated write/destructive tools.
-- Starting the public tunnel requires explicit confirmation of the exposed tool
-  surface.
+- Native SwiftUI app for managing the exposed MCP tool surface.
+- Local MCP server bound to `127.0.0.1`.
+- Cloudflare Tunnel for a temporary public HTTPS MCP URL.
+- OAuth + PKCE with host-side approval before token issuance.
+- Per-client tool policies for pre-approving selected tools.
+- Direct process execution with no shell interpolation.
+- Generic CLI adapters for whole-command delegation.
+- Command templates for narrow, schema-driven MCP tools.
+- System presets and bulk preset sets for detected CLIs.
+- Full Disk Access and macOS privacy checks before protected tools are served.
+- `script/macremotectl` for agent-friendly install and configuration.
 
-## CLI Adapter Model
+## Requirements
 
-Custom tools use a generic CLI adapter instead of one hand-written MCP wrapper
-per command. The user picks an executable, and MacRemote exposes it as one MCP
-tool with:
+- macOS 14 or later.
+- Swift toolchain available at `/usr/bin/swift`.
+- `cloudflared` on `PATH` or in a standard Homebrew location.
+- Optional CLIs such as RemCTL, PocketCTL, Codex, Peekaboo, Spogo, Summarize,
+  Gog, GitHub CLI, and other commands on `PATH` or in common user/Homebrew bin
+  directories.
 
-- `args`: optional `array<string>` expanded directly into argv;
-- `stdin`: optional string written to standard input;
-- timeout and output byte caps;
-- explicit read-only/write/destructive risk label;
-- direct `Process` execution with no shell.
+Check the local machine:
 
-For tighter surfaces, users can replace the generic `{args}` template with fixed
-argv templates such as `["--format", "json", "search", "{query}"]`; placeholders
-become typed MCP parameters. This gives both modes: universal CLI wrapping when
-the whole executable is the intended capability, and narrow command templates
-when only one subcommand should be exposed.
-
-The Add Tool flow includes opt-in default command categories that prefill safe
-templates:
-
-- Filesystem: list, stat, head, and find-by-name. No delete/unlink presets.
-- Utilities: date, disk usage, uptime, and network interfaces.
-- Image Processing: image info plus write-to-output conversion and resize
-  templates via `sips`.
-- Text: word count, line count, and single-file grep.
-- Developer: read-only git status and recent log templates.
-- Podcasts: PocketCTL presets are shown when `pocketctl` is installed in a
-  standard user or Homebrew location. These include read-only `now`/`triage`
-  style templates and a host-gated full CLI adapter.
-
-These presets are not exposed automatically. They only become MCP tools after
-the user selects one, reviews the executable/argv template, and saves it.
-The full RemCTL profile can be toggled off so a saved custom CLI can be tested
-or served without inheriting RemCTL's Full Disk Access requirement.
-
-## MCP Baseline
-
-MacRemote targets the latest stable MCP specification, `2025-11-25`, while
-keeping compatibility with `2025-06-18` and `2025-03-26` clients.
-
-- Streamable HTTP endpoint at `/mcp/<instance-id>`. `/mcp` is retained only as
-  a loopback compatibility route; public forwarded requests must use the
-  instance-specific path.
-- OAuth 2.1-style authorization code flow with PKCE and host approval.
-- RFC 9728 protected-resource metadata at the root and MCP endpoint well-known
-  paths, plus authorization-server discovery.
-- OAuth Resource Indicators bind authorization codes, access tokens, and
-  refresh tokens to the exact MCP resource URL.
-- `MCP-Protocol-Version` validation on MCP requests.
-- `Origin` validation to reduce DNS rebinding and browser CSRF risk.
-- Tool `inputSchema`, `outputSchema`, structured results, and risk annotations.
-
-The May 2026 MCP release-candidate blog points toward a stateless protocol core
-and harder OAuth/OIDC alignment for the `2026-07-28` release. This app keeps the
-current server intentionally stateless at the application layer, but does not
-claim support for that future protocol version until it is final and client
-support catches up.
-
-The June 2026 Enterprise-Managed Authorization extension is not enabled in this
-single-user Mac build. The OAuth coordinator is kept separate from tool
-execution so an IdP-backed authorization extension can be added later without
-expanding the local command surface.
-
-## First Target
-
-The first end-to-end target is:
-
-1. Start MacRemote.
-2. Choose the exposed surface: default full RemCTL, or disable RemCTL and save
-   a custom CLI preset such as PocketCTL.
-3. Grant Full Disk Access with the guided RemCTL helper only when the exposed
-   surface contains FDA-required tools.
-4. Start the local MCP server after required permission checks pass from the app
-   process.
-5. Expose it through a Cloudflare Tunnel.
-6. Connect a remote model client to the MCP URL.
-7. Approve the auth request on the Mac.
-8. Run the selected read-only smoke tool and verify the result.
-
-## Repository Layout
-
-```text
-MacRemote/
-├── App/                  SwiftUI app entrypoint
-├── Models/               Domain models
-├── Services/             Server, tunnel, process, auth services
-├── Stores/               App state and persistence
-├── Support/              Utilities and small glue types
-├── Views/                SwiftUI views
-├── docs/                 Architecture and security notes
-└── script/               Build, run, and smoke-test entrypoints
+```bash
+script/macremotectl doctor --json
 ```
 
-## Security Bias
+`doctor` requires Swift and Cloudflare Tunnel. All user CLIs are optional; missing
+CLIs simply mean their presets will not appear.
 
-MacRemote should fail closed:
+## Quick Start
 
-- no tunnel unless the local server is healthy;
-- no tool execution without a valid access token;
-- no token issuance without host approval;
-- no write or destructive tool execution without per-call host approval;
-- no arbitrary shell strings;
-- no `sh`, `bash`, `zsh`, `fish`, `csh`, `tcsh`, or `env` executable wrappers;
-- no inherited broad environment;
-- no unbounded runtime or output;
-- no default filesystem delete commands;
-- no tool that declares Full Disk Access until the check passes from
-  MacRemote's own process context.
+Build and open the app:
 
-## Current Local Gates
+```bash
+script/macremotectl install --launch
+```
 
-- `cloudflared` is supported when installed in `/opt/homebrew/bin` or
-  `/usr/local/bin`. MacRemote starts accountless quick tunnels and extracts the
-  temporary `trycloudflare.com` MCP URL from process output.
-- The default RemCTL surface includes `remctl.run`, a full CLI adapter that
-  passes validated argv arrays directly to `/Users/viticci/bin/remctl`, plus
-  narrow read helper tools for common calls.
-- Tools > Exposure can disable the full RemCTL profile. Custom CLI tools remain
-  exposed, so PocketCTL-only or other non-FDA profiles can start the MCP server
-  without running RemCTL's FDA check.
-- `remctl.run` is marked destructive because the RemCTL CLI can create, edit,
-  complete, or delete reminders and lists. It is still direct `Process`
-  execution, never shell execution.
-- Write and destructive tool calls are paused until they are approved in the
-  Approvals view on the host Mac. Denied or expired calls do not reach the
-  process runner.
-- Settings includes a rotate action for the instance-specific MCP path. Rotation
-  stops the local server and tunnel, clears pending approvals and OAuth grants,
-  and forces remote clients to use a new URL path.
-- Settings can revoke registered OAuth clients and bearer/refresh tokens while
-  keeping the current MCP URL. Clients must reauthorize on the host Mac.
-- Tunnel shows the currently exposed tool surface and can copy direct MCP
-  preflight/API smoke commands for the selected smoke tool once a public URL
-  exists.
-- Starting Cloudflare Tunnel requires a confirmation that restates the tool
-  surface and the remaining OAuth/per-call approval gates.
-- Before starting the local MCP server, MacRemote runs
-  `remctl doctor --for-agent --json` from its own process context whenever the
-  exposed tool surface includes FDA-required tools. If macOS privacy blocks
-  Reminders CoreData access, startup is blocked and MacRemote shows an app-wide
-  permission sheet with the exact targets, copy/reveal actions, Settings
-  routing, and RemCTL's guided Full Disk Access helper.
-- PocketCTL is used as the first non-RemCTL CLI validation path. When installed,
-  MacRemote can add PocketCTL presets and the test suite runs a real
-  `pocketctl whoami --json` call through MCP after OAuth.
-- After required permission checks pass, run the remote Anthropic MCP smoke test with
-  [docs/END_TO_END_SMOKE_TEST.md](docs/END_TO_END_SMOKE_TEST.md).
+Then in the app:
 
-## Research Notes
+1. Open **Tools**.
+2. Add one tool, several detected CLI adapters, or a full preset set.
+3. Use the per-tool toggles to decide what is exposed.
+4. Open **Dashboard** and start the local server.
+5. Open **Tunnel** and start the Cloudflare tunnel.
+6. Copy the public MCP URL.
+7. Approve the remote client in **Approvals**.
+8. Approve individual write/destructive calls, or open **Clients** and grant that
+   client persistent access to selected tools.
 
-There are adjacent products and open-source projects, including
-`remote-control-mcp` listings that expose shell commands, file access, and
-AppleScript over MCP with OAuth/PKCE. MacRemote is deliberately narrower:
-native app control, a user-defined allow-list, direct executable plus argv
-execution, host-side approval, and no arbitrary shell surface in the first
-profile.
+The public URL has this shape:
 
-The generic CLI direction is based on the same conclusion behind `cli2mcp` and
-Peter Steinberger's CLI-first Peekaboo work: CLIs are the stable interface, and
-the MCP layer should adapt selected executables rather than requiring one custom
-server per CLI. MacRemote keeps that idea but puts it behind a native Mac UI,
-OAuth, host approval, loopback binding, tunnel control, and local audit logs.
+```text
+https://<trycloudflare-host>/mcp/<instance-id>
+```
 
-Useful source links:
+Share that URL only with the remote MCP client you are testing.
 
-- Claude custom connectors using remote MCP: https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp
-- Claude Messages API MCP connector: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
-- MCP 2025-11-25 specification: https://modelcontextprotocol.io/specification/2025-11-25
-- MCP Streamable HTTP transport: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
-- MCP authorization: https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
-- MCP tools and structured content: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
-- MCP Enterprise-Managed Authorization: https://blog.modelcontextprotocol.io/posts/enterprise-managed-auth/
-- MCP 2026-07-28 release candidate: https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/
-- cli2mcp: https://github.com/RonieNeubauer/cli2mcp
-- Peekaboo CLI-first write-up: https://steipete.me/posts/2025/peekaboo-2-freeing-the-cli-from-its-mcp-shackles
-- steipete Claude Code MCP wrapper: https://github.com/steipete/claude-code-mcp
-- MCPorter: https://github.com/openclaw/mcporter
-- Cloudflare Tunnel: https://developers.cloudflare.com/tunnel/
-- Cloudflare MCP server portals: https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/mcp-portals/
-- Tailscale Funnel: https://tailscale.com/docs/features/tailscale-funnel
+## Tool Model
+
+MacRemote supports two tool modes:
+
+- **CLI Adapter**: one MCP tool wraps one executable. The client supplies
+  `args: string[]` and optional `stdin`. This delegates the executable's broad
+  capability surface, so it should normally be `destructive`.
+- **Command Template**: one MCP tool wraps a fixed argv template. Placeholders
+  such as `{query}` become typed MCP parameters. This is the safer mode for
+  exposing one workflow from a larger CLI.
+
+Tools are never shell snippets. MacRemote blocks shell wrappers such as `sh`,
+`bash`, `zsh`, `fish`, and `env`, then runs commands through direct `Process`
+execution with a bounded environment, timeout, and output cap. Remote clients
+must pass exact argv items; there is no `~`, `$HOME`, glob, pipe, redirection, or
+command substitution expansion.
+
+Current MCP tool descriptions include `title`, `description`, `inputSchema`,
+`outputSchema`, and tool `annotations` such as `readOnlyHint`,
+`destructiveHint`, `idempotentHint`, and `openWorldHint`.
+
+## Presets
+
+The app detects installed commands and offers:
+
+- **Tool Sets**: bulk-add groups such as All System Presets, Detected CLIs,
+  Reminders, Podcasts, Developer, Text and Data, Media, Utilities, and
+  Steipete / OpenClaw.
+- **Detected CLIs**: direct adapters for installed commands.
+- **Command Presets**: narrower read-only or write templates for common tasks.
+
+From the command line:
+
+```bash
+script/macremotectl list-presets --json
+script/macremotectl list-preset-sets --json
+script/macremotectl add-preset preset.developer.codex --replace
+script/macremotectl add-preset-set set.detected_clis --replace
+```
+
+To start fresh:
+
+```bash
+script/macremotectl clear-tools --yes
+```
+
+## Permissions
+
+Each tool can declare macOS permission requirements:
+
+- Full Disk Access
+- Reminders, Calendars, Contacts, Photos, Camera, Microphone, Speech Recognition,
+  Location
+- Screen Recording, Accessibility, Automation, Local Network
+
+MacRemote checks requirements from the same app-launched process context used for
+remote tool calls. If protected access is missing, the app blocks server/tunnel
+readiness and shows the exact targets to grant in System Settings. After changing
+System Settings, use **Relaunch MacRemote** in the app or quit and reopen it
+manually, then run **Check Access** again.
+
+Full Disk Access is layered. Some CLIs need access on the host app, some need it
+on the executable, and script-based CLIs may need it on their interpreter. Grant
+every target MacRemote lists.
+
+## Connected Clients
+
+When a client connects for the first time, MacRemote records it under
+**Clients**. From there, the user can pre-approve tools for that client so future
+calls do not stop on per-call approval.
+
+Tools can be added while the local server is running. MacRemote updates the
+running tool surface immediately; connected clients need to refresh `tools/list`
+or reconnect if their UI caches the list.
+
+## Remote MCP Smoke Test
+
+After the tunnel is running, copy the public MCP URL from **Tunnel**.
+
+Direct MCP preflight:
+
+```bash
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+./script/anthropic_mcp_smoke.py --mcp-preflight-only
+```
+
+Full Anthropic API smoke:
+
+```bash
+ANTHROPIC_API_KEY="<key>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+./script/anthropic_mcp_smoke.py
+```
+
+Expected success markers:
+
+```text
+mcp_preflight=passed
+mcp_tool_use_count=1
+mcp_tool_result_count=1
+smoke_test=passed
+```
+
+For a broad CLI adapter, use a harmless command and approve the call in
+**Approvals**:
+
+```bash
+ANTHROPIC_API_KEY="<key>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+./script/anthropic_mcp_smoke.py \
+  --tool preset-or-custom-tool-id \
+  --prompt 'Call the selected MacRemote MCP tool once with harmless read-only arguments.'
+```
+
+## Agent CLI
+
+`script/macremotectl` configures MacRemote without clicking through the UI. It
+does not approve OAuth clients, approve tool calls, or start public tunnels.
+
+Install the CLI into `~/.local/bin`:
+
+```bash
+script/macremotectl install-cli
+```
+
+Build and launch:
+
+```bash
+macremotectl install --launch
+```
+
+Add a generic CLI adapter:
+
+```bash
+macremotectl add-tool \
+  --name "GitHub CLI" \
+  --summary "Run GitHub CLI by passing argv directly." \
+  --executable "$(command -v gh)" \
+  --mode cli \
+  --category developer \
+  --capability destructive \
+  --replace
+```
+
+Add a fixed command template:
+
+```bash
+macremotectl add-tool \
+  --name "Git Status" \
+  --summary "Return short git status for this repository." \
+  --executable /usr/bin/git \
+  --mode template \
+  --arg=-C \
+  --arg="$PWD" \
+  --arg=status \
+  --arg=--short \
+  --category developer \
+  --capability readOnly \
+  --replace
+```
+
+Use `--arg=value` for argv entries that start with a dash. Use `--require
+fullDiskAccess`, `--require screenRecording`, and similar flags when a custom
+tool needs macOS privacy access.
+
+For tests or dry runs, write to a temporary registry:
+
+```bash
+MACREMOTE_TOOLS_FILE="$(mktemp -t macremote-tools.XXXXXX.json)" \
+script/macremotectl add-preset preset.utilities.current_date
+```
+
+## Development
+
+Build:
+
+```bash
+swift build
+```
+
+Test:
+
+```bash
+swift test
+```
+
+Build app bundle without launching:
+
+```bash
+script/build_and_run.sh --build-only
+```
+
+The development script signs the app with `MACREMOTE_CODESIGN_IDENTITY` when
+set, otherwise it uses the first local Apple code-signing identity it can find.
+If no usable identity is available, it falls back to local ad-hoc signing with a
+stable designated requirement for `com.macstories.MacRemote`. That keeps macOS
+privacy grants from being tied to a rebuild-specific code hash during local
+development. Release builds should be Developer ID signed and notarized before
+sharing broadly.
+
+Build and verify launch:
+
+```bash
+script/build_and_run.sh --verify
+```
+
+Repository layout:
+
+```text
+App/       SwiftUI app entrypoint
+Models/    Domain models
+Services/  Server, tunnel, auth, process, and tool services
+Stores/    App state and persistence
+Support/   Formatting and small helpers
+Views/     SwiftUI views
+docs/      Architecture, threat model, and smoke-test notes
+script/    Build, CLI, and smoke-test entrypoints
+```
+
+More docs:
+
+- [INSTALL.md](INSTALL.md)
+- [AGENTS.md](AGENTS.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [docs/ARCHITECTURE_SECURITY.md](docs/ARCHITECTURE_SECURITY.md)
+- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+- [docs/END_TO_END_SMOKE_TEST.md](docs/END_TO_END_SMOKE_TEST.md)

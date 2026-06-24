@@ -20,7 +20,7 @@ final class TunnelServiceTests: XCTestCase {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
-        let model = AppModel(userDefaults: defaults)
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         model.instanceID = "abc123"
         model.tunnelStatus = .running(URL(string: "https://quiet-river-123.trycloudflare.com")!)
 
@@ -37,7 +37,7 @@ final class TunnelServiceTests: XCTestCase {
 
         let originalInstanceID = "0123456789abcdef0123456789abcdef"
         defaults.set(originalInstanceID, forKey: "MacRemote.instanceID")
-        let model = AppModel(userDefaults: defaults)
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         model.serverStatus = .running(URL(string: "http://127.0.0.1:60123")!)
         model.localServerURL = URL(string: "http://127.0.0.1:60123")!
         model.tunnelStatus = .running(URL(string: "https://quiet-river-123.trycloudflare.com")!)
@@ -93,6 +93,14 @@ private func makeIsolatedDefaults(
     }
     defaults.set(suiteName, forKey: "MacRemoteTests.suiteName")
     return defaults
+}
+
+@MainActor
+private func makeIsolatedAppModel(userDefaults: UserDefaults) throws -> AppModel {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let store = ToolRegistryStore(fileURL: temporaryDirectory.appendingPathComponent("tools.json"))
+    return AppModel(userDefaults: userDefaults, toolStore: store)
 }
 
 private func defaultsSuiteName(_ defaults: UserDefaults) -> String {

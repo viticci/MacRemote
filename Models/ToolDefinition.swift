@@ -43,13 +43,68 @@ enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum ToolPermissionRequirement: String, Codable, Hashable, Sendable {
+enum ToolPermissionRequirement: String, Codable, Hashable, CaseIterable, Sendable {
     case fullDiskAccess
+    case reminders
+    case calendars
+    case contacts
+    case photos
+    case camera
+    case microphone
+    case speechRecognition
+    case location
+    case screenRecording
+    case accessibility
+    case automation
+    case localNetwork
 
     var title: String {
         switch self {
         case .fullDiskAccess: "Full Disk Access"
+        case .reminders: "Reminders"
+        case .calendars: "Calendars"
+        case .contacts: "Contacts"
+        case .photos: "Photos"
+        case .camera: "Camera"
+        case .microphone: "Microphone"
+        case .speechRecognition: "Speech Recognition"
+        case .location: "Location"
+        case .screenRecording: "Screen Recording"
+        case .accessibility: "Accessibility"
+        case .automation: "Automation"
+        case .localNetwork: "Local Network"
         }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .fullDiskAccess: "lock.shield"
+        case .reminders: "checklist"
+        case .calendars: "calendar"
+        case .contacts: "person.crop.circle"
+        case .photos: "photo"
+        case .camera: "camera"
+        case .microphone: "mic"
+        case .speechRecognition: "waveform"
+        case .location: "location"
+        case .screenRecording: "rectangle.dashed"
+        case .accessibility: "figure"
+        case .automation: "gearshape.2"
+        case .localNetwork: "network"
+        }
+    }
+
+    var isFullDiskAccess: Bool {
+        self == .fullDiskAccess
+    }
+
+    static var macOSPrivacyServices: [ToolPermissionRequirement] {
+        allCases.filter { !$0.isFullDiskAccess }
+    }
+
+    static func normalized(_ requirements: [ToolPermissionRequirement]) -> [ToolPermissionRequirement] {
+        let uniqueRequirements = Set(requirements)
+        return allCases.filter { uniqueRequirements.contains($0) }
     }
 }
 

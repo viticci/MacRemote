@@ -64,6 +64,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         let issuer: String
         let resource: String
         let scopes: Set<String>
+        let issuedAt: Date
         let expiresAt: Date
     }
 
@@ -72,6 +73,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         let issuer: String
         let resource: String
         let scopes: Set<String>
+        let issuedAt: Date
         let expiresAt: Date
     }
 
@@ -254,15 +256,36 @@ final class OAuthCoordinator: @unchecked Sendable {
     }
 
     func validateAccessToken(_ token: String, issuer: String, resource: String, requiredScope: String = "mcp:tools") -> Bool {
+        clientContext(forAccessToken: token, issuer: issuer, resource: resource, requiredScope: requiredScope) != nil
+    }
+
+    func clientContext(
+        forAccessToken token: String,
+        issuer: String,
+        resource: String,
+        requiredScope: String = "mcp:tools"
+    ) -> AuthenticatedClientContext? {
         let tokenHash = Self.sha256Hex(token)
         let now = Date()
         return lock.withLock {
             pruneExpiredTokens(now: now)
-            guard let record = accessTokensByHash[tokenHash] else { return false }
-            return record.expiresAt > now &&
-                record.issuer == issuer &&
-                record.resource == resource &&
-                record.scopes.contains(requiredScope)
+            guard let record = accessTokensByHash[tokenHash] else { return nil }
+            guard record.expiresAt > now,
+                  record.issuer == issuer,
+                  record.resource == resource,
+                  record.scopes.contains(requiredScope) else {
+                return nil
+            }
+
+            let client = clients[record.clientID]
+            return AuthenticatedClientContext(
+                clientID: record.clientID,
+                clientName: client?.name ?? "Remote MCP Client",
+                issuer: record.issuer,
+                resource: record.resource,
+                scopes: record.scopes.sorted(),
+                accessTokenExpiresAt: record.expiresAt
+            )
         }
     }
 
@@ -270,6 +293,13 @@ final class OAuthCoordinator: @unchecked Sendable {
         lock.withLock {
             expirePendingAuthorizations(now: Date())
             return approvalSnapshotLocked()
+        }
+    }
+
+    func connectedClientSnapshot() -> [ConnectedClient] {
+        lock.withLock {
+            pruneExpiredTokens(now: Date())
+            return connectedClientSnapshotLocked()
         }
     }
 
@@ -394,6 +424,7 @@ final class OAuthCoordinator: @unchecked Sendable {
                 issuer: issuer,
                 resource: resource,
                 scopes: scopes,
+                issuedAt: now,
                 expiresAt: now.addingTimeInterval(TimeInterval(accessExpiresIn))
             )
             refreshTokensByHash[refreshHash] = RefreshTokenRecord(
@@ -401,6 +432,7 @@ final class OAuthCoordinator: @unchecked Sendable {
                 issuer: issuer,
                 resource: resource,
                 scopes: scopes,
+                issuedAt: now,
                 expiresAt: now.addingTimeInterval(TimeInterval(refreshExpiresIn))
             )
         }
@@ -480,19 +512,39 @@ final class OAuthCoordinator: @unchecked Sendable {
         for redirectURI in redirectURIs {
             guard let components = URLComponents(string: redirectURI),
                   let scheme = components.scheme?.lowercased(),
-                  let host = components.host?.lowercased(),
-                  !host.isEmpty else {
+                  components.user == nil,
+                  components.password == nil,
+                  components.fragment == nil else {
                 throw OAuthError.invalidRequest("Invalid redirect_uri.")
             }
 
             let isHTTPS = scheme == "https"
+            let host = components.host?.lowercased()
             let isLoopbackHTTP = scheme == "http" && (host == "127.0.0.1" || host == "localhost")
-            guard isHTTPS || isLoopbackHTTP else {
-                throw OAuthError.invalidRequest("redirect_uri must use HTTPS or loopback HTTP.")
+            let isPrivateUseAppScheme = Self.isPrivateUseRedirectScheme(scheme)
+            guard isHTTPS || isLoopbackHTTP || isPrivateUseAppScheme else {
+                throw OAuthError.invalidRequest("redirect_uri must use HTTPS, loopback HTTP, or a private-use app scheme.")
             }
         }
 
         return Array(Set(redirectURIs)).sorted()
+    }
+
+    private static func isPrivateUseRedirectScheme(_ scheme: String) -> Bool {
+        let blockedSchemes = Set([
+            "data",
+            "file",
+            "ftp",
+            "http",
+            "https",
+            "javascript",
+            "mailto"
+        ])
+        guard !blockedSchemes.contains(scheme), scheme.count <= 64 else {
+            return false
+        }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789+.-")
+        return scheme.rangeOfCharacter(from: allowed.inverted) == nil
     }
 
     private func parseScopes(_ scope: String?) -> Set<String> {
@@ -515,6 +567,52 @@ final class OAuthCoordinator: @unchecked Sendable {
         authorizations.values
             .map(\.approvalRequest)
             .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func connectedClientSnapshotLocked() -> [ConnectedClient] {
+        clients.values.compactMap { client in
+            let approvedAuthorizations = authorizations.values.filter {
+                $0.clientID == client.id && $0.status == .approved
+            }
+            let accessRecords = accessTokensByHash.values.filter { $0.clientID == client.id }
+            let refreshRecords = refreshTokensByHash.values.filter { $0.clientID == client.id }
+
+            guard !approvedAuthorizations.isEmpty || !accessRecords.isEmpty || !refreshRecords.isEmpty else {
+                return nil
+            }
+
+            let issuer = accessRecords.first?.issuer ?? refreshRecords.first?.issuer ?? approvedAuthorizations.first?.issuer
+            let resource = accessRecords.first?.resource ?? refreshRecords.first?.resource ?? approvedAuthorizations.first?.resource
+            let scopes = Set(
+                client.scopes
+                    .union(accessRecords.flatMap(\.scopes))
+                    .union(refreshRecords.flatMap(\.scopes))
+                    .union(approvedAuthorizations.flatMap(\.scopes))
+            )
+            let dateCandidates = [client.createdAt] +
+                approvedAuthorizations.map(\.createdAt) +
+                accessRecords.map(\.issuedAt) +
+                refreshRecords.map(\.issuedAt)
+
+            return ConnectedClient(
+                id: client.id,
+                name: client.name,
+                redirectURIs: client.redirectURIs,
+                issuer: issuer,
+                resource: resource,
+                scopes: scopes.sorted(),
+                createdAt: client.createdAt,
+                lastAuthorizedAt: dateCandidates.max() ?? client.createdAt,
+                activeAccessTokens: accessRecords.count,
+                activeRefreshTokens: refreshRecords.count
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.lastAuthorizedAt != rhs.lastAuthorizedAt {
+                return lhs.lastAuthorizedAt > rhs.lastAuthorizedAt
+            }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
     }
 
     private func notify(_ snapshot: [ApprovalRequest]) {

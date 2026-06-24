@@ -7,17 +7,17 @@ final class SmokeReadinessTests: XCTestCase {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
-        let model = AppModel(userDefaults: defaults)
-        model.tools = RemCTLToolCatalog.builtInTools
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         let readiness = model.smokeReadiness
 
+        XCTAssertEqual(model.toolExposureSummary.total, 0)
         XCTAssertFalse(readiness.canRunPreflight)
         XCTAssertFalse(readiness.canRunAnthropicAPI)
-        XCTAssertTrue(readiness.checks.contains { $0.id == "full-disk-access" && $0.status == .blocked })
+        XCTAssertTrue(readiness.checks.contains { $0.id == "full-disk-access" && $0.status == .ready })
         XCTAssertTrue(readiness.checks.contains { $0.id == "local-server" && $0.status == .blocked })
         XCTAssertTrue(readiness.checks.contains { $0.id == "public-tunnel" && $0.status == .blocked })
         XCTAssertTrue(readiness.checks.contains { $0.id == "anthropic-key" && $0.status == .blocked })
-        XCTAssertTrue(readiness.checks.contains { $0.id == "tool-surface" && $0.status == .ready })
+        XCTAssertTrue(readiness.checks.contains { $0.id == "tool-surface" && $0.status == .blocked })
     }
 
     @MainActor
@@ -25,7 +25,7 @@ final class SmokeReadinessTests: XCTestCase {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
-        let model = AppModel(userDefaults: defaults)
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         model.tools = RemCTLToolCatalog.builtInTools
         model.fullDiskAccessReport = FullDiskAccessReport(state: .ready, detail: "ready")
         model.localServerURL = URL(string: "http://127.0.0.1:61234")!
@@ -45,7 +45,7 @@ final class SmokeReadinessTests: XCTestCase {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
-        let model = AppModel(userDefaults: defaults)
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         model.tools = [
             ToolDefinition(
                 id: "custom.echo",
@@ -66,8 +66,37 @@ final class SmokeReadinessTests: XCTestCase {
         XCTAssertTrue(readiness.checks.contains { check in
             check.id == "full-disk-access" &&
                 check.status == .ready &&
-                check.detail == "No exposed tools currently require Full Disk Access."
+            check.detail == "No exposed tools currently require Full Disk Access."
         })
+    }
+
+    @MainActor
+    func testManualFullDiskAccessConfirmationMarksCurrentSurfaceReady() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
+        model.fullDiskAccessReport = FullDiskAccessReport(
+            state: .required,
+            detail: "Manual confirmation required.",
+            targets: [
+                FullDiskAccessTarget(
+                    title: "Echo executable",
+                    path: "/bin/echo",
+                    subtitle: "Tool process.",
+                    role: .toolExecutable
+                )
+            ],
+            requiresManualConfirmation: true,
+            confirmationSignature: "custom.echo=/bin/echo#toolExecutable=/bin/echo"
+        )
+
+        model.confirmFullDiskAccessSetup()
+
+        XCTAssertTrue(model.fullDiskAccessReport.isReady)
+        XCTAssertFalse(model.fullDiskAccessReport.requiresManualConfirmation)
+        XCTAssertEqual(model.fullDiskAccessReport.confirmationSignature, "custom.echo=/bin/echo#toolExecutable=/bin/echo")
+        XCTAssertNil(model.fullDiskAccessPrompt)
     }
 
     @MainActor
@@ -75,7 +104,7 @@ final class SmokeReadinessTests: XCTestCase {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
-        let model = AppModel(userDefaults: defaults)
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         model.tools = RemCTLToolCatalog.builtInTools + [
             ToolDefinition(
                 id: "custom.echo",
@@ -119,7 +148,7 @@ final class SmokeReadinessTests: XCTestCase {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
-        let model = AppModel(userDefaults: defaults)
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         model.tools = RemCTLToolCatalog.builtInTools
         XCTAssertNil(model.setRemCTLProfileEnabled(false))
 
@@ -132,11 +161,45 @@ final class SmokeReadinessTests: XCTestCase {
     }
 
     @MainActor
+    func testToolsCanBeDisabledIndividually() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
+        model.tools = RemCTLToolCatalog.builtInTools + [
+            ToolDefinition(
+                id: "custom.echo",
+                name: "Echo",
+                summary: "Echo test.",
+                executablePath: "/bin/echo",
+                argumentPattern: ["hello"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 5,
+                outputByteLimit: 1024,
+                origin: .userDefined
+            )
+        ]
+
+        XCTAssertNil(model.setToolEnabled(id: "remctl.today", enabled: false))
+        XCTAssertNil(model.setToolEnabled(id: "custom.echo", enabled: false))
+
+        XCTAssertFalse(model.isToolIDExposed("remctl.today"))
+        XCTAssertFalse(model.isToolIDExposed("custom.echo"))
+        XCTAssertTrue(model.isToolIDExposed("remctl.upcoming"))
+        XCTAssertEqual(model.toolExposureSummary.total, 9)
+
+        XCTAssertNil(model.setToolEnabled(id: "remctl.today", enabled: true))
+        XCTAssertTrue(model.isToolIDExposed("remctl.today"))
+        XCTAssertEqual(model.toolExposureSummary.total, 10)
+    }
+
+    @MainActor
     func testCustomToolsNoLongerBlockRemoteProofWhenReadOnlyToolIsAvailable() throws {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
-        let model = AppModel(userDefaults: defaults)
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
         model.fullDiskAccessReport = FullDiskAccessReport(state: .ready, detail: "ready")
         model.localServerURL = URL(string: "http://127.0.0.1:61234")!
         model.serverStatus = .running(model.localServerURL!)
@@ -176,6 +239,14 @@ private func makeIsolatedDefaults(
     }
     defaults.set(suiteName, forKey: "MacRemoteTests.suiteName")
     return defaults
+}
+
+@MainActor
+private func makeIsolatedAppModel(userDefaults: UserDefaults) throws -> AppModel {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let store = ToolRegistryStore(fileURL: temporaryDirectory.appendingPathComponent("tools.json"))
+    return AppModel(userDefaults: userDefaults, toolStore: store)
 }
 
 private func defaultsSuiteName(_ defaults: UserDefaults) -> String {

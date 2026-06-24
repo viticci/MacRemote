@@ -41,17 +41,6 @@ struct SettingsView: View {
                 .buttonStyle(.bordered)
             }
 
-            Section("Tool Profile") {
-                LabeledContent("Profile") {
-                    Text("Full RemCTL CLI")
-                }
-                LabeledContent("Executable") {
-                    Text(RemCTLToolCatalog.executablePath)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-            }
-
             Section("Full Disk Access") {
                 LabeledContent("Status") {
                     HStack(spacing: 8) {
@@ -61,20 +50,32 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("MacRemote exposes the full RemCTL CLI. Before the MCP server can start, the app runs `remctl doctor --for-agent --json` from its own process context. If that check cannot read Reminders, grant Full Disk Access to the targets below.")
+                Text("Full Disk Access is layered. MacRemote may need access as the host app, and an FDA-required CLI or its script interpreter may also need access as the process reading protected data.")
                     .foregroundStyle(.secondary)
 
                 HStack {
-                    Button("Check Access", systemImage: "checkmark.shield") {
+                    Button(isCheckingFullDiskAccess ? "Check Again" : "Check Access", systemImage: "checkmark.shield") {
                         appModel.checkFullDiskAccess()
                     }
-                    .disabled(isCheckingFullDiskAccess)
 
                     Button("Open Guided Setup", systemImage: "gearshape.2") {
                         appModel.openFullDiskAccessHelper()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(isCheckingFullDiskAccess)
+
+                    Button("Relaunch MacRemote", systemImage: "arrow.clockwise") {
+                        appModel.relaunchMacRemote()
+                    }
+
+                    Button("Reset App Row", systemImage: "arrow.triangle.2.circlepath") {
+                        appModel.resetMacRemoteFullDiskAccessGrant()
+                    }
+
+                    if appModel.fullDiskAccessReport.requiresManualConfirmation {
+                        Button("Confirm Setup", systemImage: "checkmark.seal") {
+                            appModel.confirmFullDiskAccessSetup()
+                        }
+                    }
 
                     if let firstTarget = appModel.fullDiskAccessReport.targets.first {
                         Button("Copy First Target", systemImage: "doc.on.doc") {
@@ -85,8 +86,13 @@ struct SettingsView: View {
                 }
 
                 if isCheckingFullDiskAccess {
-                    ProgressView()
-                        .controlSize(.small)
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking the active process context.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if !appModel.fullDiskAccessReport.detail.isEmpty {
@@ -127,9 +133,14 @@ struct SettingsView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Label("Open Guided Setup to launch RemCTL's helper and System Settings.", systemImage: "1.circle")
+                            Label("Open Guided Setup to launch the permission helper and System Settings.", systemImage: "1.circle")
                             Label("Add every listed target to Full Disk Access.", systemImage: "2.circle")
-                            Label("Relaunch MacRemote, then run Check Access.", systemImage: "3.circle")
+                            Label("Use Reset App Row if System Settings already shows MacRemote enabled but checks still fail.", systemImage: "3.circle")
+                            Label("Use Relaunch MacRemote after changing System Settings.", systemImage: "4.circle")
+                            Label("Run Check Access after the app reopens.", systemImage: "5.circle")
+                            if appModel.fullDiskAccessReport.requiresManualConfirmation {
+                                Label("Confirm Setup for tools MacRemote cannot automatically verify.", systemImage: "6.circle")
+                            }
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -137,13 +148,64 @@ struct SettingsView: View {
                 }
 
                 if appModel.fullDiskAccessReport.targets.isEmpty {
-                    Text("Run Check Access to ask RemCTL for the exact Full Disk Access targets for this MacRemote process.")
+                    Text("Run Check Access to discover the exact Full Disk Access targets for this MacRemote process.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("After changing Full Disk Access, relaunch MacRemote and check again before starting the server.")
+                    Text("After changing Full Disk Access, use Relaunch MacRemote and check again before starting the server. macOS often keeps the old permission state cached until the process exits.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("macOS Privacy") {
+                LabeledContent("Status") {
+                    HStack(spacing: 8) {
+                        Image(systemName: macOSPrivacyIcon)
+                            .foregroundStyle(macOSPrivacyColor)
+                        Text(appModel.macOSPrivacyAccessReport.state.title)
+                    }
+                }
+
+                Text("Some command-line tools need app-service privacy access from the host app that launches them. Reminders edits, for example, require Reminders access for MacRemote itself.")
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Button(isCheckingMacOSPrivacy ? "Check Again" : "Check Access", systemImage: "checkmark.shield") {
+                        appModel.checkFullDiskAccess()
+                    }
+
+                    Button("Open Reminders Privacy", systemImage: "checklist") {
+                        openPrivacySettings(anchor: "Privacy_Reminders")
+                    }
+                }
+
+                if isCheckingMacOSPrivacy {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking MacRemote's app-service access.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !appModel.macOSPrivacyAccessReport.detail.isEmpty {
+                    Text(appModel.macOSPrivacyAccessReport.detail)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                if !appModel.macOSPrivacyAccessReport.checkedRequirements.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(appModel.macOSPrivacyAccessReport.checkedRequirements, id: \.self) { requirement in
+                            StatusBadge(
+                                title: requirement.title,
+                                systemImage: requirement.systemImage,
+                                tint: .blue
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -190,8 +252,23 @@ struct SettingsView: View {
         pasteboard.setString(targets.map(\.path).joined(separator: "\n"), forType: .string)
     }
 
+    private func openPrivacySettings(anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     private var isCheckingFullDiskAccess: Bool {
         if case .checking = appModel.fullDiskAccessReport.state {
+            true
+        } else {
+            false
+        }
+    }
+
+    private var isCheckingMacOSPrivacy: Bool {
+        if case .checking = appModel.macOSPrivacyAccessReport.state {
             true
         } else {
             false
@@ -204,6 +281,8 @@ struct SettingsView: View {
             "checkmark.shield.fill"
         case .required, .failed(_):
             "exclamationmark.triangle.fill"
+        case .confirmationRequired:
+            "checkmark.seal.fill"
         case .checking:
             "hourglass"
         case .helperOpened:
@@ -219,9 +298,37 @@ struct SettingsView: View {
             .green
         case .required, .failed(_):
             .orange
+        case .confirmationRequired:
+            .blue
         case .checking:
             .blue
         case .helperOpened, .unknown:
+            .secondary
+        }
+    }
+
+    private var macOSPrivacyIcon: String {
+        switch appModel.macOSPrivacyAccessReport.state {
+        case .ready:
+            "checkmark.shield.fill"
+        case .required, .failed(_):
+            "exclamationmark.triangle.fill"
+        case .checking:
+            "hourglass"
+        case .unknown:
+            "questionmark.circle"
+        }
+    }
+
+    private var macOSPrivacyColor: Color {
+        switch appModel.macOSPrivacyAccessReport.state {
+        case .ready:
+            .green
+        case .required, .failed(_):
+            .orange
+        case .checking:
+            .blue
+        case .unknown:
             .secondary
         }
     }

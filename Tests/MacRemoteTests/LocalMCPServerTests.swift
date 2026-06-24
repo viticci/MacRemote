@@ -301,9 +301,21 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(toolsList.statusCode, 200)
         let toolsResult = try XCTUnwrap(toolsList.json["result"] as? [String: Any])
         let tools = try XCTUnwrap(toolsResult["tools"] as? [[String: Any]])
-        XCTAssertEqual(tools.first?["name"] as? String, "test.echo")
-        XCTAssertNotNil(tools.first?["outputSchema"] as? [String: Any])
-        let annotations = try XCTUnwrap(tools.first?["annotations"] as? [String: Any])
+        let listedTool = try XCTUnwrap(tools.first)
+        XCTAssertEqual(listedTool["name"] as? String, "test.echo")
+        XCTAssertEqual(listedTool["title"] as? String, "Echo")
+        let description = try XCTUnwrap(listedTool["description"] as? String)
+        XCTAssertTrue(description.contains("Echo a test value."))
+        XCTAssertTrue(description.contains("Only the documented schema parameters are accepted."))
+        XCTAssertTrue(description.contains("Read-only"))
+        XCTAssertNotNil(listedTool["outputSchema"] as? [String: Any])
+        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
+        let valueSchema = try XCTUnwrap(properties["value"] as? [String: Any])
+        XCTAssertEqual(valueSchema["title"] as? String, "Value")
+        XCTAssertEqual(valueSchema["description"] as? String, "Value")
+        XCTAssertEqual(valueSchema["maxLength"] as? Int, 64)
+        let annotations = try XCTUnwrap(listedTool["annotations"] as? [String: Any])
         XCTAssertEqual(annotations["readOnlyHint"] as? Bool, true)
         XCTAssertEqual(annotations["destructiveHint"] as? Bool, false)
         XCTAssertEqual(annotations["idempotentHint"] as? Bool, true)
@@ -554,8 +566,8 @@ final class LocalMCPServerTests: XCTestCase {
             toolExecutor: ConfiguredToolExecutor(
                 tools: [tool],
                 environment: [
-                    "HOME": "/Users/viticci",
-                    "PATH": "/Users/viticci/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+                    "HOME": ExecutableLocator.homeDirectory,
+                    "PATH": ExecutableLocator.searchDirectories.joined(separator: ":")
                 ]
             )
         )
@@ -595,6 +607,112 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertTrue(stdout.contains("\"user_uuid\""))
     }
 
+    func testGenericCLIAdapterDescriptionExplainsDirectArgvSemantics() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = ToolDefinition(
+            id: "test.codex",
+            name: "Codex CLI",
+            summary: "Run Codex by passing argv directly.",
+            executablePath: "/usr/local/bin/codex",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(
+                    name: "args",
+                    title: "Arguments",
+                    kind: .stringArray,
+                    required: false
+                ),
+                ToolParameter(
+                    name: "stdin",
+                    title: "Standard Input",
+                    kind: .string,
+                    required: false
+                )
+            ],
+            capability: .destructive,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024,
+            permissionRequirements: [.screenRecording, .accessibility]
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try XCTUnwrap(tools.first)
+        let description = try XCTUnwrap(listedTool["description"] as? String)
+        XCTAssertTrue(description.contains("without a shell"))
+        XCTAssertTrue(description.contains("do not use `~`"))
+        XCTAssertTrue(description.contains("global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`"))
+        XCTAssertTrue(description.contains("May require macOS privacy permission for Screen Recording, Accessibility"))
+
+        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
+        XCTAssertTrue((argsSchema["description"] as? String)?.contains("No shell is used") == true)
+
+        let annotations = try XCTUnwrap(listedTool["annotations"] as? [String: Any])
+        XCTAssertEqual(annotations["openWorldHint"] as? Bool, true)
+        XCTAssertEqual(annotations["idempotentHint"] as? Bool, false)
+    }
+
+    func testRemCTLCLIAdapterDescriptionExplainsNumericIDsAndPrivateFlag() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = ToolDefinition(
+            id: "test.remctl",
+            name: "Run RemCTL",
+            summary: "Run RemCTL by passing argv directly.",
+            executablePath: "/usr/local/bin/remctl",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(
+                    name: "args",
+                    title: "Arguments",
+                    kind: .stringArray,
+                    required: false
+                )
+            ],
+            capability: .destructive,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try XCTUnwrap(tools.first)
+        let description = try XCTUnwrap(listedTool["description"] as? String)
+        XCTAssertTrue(description.contains("numeric `id` field"))
+        XCTAssertTrue(description.contains("do not pass the UUID embedded in `deepLink`"))
+        XCTAssertTrue(description.contains("Do not use `--private` for normal due dates or EventKit alarms"))
+
+        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
+        let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
+        XCTAssertTrue(argsDescription.contains("Use numeric reminder IDs"))
+        XCTAssertTrue(argsDescription.contains("Do not use `--private`"))
+    }
+
     func testDestructiveMCPToolCallRequiresHostApproval() async throws {
         let coordinator = OAuthCoordinator()
         let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 5)
@@ -631,7 +749,7 @@ final class LocalMCPServerTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
-        let callTask = Task { () throws -> ToolCallErrorResponse in
+        let callTask = Task { () throws -> ToolCallResultResponse in
             let response = try await postJSON(
                 url: base.appendingPathComponent("mcp/test-instance"),
                 bearerToken: accessToken,
@@ -648,21 +766,144 @@ final class LocalMCPServerTests: XCTestCase {
                     ]
                 ]
             )
-            let error = response.json["error"] as? [String: Any]
-            return ToolCallErrorResponse(
+            let result = response.json["result"] as? [String: Any]
+            let structuredContent = result?["structuredContent"] as? [String: Any]
+            return ToolCallResultResponse(
                 statusCode: response.statusCode,
-                errorCode: error?["code"] as? Int
+                isError: result?["isError"] as? Bool,
+                stderr: structuredContent?["stderr"] as? String
             )
         }
 
         let approval = try await waitForPendingToolApproval(in: toolApprovals)
         XCTAssertEqual(approval.toolID, "test.remctl.run")
+        XCTAssertEqual(approval.clientName, "HTTP Test")
         XCTAssertTrue(approval.argumentsPreview.contains("args=add Test -l Work"))
         XCTAssertTrue(toolApprovals.deny(requestID: approval.id))
 
         let deniedCall = try await callTask.value
         XCTAssertEqual(deniedCall.statusCode, 200)
-        XCTAssertEqual(deniedCall.errorCode, -32004)
+        XCTAssertEqual(deniedCall.isError, true)
+        XCTAssertEqual(deniedCall.stderr, "Tool call was not approved on the host Mac.")
+    }
+
+    func testClientToolPermissionSkipsHostApprovalForDestructiveTool() async throws {
+        let defaultsSuite = "MacRemoteTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+
+        let coordinator = OAuthCoordinator()
+        let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 1)
+        let permissions = ClientToolPermissionStore(userDefaults: defaults)
+        let tool = ToolDefinition(
+            id: "test.remctl.run",
+            name: "Run RemCTL",
+            summary: "Run full RemCTL.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(
+                    name: "args",
+                    title: "Arguments",
+                    kind: .stringArray,
+                    required: false
+                )
+            ],
+            capability: .destructive,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolCallApprovalCoordinator: toolApprovals,
+            toolExecutor: FakeToolExecutor(),
+            clientToolPermissionStore: permissions
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+        let client = try XCTUnwrap(coordinator.connectedClientSnapshot().first)
+        _ = permissions.setAllowed(true, clientID: client.id, toolID: tool.id)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "call",
+                "method": "tools/call",
+                "params": [
+                    "name": "test.remctl.run",
+                    "arguments": [
+                        "args": ["--help"]
+                    ]
+                ]
+            ]
+        )
+        XCTAssertEqual(toolCall.statusCode, 200)
+        let result = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, false)
+        XCTAssertTrue(toolApprovals.approvalSnapshot().isEmpty)
+    }
+
+    func testToolsListReflectsRuntimeUpdatesWithoutRestart() async throws {
+        let coordinator = OAuthCoordinator()
+        let firstTool = ToolDefinition(
+            id: "test.first",
+            name: "First",
+            summary: "First dynamic tool.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["first"],
+            parameters: [],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let secondTool = ToolDefinition(
+            id: "test.second",
+            name: "Second",
+            summary: "Second dynamic tool.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["second"],
+            parameters: [],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let runtime = ToolSurfaceRuntime(
+            tools: [firstTool],
+            environment: [:]
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            toolProvider: {
+                runtime.toolsSnapshot()
+            },
+            authCoordinator: coordinator,
+            toolExecutor: runtime
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let initialList = try await toolsList(base: base, accessToken: accessToken)
+        XCTAssertEqual(initialList.map { $0["name"] as? String }, ["test.first"])
+
+        runtime.update(tools: [firstTool, secondTool])
+        let updatedList = try await toolsList(base: base, accessToken: accessToken)
+        XCTAssertEqual(
+            Set(updatedList.compactMap { $0["name"] as? String }),
+            Set(["test.first", "test.second"])
+        )
     }
 }
 
@@ -682,9 +923,26 @@ private struct FakeToolExecutor: ToolExecuting {
     }
 }
 
-private struct ToolCallErrorResponse: Sendable {
+private struct ToolCallResultResponse: Sendable {
     let statusCode: Int
-    let errorCode: Int?
+    let isError: Bool?
+    let stderr: String?
+}
+
+private func toolsList(base: URL, accessToken: String) async throws -> [[String: Any]] {
+    let response = try await postJSON(
+        url: base.appendingPathComponent("mcp/test-instance"),
+        bearerToken: accessToken,
+        headers: ["MCP-Protocol-Version": "2025-11-25"],
+        body: [
+            "jsonrpc": "2.0",
+            "id": "tools",
+            "method": "tools/list"
+        ]
+    )
+    XCTAssertEqual(response.statusCode, 200)
+    let result = try XCTUnwrap(response.json["result"] as? [String: Any])
+    return try XCTUnwrap(result["tools"] as? [[String: Any]])
 }
 
 private func authorizedAccessToken(

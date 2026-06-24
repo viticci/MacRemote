@@ -8,10 +8,10 @@ configuration app, a loopback-only MCP HTTP server, a command runner, an OAuth
 authorization flow, and a Cloudflare Tunnel integration.
 
 The most sensitive asset is the local Mac user session. A successful compromise
-could run local commands, read local data, manipulate Reminders through RemCTL,
-or mint remote tokens that let a chatbot keep calling tools after initial
-authorization. Command execution, token issuance, tunnel exposure, and audit
-logging are security-critical runtime code.
+could run local commands, read local data, manipulate local apps through exposed
+CLIs, or mint remote tokens that let a chatbot keep calling tools after initial
+authorization. Command execution, token issuance, tunnel exposure, client
+policies, and audit logging are security-critical runtime code.
 
 ## Trust Boundaries
 
@@ -37,7 +37,7 @@ Core boundaries:
 - Cloudflare Tunnel to `127.0.0.1:<port>`;
 - HTTP server to auth/session state;
 - MCP tool call to command runner;
-- command runner to local CLIs such as `/Users/viticci/bin/remctl`;
+- command runner to local CLIs such as `remctl`, `codex`, or `pocketctl`;
 - app UI to persistent configuration and secrets.
 
 ## Core Assumptions
@@ -97,16 +97,17 @@ Critical:
 - arbitrary shell command execution through a remote MCP call;
 - token issuance without host-side approval;
 - public tunnel exposing anything beyond the MacRemote MCP server;
-- auth bypass allowing leaked URL holders to call RemCTL tools.
+- auth bypass allowing leaked URL holders to call exposed tools.
 
 High:
 
 - redirect URI validation flaw that leaks authorization codes;
 - refresh token replay or non-rotating refresh tokens;
-- full RemCTL CLI exposed without host-approved OAuth, destructive tool
+- broad CLI adapters exposed without host-approved OAuth, destructive tool
   annotation, or per-call host approval for writes;
-- RemCTL exposed before a verified Full Disk Access gate passes from
-  MacRemote's process context;
+- tools exposed before required Full Disk Access or macOS privacy gates pass
+  from MacRemote's process context;
+- persistent client tool policies applied to the wrong OAuth client or resource;
 - logs storing bearer tokens or Cloudflare credentials.
 
 Medium:

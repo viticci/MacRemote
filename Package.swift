@@ -20,6 +20,11 @@ let package = Package(
                 "dist",
                 "docs",
                 "README.md",
+                "AGENTS.md",
+                "CONTRIBUTING.md",
+                "INSTALL.md",
+                "LICENSE",
+                "SECURITY.md",
                 "Resources",
                 "script",
                 "Tests"

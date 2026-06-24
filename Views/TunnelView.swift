@@ -119,7 +119,8 @@ struct TunnelView: View {
     }
 
     private func openSmokeTestGuide() {
-        let url = URL(fileURLWithPath: "/Users/viticci/Projects/MacRemote/docs/END_TO_END_SMOKE_TEST.md")
+        let url = URL(fileURLWithPath: SmokeTestService.repositoryRoot)
+            .appendingPathComponent("docs/END_TO_END_SMOKE_TEST.md")
         NSWorkspace.shared.open(url)
     }
 
@@ -218,7 +219,7 @@ private struct FullDiskAccessReadinessTargetsPanel: View {
                     .controlSize(.small)
                 }
 
-                Text("Remote MCP verification is blocked until every target below has Full Disk Access and MacRemote has been relaunched.")
+                Text("Remote MCP verification is blocked until every target below has Full Disk Access. MacRemote may need access as the host app, and the CLI or interpreter may also need access as the process reading protected data.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -245,6 +246,20 @@ private struct FullDiskAccessReadinessTargetsPanel: View {
 
                     Button("Open Guided Setup", systemImage: "gearshape.2") {
                         appModel.openFullDiskAccessHelper()
+                    }
+
+                    Button("Relaunch MacRemote", systemImage: "arrow.clockwise") {
+                        appModel.relaunchMacRemote()
+                    }
+
+                    Button("Reset App Row", systemImage: "arrow.triangle.2.circlepath") {
+                        appModel.resetMacRemoteFullDiskAccessGrant()
+                    }
+
+                    if appModel.fullDiskAccessReport.requiresManualConfirmation {
+                        Button("Confirm Setup", systemImage: "checkmark.seal") {
+                            appModel.confirmFullDiskAccessSetup()
+                        }
                     }
 
                     Text("Drag a row into Full Disk Access, or copy a path and use Command-Shift-G in the file picker.")
@@ -399,7 +414,6 @@ private struct ExposureSummaryPanel: View {
                 ExposureRow(label: "Total", value: "\(summary.total) tools")
                 ExposureRow(label: "Read-only", value: "\(summary.readOnly)")
                 ExposureRow(label: "Host-gated", value: "\(summary.gatedToolCount) write/destructive")
-                ExposureRow(label: "Custom", value: "\(summary.custom)")
                 ExposureRow(label: "Generic adapters", value: "\(summary.genericAdapters)")
             }
 

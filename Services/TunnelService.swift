@@ -14,7 +14,7 @@ enum TunnelServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .cloudflaredUnavailable:
-            "`cloudflared` was not found in the standard Homebrew paths."
+            "`cloudflared` was not found on PATH or in standard Homebrew paths."
         case .alreadyRunning:
             "A Cloudflare tunnel is already running."
         }
@@ -33,11 +33,7 @@ final class TunnelService: @unchecked Sendable {
     private var stopping = false
 
     func cloudflaredPath() -> String? {
-        let candidates = [
-            "/opt/homebrew/bin/cloudflared",
-            "/usr/local/bin/cloudflared"
-        ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+        ExecutableLocator.executablePath(named: "cloudflared")
     }
 
     func status(localServerURL: URL?) -> TunnelStatus {

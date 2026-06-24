@@ -26,13 +26,13 @@ final class RemCTLToolCatalogTests: XCTestCase {
         XCTAssertEqual(tool.parameters.map(\.name), ["args", "stdin"])
         XCTAssertEqual(tool.capability, .destructive)
         XCTAssertTrue(tool.isGenericCLIAdapter)
-        XCTAssertEqual(tool.permissionRequirements, [.fullDiskAccess])
+        XCTAssertEqual(tool.permissionRequirements, [.fullDiskAccess, .reminders])
     }
 
     func testAllBuiltInRemCTLToolsRequireFullDiskAccess() {
         XCTAssertFalse(RemCTLToolCatalog.builtInTools.isEmpty)
         XCTAssertTrue(RemCTLToolCatalog.builtInTools.allSatisfy { tool in
-            tool.permissionRequirements == [.fullDiskAccess]
+            tool.permissionRequirements == [.fullDiskAccess, .reminders]
         })
     }
 

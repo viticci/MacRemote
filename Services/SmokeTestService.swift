@@ -24,7 +24,7 @@ enum SmokeTestServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .missingAnthropicAPIKey:
-            "Could not read Anthropic API key from 1Password."
+            "Set ANTHROPIC_API_KEY or install op-get with an Anthropic API Key item."
         case .anthropicAPIKeyLookupFailed(let message):
             "Anthropic API key lookup failed: \(message)"
         }
@@ -32,9 +32,23 @@ enum SmokeTestServiceError: LocalizedError, Equatable {
 }
 
 struct SmokeTestService: Sendable {
-    static let repositoryRoot = "/Users/viticci/Projects/MacRemote"
-    static let scriptPath = "\(repositoryRoot)/script/anthropic_mcp_smoke.py"
-    static let opGetPath = "/Users/viticci/bin/op-get"
+    static var repositoryRoot: String {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .path
+    }
+
+    static var scriptPath: String {
+        URL(fileURLWithPath: repositoryRoot)
+            .appendingPathComponent("script/anthropic_mcp_smoke.py")
+            .path
+    }
+
+    static var opGetPath: String? {
+        ExecutableLocator.executablePath(named: "op-get") ??
+            ExecutableLocator.executablePath(candidates: ["\(ExecutableLocator.homeDirectory)/bin/op-get"])
+    }
 
     private let runner = ProcessRunner()
 
@@ -93,7 +107,7 @@ struct SmokeTestService: Sendable {
             lines.append("MACREMOTE_MCP_URL=\"\(mcpURL.absoluteString)\"")
             lines.append("./script/anthropic_mcp_smoke.py --mcp-preflight-only")
         case .anthropicAPI:
-            lines.append("ANTHROPIC_API_KEY=\"$(/Users/viticci/bin/op-get \"Anthropic API Key\")\"")
+            lines.append("ANTHROPIC_API_KEY=\"<key>\"")
             if let toolID {
                 lines.append("MACREMOTE_SMOKE_TOOL=\"\(toolID)\"")
             }
@@ -199,8 +213,17 @@ struct SmokeTestService: Sendable {
     }
 
     private func loadAnthropicAPIKey(environment: [String: String]) async throws -> String {
+        if let key = environment["ANTHROPIC_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !key.isEmpty {
+            return key
+        }
+
+        guard let opGetPath = Self.opGetPath else {
+            throw SmokeTestServiceError.missingAnthropicAPIKey
+        }
+
         let result = try await runner.run(
-            executablePath: Self.opGetPath,
+            executablePath: opGetPath,
             arguments: ["Anthropic API Key"],
             timeoutSeconds: 15,
             outputByteLimit: 4 * 1024,

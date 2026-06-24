@@ -1,72 +1,26 @@
-# MacRemote Implementation Plan
+# MacRemote Implementation Status
 
-## Phase 1: Secure Skeleton
+Historical note: this file used to hold the original phase plan. Current setup
+and agent guidance now live in `README.md`, `INSTALL.md`, `AGENTS.md`, and the
+security docs.
 
-- Create SwiftPM macOS app scaffold.
-- Add project-local `script/build_and_run.sh`.
-- Add `.codex/environments/environment.toml`.
-- Build the native SwiftUI shell.
-- Add persistent app model for server, tunnel, tools, auth requests, and logs.
-- Add the full RemCTL CLI adapter plus narrow read helper tool definitions.
-- Add a Full Disk Access flow that uses RemCTL's own permission helper and
-  `remctl doctor --for-agent --json` from the app process.
-- Make permission requirements tool metadata and show one app-wide FDA prompt
-  from every blocked flow.
-- Add direct process runner that never invokes a shell.
-- Add unit tests for command validation and argv construction.
-- Add generic CLI adapter definitions: executable path + `{args}` array +
-  optional `stdin`.
-- Add opt-in default command categories for Filesystem, Utilities, Image
-  Processing, Text, Developer, and detected PocketCTL templates.
-- Add selective exposure so the full RemCTL profile can be disabled while
-  custom CLI adapters remain served.
+## Current Shape
 
-## Phase 2: Local MCP Server
+- SwiftPM macOS app with a native SwiftUI shell.
+- User-defined tool registry with selectable exposure.
+- Detected CLI presets and bulk preset sets.
+- Generic CLI adapters and fixed command templates.
+- Direct `Process` execution with no shell runner.
+- Loopback-only MCP server.
+- OAuth + PKCE with host approval before token issuance.
+- Per-call approval for write/destructive tools.
+- Persistent per-client tool policies for approved clients.
+- Cloudflare Tunnel public MCP URL with instance-specific path.
+- Full Disk Access and macOS privacy readiness checks driven by per-tool
+  `permissionRequirements`.
+- Remote MCP smoke test script.
 
-- Add local HTTP listener bound to `127.0.0.1`.
-- Add `/health`.
-- Add minimal OAuth metadata endpoints.
-- Add pending host-approval flow in app state.
-- Add token issuance with PKCE.
-- Add `/mcp` JSON-RPC handling for `tools/list` and `tools/call`.
-- Wire the full RemCTL CLI adapter and read helper tools through the MCP
-  handler.
-- Add per-call host approval for write and destructive tool calls before the
-  process runner executes them.
-- Wire user-defined generic CLI adapter tools through the same MCP handler.
-- Block local server startup until the app-launched RemCTL doctor check passes
-  when any exposed tool declares Full Disk Access.
-- Add a PocketCTL MCP integration test that calls a real installed CLI through
-  OAuth-protected MCP.
-
-## Phase 3: Tunnel
-
-- Detect `cloudflared`.
-- Start from a local-only server health check.
-- Create or reuse a named Cloudflare Tunnel.
-- Route a single hostname or high-entropy path to the local MCP port.
-- Show the MCP URL in the app.
-- Add stop/disable/rotate actions.
-
-## Phase 4: Remote Model Smoke Test
-
-- Get a provider API key from 1Password at runtime.
-- Use `script/anthropic_mcp_smoke.py` so OAuth approval, token exchange, and
-  Anthropic MCP connector calls are reproducible.
-- Use the public HTTPS MCP URL in an Anthropic or OpenAI API call.
-- Confirm the model can discover the selected exposed read-only smoke tool.
-- Approve the auth request on the Mac.
-- Confirm a RemCTL, PocketCTL, or custom CLI result returns through MCP.
-
-## Phase 5: Computer Use Verification
-
-- Launch the built app.
-- Inspect the UI visually.
-- Start server from the app.
-- Confirm status changes, pending approval state, and log entries.
-- Keep destructive actions disabled unless explicitly approved.
-
-## Non-Negotiable Gates
+## Current Gates
 
 - No shell-based tool runner.
 - No generic wrappers for shell interpreters or `/usr/bin/env`.
@@ -74,7 +28,8 @@
 - No server binding outside `127.0.0.1`.
 - No public tunnel before local health passes.
 - No OAuth token without host approval.
-- No write or destructive tool execution without per-call host approval.
+- No write or destructive tool execution without per-call approval or an
+  explicit persistent client policy.
 - No secrets in logs, git, screenshots, or command output.
-- No FDA-required tool exposure before Full Disk Access is explicitly granted
-  and verified from MacRemote's own process context.
+- No protected-data tool exposure before required macOS access is verified from
+  MacRemote's own process context.

@@ -19,11 +19,11 @@ final class SmokeTestServiceTests: XCTestCase {
         XCTAssertFalse(command.contains("ANTHROPIC_API_KEY"))
     }
 
-    func testAnthropicCopyCommandRetrievesKeyFromOnePasswordWithoutLiteralSecret() throws {
+    func testAnthropicCopyCommandUsesPlaceholderWithoutLiteralSecret() throws {
         let url = try XCTUnwrap(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
         let command = SmokeTestService.copyCommand(for: .anthropicAPI, mcpURL: url)
 
-        XCTAssertTrue(command.contains("ANTHROPIC_API_KEY=\"$(/Users/viticci/bin/op-get \"Anthropic API Key\")\""))
+        XCTAssertTrue(command.contains("ANTHROPIC_API_KEY=\"<key>\""))
         XCTAssertTrue(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
         XCTAssertFalse(command.contains("--mcp-preflight-only"))
     }
@@ -110,7 +110,7 @@ final class SmokeTestServiceTests: XCTestCase {
             date: date,
             mode: .anthropicAPI,
             mcpURL: "https://example.trycloudflare.com/mcp/abc123",
-            toolSurface: "10 tools; 9 read-only, 1 host-gated; 0 custom; 1 generic adapters",
+            toolSurface: "10 tools; 9 read-only, 1 host-gated; 1 generic adapters",
             succeeded: true,
             resultSummary: "smoke_test=passed",
             exitCode: 0,

@@ -1,0 +1,1021 @@
+#!/usr/bin/env python3
+"""Install and configure MacRemote from the command line.
+
+This repo-local CLI is intentionally agent-friendly: it can build the app,
+inspect local readiness, and write user-defined tool definitions to the same
+Application Support JSON file the SwiftUI app reads. It does not start a public
+tunnel, approve OAuth clients, or approve tool calls.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+APP_NAME = "MacRemote"
+BUNDLE_ID = "com.macstories.MacRemote"
+LEGACY_REMCTL_PROFILE_KEY = "MacRemote.remCTLProfileEnabled"
+BLOCKED_EXECUTABLES = {"bash", "csh", "env", "fish", "sh", "tcsh", "zsh"}
+VALID_CATEGORIES = {
+    "reminders",
+    "podcasts",
+    "filesystem",
+    "utilities",
+    "imageProcessing",
+    "text",
+    "developer",
+}
+VALID_CAPABILITIES = {"readOnly", "write", "destructive"}
+PERMISSION_REQUIREMENT_ORDER = [
+    "fullDiskAccess",
+    "reminders",
+    "calendars",
+    "contacts",
+    "photos",
+    "camera",
+    "microphone",
+    "speechRecognition",
+    "location",
+    "screenRecording",
+    "accessibility",
+    "automation",
+    "localNetwork",
+]
+VALID_PERMISSION_REQUIREMENTS = set(PERMISSION_REQUIREMENT_ORDER)
+INTEGER_PLACEHOLDERS = {"count", "days", "id", "lines", "width"}
+PLACEHOLDER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,31}$")
+COMMON_BIN_DIRS = [
+    Path.home() / ".local" / "bin",
+    Path.home() / "bin",
+    Path.home() / ".cargo" / "bin",
+    Path.home() / ".bun" / "bin",
+    Path.home() / ".deno" / "bin",
+    Path.home() / ".grok" / "bin",
+    Path.home() / ".matter" / "bin",
+    Path("/opt/homebrew/bin"),
+    Path("/opt/homebrew/sbin"),
+    Path("/usr/local/bin"),
+    Path("/usr/local/sbin"),
+    Path("/usr/bin"),
+    Path("/bin"),
+    Path("/usr/sbin"),
+    Path("/sbin"),
+]
+LEGACY_PRESET_ALIASES = {
+    "date": "preset.utilities.current_date",
+    "pocketctl-now": "preset.pocketctl.now",
+    "pocketctl-run": "preset.pocketctl.run",
+    "pocketctl-triage": "preset.pocketctl.triage",
+    "remctl-run": "preset.remctl.run",
+}
+PRESET_SET_ALIASES = {
+    "all": "set.all_system_presets",
+    "detected": "set.detected_clis",
+    "developer": "set.developer",
+    "media": "set.media",
+    "podcasts": "set.podcasts",
+    "reminders": "set.reminders",
+    "steipete": "set.steipete_openclaw",
+    "text": "set.text_data",
+    "utilities": "set.utilities",
+}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Install and configure MacRemote.")
+    parser.add_argument(
+        "--tools-file",
+        default=os.environ.get("MACREMOTE_TOOLS_FILE"),
+        help="Override the persisted user tool registry path.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check local requirements.")
+    doctor_parser.add_argument("--json", action="store_true")
+    doctor_parser.add_argument(
+        "--check-remctl-fda",
+        "--check-fda",
+        dest="check_remctl_fda",
+        action="store_true",
+        help="Run `remctl doctor --for-agent --json` from this shell when RemCTL is installed.",
+    )
+    doctor_parser.set_defaults(func=command_doctor)
+
+    install_parser = subparsers.add_parser("install", help="Build dist/MacRemote.app.")
+    install_parser.add_argument("--launch", action="store_true", help="Open the app after building.")
+    install_parser.add_argument("--copy-to-applications", action="store_true", help="Copy the app to ~/Applications.")
+    install_parser.add_argument("--force", action="store_true", help="Replace an existing ~/Applications copy.")
+    install_parser.set_defaults(func=command_install)
+
+    open_parser = subparsers.add_parser("open", help="Open the built app bundle.")
+    open_parser.set_defaults(func=command_open)
+
+    status_parser = subparsers.add_parser("status", help="Print app and configuration status.")
+    status_parser.add_argument("--json", action="store_true")
+    status_parser.set_defaults(func=command_status)
+
+    list_tools_parser = subparsers.add_parser("list-tools", help="List user-defined tools configured for the app.")
+    list_tools_parser.add_argument("--json", action="store_true")
+    list_tools_parser.set_defaults(func=command_list_tools)
+
+    clear_tools_parser = subparsers.add_parser("clear-tools", help="Remove all user-defined tools.")
+    clear_tools_parser.add_argument("--yes", action="store_true", help="Required confirmation.")
+    clear_tools_parser.set_defaults(func=command_clear_tools)
+
+    list_presets_parser = subparsers.add_parser("list-presets", help="List available CLI presets detected on this Mac.")
+    list_presets_parser.add_argument("--json", action="store_true")
+    list_presets_parser.set_defaults(func=command_list_presets)
+
+    list_sets_parser = subparsers.add_parser("list-preset-sets", help="List available bulk preset sets.")
+    list_sets_parser.add_argument("--json", action="store_true")
+    list_sets_parser.set_defaults(func=command_list_preset_sets)
+
+    preset_parser = subparsers.add_parser("add-preset", help="Add a detected preset to the user tool registry.")
+    preset_parser.add_argument("preset", help="Preset id, for example `preset.developer.codex`.")
+    preset_parser.add_argument("--replace", action="store_true", help="Replace an existing tool with the same name.")
+    preset_parser.set_defaults(func=command_add_preset)
+
+    preset_set_parser = subparsers.add_parser("add-preset-set", help="Add every tool from a preset set.")
+    preset_set_parser.add_argument("preset_set", help="Preset set id, for example `set.detected_clis` or `all`.")
+    preset_set_parser.add_argument("--replace", action="store_true", help="Replace existing tools with matching names.")
+    preset_set_parser.set_defaults(func=command_add_preset_set)
+
+    add_tool_parser = subparsers.add_parser("add-tool", help="Add a custom CLI adapter or command template.")
+    add_tool_parser.add_argument("--name", required=True)
+    add_tool_parser.add_argument("--summary", required=True)
+    add_tool_parser.add_argument("--executable", required=True)
+    add_tool_parser.add_argument("--mode", choices=["cli", "template"], default="cli")
+    add_tool_parser.add_argument("--arg", action="append", default=[], help="One argv item. Repeat for templates.")
+    add_tool_parser.add_argument("--category", choices=sorted(VALID_CATEGORIES), default="utilities")
+    add_tool_parser.add_argument("--capability", choices=sorted(VALID_CAPABILITIES), default="readOnly")
+    add_tool_parser.add_argument("--timeout", type=float, default=10)
+    add_tool_parser.add_argument("--output-kb", type=int, default=512)
+    add_tool_parser.add_argument(
+        "--require",
+        action="append",
+        choices=sorted(VALID_PERMISSION_REQUIREMENTS),
+        default=[],
+        help="macOS permission requirement. Repeat for multiple requirements.",
+    )
+    add_tool_parser.add_argument("--requires-fda", action="store_true", help="Alias for `--require fullDiskAccess`.")
+    add_tool_parser.add_argument("--replace", action="store_true", help="Replace an existing tool with the same name.")
+    add_tool_parser.set_defaults(func=command_add_tool)
+
+    install_cli_parser = subparsers.add_parser("install-cli", help="Copy this CLI to ~/.local/bin/macremotectl.")
+    install_cli_parser.add_argument("--bin-dir", default=str(Path.home() / ".local" / "bin"))
+    install_cli_parser.set_defaults(func=command_install_cli)
+
+    args = parser.parse_args()
+    args.repo_root = repo_root()
+    args.tools_path = Path(args.tools_file).expanduser() if args.tools_file else default_tools_path()
+    return args.func(args)
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    app_path = app_bundle(args.repo_root)
+    checks = [
+        check_path("repo", args.repo_root, exists=True),
+        check_path("app_bundle", app_path, exists=True, required=False),
+        check_app_signature(app_path, required=app_path.exists()),
+        check_executable("swift", shutil.which("swift")),
+        check_executable("cloudflared", find_executable("cloudflared")),
+    ]
+
+    for name in optional_cli_names():
+        checks.append(check_executable(name, find_executable(name), required=False))
+
+    if args.check_remctl_fda:
+        checks.append(run_remctl_doctor(required=True))
+
+    available_presets = presets()
+    result = {
+        "ok": all(check["ok"] or not check.get("required", True) for check in checks),
+        "checks": checks,
+        "tools_file": str(args.tools_path),
+        "available_preset_count": len(available_presets),
+        "available_preset_set_count": len(preset_sets(available_presets)),
+    }
+    print_json_or_text(result, args.json)
+    return 0 if result["ok"] else 1
+
+
+def command_install(args: argparse.Namespace) -> int:
+    run([str(args.repo_root / "script" / "build_and_run.sh"), "--build-only"], cwd=args.repo_root)
+    built_app = app_bundle(args.repo_root)
+
+    copied_to = None
+    if args.copy_to_applications:
+        applications = Path.home() / "Applications"
+        target = applications / f"{APP_NAME}.app"
+        applications.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if not args.force:
+                die(f"{target} already exists. Pass --force to replace it.")
+            shutil.rmtree(target)
+        shutil.copytree(built_app, target, symlinks=True)
+        copied_to = str(target)
+
+    if args.launch:
+        run(["/usr/bin/open", "-n", str(built_app)])
+
+    print(json.dumps({"built_app": str(built_app), "copied_to": copied_to, "launched": args.launch}, indent=2))
+    return 0
+
+
+def command_open(args: argparse.Namespace) -> int:
+    built_app = app_bundle(args.repo_root)
+    if not built_app.exists():
+        die("dist/MacRemote.app does not exist. Run `script/macremotectl install` first.")
+    run(["/usr/bin/open", "-n", str(built_app)])
+    return 0
+
+
+def command_status(args: argparse.Namespace) -> int:
+    tools = load_tools(args.tools_path)
+    result = {
+        "app_bundle": str(app_bundle(args.repo_root)),
+        "app_bundle_exists": app_bundle(args.repo_root).exists(),
+        "running_pids": pgrep(APP_NAME),
+        "cloudflared_pids": pgrep("cloudflared"),
+        "tools_file": str(args.tools_path),
+        "user_tool_count": len(tools),
+        "user_tools": [
+            {
+                "id": tool.get("id"),
+                "name": tool.get("name"),
+                "capability": tool.get("capability"),
+                "permissions": tool.get("permissionRequirements", []),
+            }
+            for tool in tools
+        ],
+        "legacy_remctl_profile_enabled": legacy_remctl_profile_enabled(),
+    }
+    print_json_or_text(result, args.json)
+    return 0
+
+
+def command_set_remctl_profile(args: argparse.Namespace) -> int:
+    enabled = args.state in {"on", "true", "enabled"}
+    run(["/usr/bin/defaults", "write", BUNDLE_ID, LEGACY_REMCTL_PROFILE_KEY, "-bool", "true" if enabled else "false"])
+    print(json.dumps({"legacy_remctl_profile_enabled": enabled}, indent=2))
+    return 0
+
+
+def command_list_tools(args: argparse.Namespace) -> int:
+    tools = load_tools(args.tools_path)
+    if args.json:
+        print(json.dumps(tools, indent=2, sort_keys=True))
+    else:
+        if not tools:
+            print("No user-defined tools configured.")
+        for tool in tools:
+            permissions = ",".join(tool.get("permissionRequirements", [])) or "-"
+            print(f"{tool.get('id')}  {tool.get('name')}  {tool.get('capability')}  {permissions}  {tool.get('executablePath')}")
+    return 0
+
+
+def command_clear_tools(args: argparse.Namespace) -> int:
+    if not args.yes:
+        die("Pass --yes to remove all user-defined tools.")
+    save_tools(args.tools_path, [])
+    print(json.dumps({"cleared": True, "tools_file": str(args.tools_path)}, indent=2))
+    return 0
+
+
+def command_list_presets(args: argparse.Namespace) -> int:
+    available = presets()
+    if args.json:
+        print(json.dumps(available, indent=2, sort_keys=True))
+    else:
+        for preset_id, preset in available.items():
+            permissions = ",".join(preset.get("permissionRequirements", [])) or "-"
+            print(f"{preset_id}: {preset['name']} [{preset['capability']}; {permissions}]")
+            print(f"  {preset['summary']}")
+    return 0
+
+
+def command_list_preset_sets(args: argparse.Namespace) -> int:
+    sets = preset_sets(presets())
+    if args.json:
+        print(json.dumps(sets, indent=2, sort_keys=True))
+    else:
+        for set_id, preset_set in sets.items():
+            print(f"{set_id}: {preset_set['name']} ({len(preset_set['presetIDs'])} tools)")
+            print(f"  {preset_set['summary']}")
+    return 0
+
+
+def command_add_preset(args: argparse.Namespace) -> int:
+    available = presets()
+    preset_id = resolve_key(args.preset, available, LEGACY_PRESET_ALIASES, "preset")
+    tool = tool_from_preset(available[preset_id])
+    save_tool(args.tools_path, tool, replace=args.replace)
+    print(json.dumps({"added": tool["name"], "id": tool["id"], "preset": preset_id, "tools_file": str(args.tools_path)}, indent=2))
+    return 0
+
+
+def command_add_preset_set(args: argparse.Namespace) -> int:
+    available = presets()
+    sets = preset_sets(available)
+    set_id = resolve_key(args.preset_set, sets, PRESET_SET_ALIASES, "preset set")
+    tools = [tool_from_preset(available[preset_id]) for preset_id in sets[set_id]["presetIDs"]]
+    result = save_tool_batch(args.tools_path, tools, replace=args.replace)
+    print(json.dumps({"preset_set": set_id, **result, "tools_file": str(args.tools_path)}, indent=2))
+    return 0
+
+
+def command_add_tool(args: argparse.Namespace) -> int:
+    requirements = list(args.require)
+    if args.requires_fda:
+        requirements.append("fullDiskAccess")
+    argument_pattern = ["{args}"] if args.mode == "cli" else args.arg
+    tool = make_tool(
+        name=args.name,
+        summary=args.summary,
+        executable=args.executable,
+        argument_pattern=argument_pattern,
+        category=args.category,
+        capability=args.capability,
+        timeout=args.timeout,
+        output_kb=args.output_kb,
+        permission_requirements=requirements,
+    )
+    save_tool(args.tools_path, tool, replace=args.replace)
+    print(json.dumps({"added": tool["name"], "id": tool["id"], "tools_file": str(args.tools_path)}, indent=2))
+    return 0
+
+
+def command_install_cli(args: argparse.Namespace) -> int:
+    source = Path(__file__).resolve()
+    target_dir = Path(args.bin_dir).expanduser()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "macremotectl"
+    shutil.copy2(source, target)
+    current_mode = target.stat().st_mode
+    target.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    print(json.dumps({"installed": str(target)}, indent=2))
+    return 0
+
+
+def make_tool(
+    *,
+    name: str,
+    summary: str,
+    executable: str,
+    argument_pattern: list[str],
+    category: str,
+    capability: str,
+    timeout: float,
+    output_kb: int,
+    permission_requirements: list[str],
+) -> dict[str, Any]:
+    normalized_requirements = normalize_permission_requirements(permission_requirements)
+    validate_tool_inputs(
+        name=name,
+        executable=executable,
+        argument_pattern=argument_pattern,
+        category=category,
+        capability=capability,
+        timeout=timeout,
+        output_kb=output_kb,
+        permission_requirements=normalized_requirements,
+    )
+    return {
+        "id": "custom." + secrets.token_hex(8),
+        "name": name.strip(),
+        "summary": summary.strip(),
+        "executablePath": str(Path(executable).expanduser()),
+        "argumentPattern": argument_pattern,
+        "parameters": infer_parameters(argument_pattern),
+        "capability": capability,
+        "timeoutSeconds": timeout,
+        "outputByteLimit": output_kb * 1024,
+        "origin": "userDefined",
+        "category": category,
+        "permissionRequirements": normalized_requirements,
+    }
+
+
+def tool_from_preset(preset: dict[str, Any]) -> dict[str, Any]:
+    return make_tool(
+        name=preset["name"],
+        summary=preset["summary"],
+        executable=preset["executablePath"],
+        argument_pattern=preset["argumentPattern"],
+        category=preset["category"],
+        capability=preset["capability"],
+        timeout=preset["timeoutSeconds"],
+        output_kb=preset["outputLimitKB"],
+        permission_requirements=preset.get("permissionRequirements", []),
+    )
+
+
+def validate_tool_inputs(
+    *,
+    name: str,
+    executable: str,
+    argument_pattern: list[str],
+    category: str,
+    capability: str,
+    timeout: float,
+    output_kb: int,
+    permission_requirements: list[str],
+) -> None:
+    if not name.strip():
+        die("Tool name is required.")
+    executable_path = Path(executable).expanduser()
+    if not executable_path.is_absolute():
+        die("Executable path must be absolute.")
+    if executable_path.name.lower() in BLOCKED_EXECUTABLES:
+        die(f"Shell-style executable is blocked: {executable_path}")
+    if not executable_path.is_file() or not os.access(executable_path, os.X_OK):
+        die(f"Executable is not available: {executable_path}")
+    if category not in VALID_CATEGORIES:
+        die(f"Invalid category: {category}")
+    if capability not in VALID_CAPABILITIES:
+        die(f"Invalid capability: {capability}")
+    invalid_requirements = sorted(set(permission_requirements) - VALID_PERMISSION_REQUIREMENTS)
+    if invalid_requirements:
+        die(f"Invalid permission requirement(s): {', '.join(invalid_requirements)}")
+    if not 1 <= timeout <= 60:
+        die("Timeout must be between 1 and 60 seconds.")
+    if not 1 <= output_kb <= 5120:
+        die("Output limit must be between 1 KB and 5 MB.")
+    if len(argument_pattern) > 64:
+        die("Tool has too many arguments.")
+    for argument in argument_pattern:
+        if "\0" in argument or len(argument) > 4096:
+            die(f"Invalid argument: {argument!r}")
+        if argument.startswith("{") or argument.endswith("}"):
+            if not (argument.startswith("{") and argument.endswith("}")):
+                die(f"Invalid placeholder: {argument}")
+            placeholder = argument[1:-1]
+            if not PLACEHOLDER_RE.match(placeholder):
+                die(f"Invalid placeholder: {argument}")
+
+
+def infer_parameters(argument_pattern: list[str]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    parameters: list[dict[str, Any]] = []
+    includes_generic_args = False
+    for argument in argument_pattern:
+        if not (argument.startswith("{") and argument.endswith("}")):
+            continue
+        name = argument[1:-1]
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in {"args", "argv"}:
+            includes_generic_args = True
+            parameters.append({"name": name, "title": "Arguments", "kind": "stringArray", "required": False})
+        elif name in INTEGER_PLACEHOLDERS:
+            parameters.append({
+                "name": name,
+                "title": name.replace("_", " ").title(),
+                "kind": "integer",
+                "required": True,
+                "minimumInteger": 1,
+                "maximumInteger": 999_999_999 if name == "id" else 9999,
+            })
+        else:
+            parameters.append({
+                "name": name,
+                "title": name.replace("_", " ").title(),
+                "kind": "string",
+                "required": True,
+                "maximumLength": 256,
+            })
+    if includes_generic_args and "stdin" not in seen:
+        parameters.append({
+            "name": "stdin",
+            "title": "Standard Input",
+            "kind": "string",
+            "required": False,
+            "maximumLength": 1024 * 1024,
+        })
+    return parameters
+
+
+def save_tool(path: Path, tool: dict[str, Any], *, replace: bool) -> None:
+    save_tool_batch(path, [tool], replace=replace)
+
+
+def save_tool_batch(path: Path, new_tools: list[dict[str, Any]], *, replace: bool) -> dict[str, Any]:
+    tools = load_tools(path)
+    added: list[str] = []
+    replaced: list[str] = []
+    for tool in new_tools:
+        existing_index = next((index for index, item in enumerate(tools) if item.get("name") == tool["name"]), None)
+        if existing_index is not None:
+            if not replace:
+                die(f"A custom tool named {tool['name']!r} already exists. Pass --replace.")
+            tools[existing_index] = tool
+            replaced.append(tool["name"])
+        else:
+            tools.append(tool)
+            added.append(tool["name"])
+    save_tools(path, tools)
+    return {"added": added, "replaced": replaced, "total_user_tools": len(tools)}
+
+
+def save_tools(path: Path, tools: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(tools, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def load_tools(path: Path) -> list[dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        die(f"Invalid tools JSON at {path}: {error}")
+    if not isinstance(data, list):
+        die(f"Invalid tools JSON at {path}: expected a list.")
+    return [item for item in data if isinstance(item, dict) and item.get("origin") == "userDefined"]
+
+
+def presets() -> dict[str, dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    items.extend(base_presets())
+    items.extend(codex_presets())
+    items.extend(remctl_presets())
+    items.extend(pocketctl_presets())
+    items.extend(named_cli_presets())
+    items.extend(generic_cli_presets(items))
+    return {item["id"]: item for item in items}
+
+
+def base_presets() -> list[dict[str, Any]]:
+    return [
+        preset("preset.filesystem.list_directory", "List Directory", "List a directory without modifying it.", "/bin/ls", ["-la", "{path}"], "readOnly", "filesystem", 10, 1024),
+        preset("preset.filesystem.file_info", "File Info", "Return size and modification metadata for one path.", "/usr/bin/stat", ["-f", "%N %z bytes %Sm", "{path}"], "readOnly", "filesystem", 10, 512),
+        preset("preset.filesystem.read_head", "Read File Head", "Read the first N lines of a text file.", "/usr/bin/head", ["-n", "{lines}", "{path}"], "readOnly", "filesystem", 10, 1024),
+        preset("preset.filesystem.find_by_name", "Find By Name", "Search filenames under a chosen root path.", "/usr/bin/find", ["{root}", "-iname", "{pattern}"], "readOnly", "filesystem", 20, 1024),
+        preset("preset.utilities.current_date", "Current Date", "Return the current local timestamp.", "/bin/date", ["+%Y-%m-%dT%H:%M:%S%z"], "readOnly", "utilities", 5, 64),
+        preset("preset.utilities.disk_usage", "Disk Usage", "Return mounted filesystem usage.", "/bin/df", ["-h"], "readOnly", "utilities", 10, 512),
+        preset("preset.utilities.uptime", "System Uptime", "Return uptime and load averages.", "/usr/bin/uptime", [], "readOnly", "utilities", 5, 64),
+        preset("preset.utilities.network_interfaces", "Network Interfaces", "Return local network interface details.", "/sbin/ifconfig", [], "readOnly", "utilities", 10, 1024),
+        preset("preset.image.info", "Image Info", "Return dimensions and format for an image.", "/usr/bin/sips", ["-g", "pixelWidth", "-g", "pixelHeight", "-g", "format", "{path}"], "readOnly", "imageProcessing", 10, 256),
+        preset("preset.image.convert_png", "Convert To PNG", "Write a PNG copy of an input image.", "/usr/bin/sips", ["-s", "format", "png", "{input}", "--out", "{output}"], "write", "imageProcessing", 20, 512),
+        preset("preset.image.resize_width", "Resize Width", "Write a resized image copy at a target width.", "/usr/bin/sips", ["--resampleWidth", "{width}", "{input}", "--out", "{output}"], "write", "imageProcessing", 20, 512),
+        preset("preset.text.word_count", "Word Count", "Count words in a text file.", "/usr/bin/wc", ["-w", "{path}"], "readOnly", "text", 10, 128),
+        preset("preset.text.line_count", "Line Count", "Count lines in a text file.", "/usr/bin/wc", ["-l", "{path}"], "readOnly", "text", 10, 128),
+        preset("preset.text.search_file", "Search Text File", "Search one text file and return matching lines.", "/usr/bin/grep", ["-n", "{pattern}", "{path}"], "readOnly", "text", 10, 1024),
+        preset("preset.developer.git_status", "Git Status", "Return short git status for a repository path.", "/usr/bin/git", ["-C", "{path}", "status", "--short"], "readOnly", "developer", 10, 512),
+        preset("preset.developer.git_log", "Git Log", "Return recent one-line commits for a repository path.", "/usr/bin/git", ["-C", "{path}", "log", "--oneline", "-n", "{count}"], "readOnly", "developer", 10, 512),
+    ]
+
+
+def codex_presets() -> list[dict[str, Any]]:
+    executable = find_executable("codex")
+    if not executable:
+        return []
+    return [
+        preset(
+            "preset.developer.codex_read_only_exec",
+            "Codex Read-Only Exec",
+            "Run Codex non-interactively in read-only mode with a model prompt.",
+            executable,
+            ["--ask-for-approval", "never", "--sandbox", "read-only", "exec", "--skip-git-repo-check", "{prompt}"],
+            "destructive",
+            "developer",
+            60,
+            2048,
+        ),
+        direct_adapter("preset.developer.codex", "Codex CLI", "Run Codex by passing argv directly. Write-capable calls require per-call host approval.", executable, "developer", 60),
+    ]
+
+
+def remctl_presets() -> list[dict[str, Any]]:
+    executable = find_executable("remctl")
+    if not executable:
+        return []
+    permissions = ["fullDiskAccess", "reminders"]
+    return [
+        direct_adapter("preset.remctl.run", "Run RemCTL", "Run the Reminders CLI by passing argv directly. Requires Full Disk Access because the command reads protected Reminders data.", executable, "reminders", 30, permissions=permissions),
+        preset("preset.remctl.today", "Today", "Return due today and overdue reminders.", executable, ["--format", "json", "today"], "readOnly", "reminders", 10, 512, permissions),
+        preset("preset.remctl.upcoming", "Upcoming", "Return reminders due in the next N days.", executable, ["--format", "json", "upcoming", "{days}"], "readOnly", "reminders", 10, 1024, permissions),
+        preset("preset.remctl.overdue", "Overdue", "Return all overdue reminders.", executable, ["--format", "json", "overdue"], "readOnly", "reminders", 10, 512, permissions),
+        preset("preset.remctl.lists", "Lists", "Return all iCloud reminder lists.", executable, ["--format", "json", "lists"], "readOnly", "reminders", 10, 512, permissions),
+        preset("preset.remctl.sections", "Sections", "Return sections across iCloud reminder lists.", executable, ["--format", "json", "sections"], "readOnly", "reminders", 10, 512, permissions),
+        preset("preset.remctl.stats", "Stats", "Return reminder database statistics.", executable, ["--format", "json", "stats"], "readOnly", "reminders", 10, 512, permissions),
+        preset("preset.remctl.search", "Search", "Search reminders by query.", executable, ["--format", "json", "search", "{query}"], "readOnly", "reminders", 10, 1024, permissions),
+        preset("preset.remctl.show", "Show List", "Show reminders in a named list.", executable, ["--format", "json", "show", "{list}"], "readOnly", "reminders", 10, 1024, permissions),
+        preset("preset.remctl.info", "Reminder Info", "Return detail for a numeric reminder id.", executable, ["--format", "json", "info", "{id}"], "readOnly", "reminders", 10, 512, permissions),
+    ]
+
+
+def pocketctl_presets() -> list[dict[str, Any]]:
+    executable = find_executable("pocketctl")
+    if not executable:
+        return []
+    return [
+        preset("preset.pocketctl.triage", "PocketCTL Triage", "Return a live Pocket Casts triage board as JSON.", executable, ["triage", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.now", "PocketCTL Now", "Return the live first Up Next episode as JSON.", executable, ["now", "--json"], "readOnly", "podcasts", 15, 1024),
+        direct_adapter("preset.pocketctl.run", "Run PocketCTL", "Run PocketCTL by passing argv directly. Write-capable calls require per-call host approval.", executable, "podcasts", 30),
+    ]
+
+
+def named_cli_presets() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if executable := find_executable("peekaboo"):
+        items.extend([
+            preset("preset.peekaboo.permissions", "Peekaboo Permissions", "Return Peekaboo permission status as JSON.", executable, ["permissions", "status", "--json"], "readOnly", "utilities", 10, 512),
+            preset("preset.peekaboo.apps", "Peekaboo Apps", "List running applications visible to Peekaboo as JSON.", executable, ["list", "apps", "--json"], "readOnly", "utilities", 10, 1024),
+            direct_adapter("preset.peekaboo.run", "Peekaboo CLI", "Run Peekaboo by passing argv directly. Use absolute paths; no shell expansion is performed.", executable, "utilities", 60, permissions=["screenRecording", "accessibility"]),
+        ])
+    if executable := find_executable("spogo"):
+        items.extend([
+            preset("preset.spogo.status", "Spogo Status", "Return current Spotify playback status as JSON.", executable, ["status", "--json", "--no-input"], "readOnly", "utilities", 10, 1024),
+            preset("preset.spogo.search_track", "Spogo Search Track", "Search Spotify tracks and return JSON results.", executable, ["search", "track", "{query}", "--json", "--no-input"], "readOnly", "utilities", 15, 1024),
+            direct_adapter("preset.spogo.run", "Spogo CLI", "Run Spogo by passing argv directly. Playback and library changes require host approval.", executable, "utilities", 30, permissions=["automation"]),
+        ])
+    if executable := find_executable("summarize"):
+        items.extend([
+            preset("preset.summarize.input", "Summarize Input", "Summarize a URL or local file path.", executable, ["{input}", "--format", "md"], "readOnly", "text", 60, 2048),
+            direct_adapter("preset.summarize.run", "Summarize CLI", "Run Summarize by passing argv directly for advanced extraction and transcript workflows.", executable, "text", 60),
+        ])
+    if executable := find_executable("gog"):
+        items.append(direct_adapter("preset.gog.run", "Gog CLI", "Run Gog by passing argv directly. Prefer --json, --dry-run, --no-input, and --gmail-no-send when applicable.", executable, "utilities", 45))
+    if executable := find_executable("llm"):
+        items.extend([
+            preset("preset.llm.prompt", "LLM Prompt", "Run Simon Willison's llm CLI with a prompt.", executable, ["prompt", "{prompt}"], "write", "developer", 60, 2048),
+            direct_adapter("preset.llm.run", "LLM CLI", "Run llm by passing argv directly for model, embedding, plugin, and log workflows.", executable, "developer", 60),
+        ])
+    if executable := find_executable("gh"):
+        items.extend([
+            preset("preset.gh.repo_view", "GitHub Repo View", "Return selected GitHub repository metadata as JSON.", executable, ["repo", "view", "{repository}", "--json", "nameWithOwner,description,url,isPrivate,defaultBranchRef"], "readOnly", "developer", 15, 1024),
+            direct_adapter("preset.gh.run", "GitHub CLI", "Run GitHub CLI by passing argv directly. Repository mutations require host approval.", executable, "developer", 45),
+        ])
+    if executable := find_executable("jq"):
+        items.extend([
+            preset("preset.jq.file", "JQ File", "Apply a jq filter to a JSON file.", executable, ["{filter}", "{path}"], "readOnly", "text", 10, 2048),
+            direct_adapter("preset.jq.run", "JQ CLI", "Run jq by passing argv directly.", executable, "text", 15, capability="readOnly"),
+        ])
+    if executable := find_executable("rg"):
+        items.extend([
+            preset("preset.rg.search", "Ripgrep Search", "Search files with ripgrep using smart case and line numbers.", executable, ["--line-number", "--smart-case", "{pattern}", "{path}"], "readOnly", "text", 20, 2048),
+            direct_adapter("preset.rg.run", "Ripgrep CLI", "Run ripgrep by passing argv directly.", executable, "text", 20, capability="readOnly"),
+        ])
+    if executable := find_executable("yt-dlp"):
+        items.extend([
+            preset("preset.ytdlp.metadata", "YT-DLP Metadata", "Return video metadata without downloading media.", executable, ["--dump-json", "--skip-download", "{url}"], "readOnly", "utilities", 30, 2048),
+            direct_adapter("preset.ytdlp.run", "YT-DLP CLI", "Run yt-dlp by passing argv directly. Downloads require host approval.", executable, "utilities", 60),
+        ])
+    if executable := find_executable("ffprobe"):
+        items.append(preset("preset.ffprobe.info", "FFprobe Media Info", "Return media stream and format metadata as JSON.", executable, ["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", "{path}"], "readOnly", "imageProcessing", 20, 2048))
+    if executable := find_executable("ffmpeg"):
+        items.append(direct_adapter("preset.ffmpeg.run", "FFmpeg CLI", "Run FFmpeg by passing argv directly. Media conversion writes require host approval.", executable, "imageProcessing", 60))
+    if executable := find_executable("cloudflared"):
+        items.extend([
+            preset("preset.cloudflared.version", "Cloudflared Version", "Return the installed cloudflared version.", executable, ["version"], "readOnly", "utilities", 5, 64),
+            direct_adapter("preset.cloudflared.run", "Cloudflared CLI", "Run cloudflared by passing argv directly for tunnel and network workflows.", executable, "utilities", 60),
+        ])
+    if executable := find_executable("tailscale"):
+        items.extend([
+            preset("preset.tailscale.status", "Tailscale Status", "Return Tailscale status as JSON.", executable, ["status", "--json"], "readOnly", "utilities", 10, 2048),
+            direct_adapter("preset.tailscale.run", "Tailscale CLI", "Run Tailscale by passing argv directly. Network state changes require host approval.", executable, "utilities", 30),
+        ])
+    for executable_name, preset_id, name, summary, category in [
+        ("uv", "preset.uv.run", "UV CLI", "Run uv by passing argv directly for Python package and project workflows.", "developer"),
+        ("uvx", "preset.uvx.run", "UVX CLI", "Run uvx by passing argv directly for Python tool execution.", "developer"),
+        ("supabase", "preset.supabase.run", "Supabase CLI", "Run Supabase CLI by passing argv directly for local and hosted project workflows.", "developer"),
+        ("xcodegen", "preset.xcodegen.run", "XcodeGen CLI", "Run XcodeGen by passing argv directly. Project generation writes require host approval.", "developer"),
+        ("claude-session", "preset.claude_session.run", "Claude Session CLI", "Run claude-session by passing argv directly for local agent-session workflows.", "developer"),
+        ("grok-session", "preset.grok_session.run", "Grok Session CLI", "Run grok-session by passing argv directly for local agent-session workflows.", "developer"),
+        ("cora", "preset.cora.run", "Cora CLI", "Run Cora by passing argv directly.", "developer"),
+        ("monologue", "preset.monologue.run", "Monologue CLI", "Run Monologue by passing argv directly.", "text"),
+        ("matter", "preset.matter.run", "Matter CLI", "Run Matter by passing argv directly for read-later workflows.", "text"),
+        ("spark", "preset.spark.run", "Spark CLI", "Run Spark by passing argv directly for email workflows.", "utilities"),
+        ("frames", "preset.frames.run", "Frames CLI", "Run Frames by passing argv directly for screenshot and media framing workflows.", "imageProcessing"),
+    ]:
+        if executable := find_executable(executable_name):
+            items.append(direct_adapter(preset_id, name, summary, executable, category, 60))
+    if executable := find_executable("deno"):
+        items.extend([
+            preset("preset.deno.task_list", "Deno Task List", "List Deno tasks for a project directory.", executable, ["task", "--cwd", "{path}"], "readOnly", "developer", 10, 1024),
+            direct_adapter("preset.deno.run", "Deno CLI", "Run Deno by passing argv directly for JavaScript and TypeScript workflows.", executable, "developer", 60),
+        ])
+    return items
+
+
+def generic_cli_presets(existing: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing_ids = {item["id"] for item in existing}
+    descriptors = [
+        ("claude", "preset.claude.run", "Claude CLI", "Run Claude by passing argv directly for local agent workflows.", "developer", "destructive", 60, []),
+        ("grok", "preset.grok.run", "Grok CLI", "Run Grok by passing argv directly for local agent workflows.", "developer", "destructive", 60, []),
+        ("swift", "preset.swift.run", "Swift CLI", "Run Swift by passing argv directly for package, build, and script workflows.", "developer", "destructive", 60, []),
+        ("xcodebuild", "preset.xcodebuild.run", "Xcodebuild CLI", "Run xcodebuild by passing argv directly for Apple platform build workflows.", "developer", "destructive", 60, []),
+        ("node", "preset.node.run", "Node CLI", "Run Node.js by passing argv directly for JavaScript workflows.", "developer", "destructive", 60, []),
+        ("npm", "preset.npm.run", "NPM CLI", "Run npm by passing argv directly for package and script workflows.", "developer", "destructive", 60, []),
+        ("pnpm", "preset.pnpm.run", "PNPM CLI", "Run pnpm by passing argv directly for package and script workflows.", "developer", "destructive", 60, []),
+        ("python3", "preset.python3.run", "Python 3 CLI", "Run Python 3 by passing argv directly for scripts and module workflows.", "developer", "destructive", 60, []),
+        ("ruby", "preset.ruby.run", "Ruby CLI", "Run Ruby by passing argv directly for scripts and developer workflows.", "developer", "destructive", 60, []),
+        ("perl", "preset.perl.run", "Perl CLI", "Run Perl by passing argv directly for scripts and text workflows.", "developer", "destructive", 60, []),
+        ("curl", "preset.curl.run", "Curl CLI", "Run curl by passing argv directly for HTTP workflows. Requests that send data require host approval.", "utilities", "destructive", 45, ["localNetwork"]),
+        ("rsync", "preset.rsync.run", "Rsync CLI", "Run rsync by passing argv directly for file transfer workflows.", "filesystem", "destructive", 60, []),
+        ("sqlite3", "preset.sqlite3.run", "SQLite CLI", "Run sqlite3 by passing argv directly for database inspection and mutation workflows.", "developer", "destructive", 60, []),
+        ("shortcuts", "preset.shortcuts.run", "Shortcuts CLI", "Run Shortcuts by passing argv directly. Running shortcuts may trigger app, Automation, and data-access prompts.", "utilities", "destructive", 60, ["automation"]),
+        ("osascript", "preset.osascript.run", "AppleScript CLI", "Run osascript by passing argv directly for AppleScript and JavaScript for Automation workflows.", "utilities", "destructive", 60, ["automation", "accessibility"]),
+        ("automator", "preset.automator.run", "Automator CLI", "Run Automator by passing argv directly for local automation workflows.", "utilities", "destructive", 60, ["automation", "accessibility"]),
+        ("screencapture", "preset.screencapture.run", "Screen Capture CLI", "Run screencapture by passing argv directly for screenshot workflows.", "imageProcessing", "destructive", 60, ["screenRecording"]),
+        ("mdfind", "preset.mdfind.run", "Spotlight Search CLI", "Run mdfind by passing argv directly for Spotlight metadata search.", "filesystem", "readOnly", 20, []),
+        ("mdls", "preset.mdls.run", "Metadata CLI", "Run mdls by passing argv directly for Spotlight metadata inspection.", "filesystem", "readOnly", 20, []),
+        ("qlmanage", "preset.qlmanage.run", "Quick Look CLI", "Run qlmanage by passing argv directly for Quick Look inspection and thumbnail workflows.", "filesystem", "destructive", 30, []),
+        ("textutil", "preset.textutil.run", "Textutil CLI", "Run textutil by passing argv directly for document conversion and inspection workflows.", "text", "destructive", 30, []),
+    ]
+    items: list[dict[str, Any]] = []
+    for executable_name, preset_id, name, summary, category, capability, timeout, permissions in descriptors:
+        if preset_id in existing_ids:
+            continue
+        executable = find_executable(executable_name)
+        if executable:
+            items.append(direct_adapter(preset_id, name, summary, executable, category, timeout, capability=capability, permissions=permissions))
+    return items
+
+
+def preset_sets(available: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    def matching(predicate: Any) -> list[str]:
+        return [preset_id for preset_id, item in available.items() if predicate(preset_id, item)]
+
+    sets = {
+        "set.all_system_presets": {
+            "name": "All System Presets",
+            "summary": "Install every available preset MacRemote detected on this Mac.",
+            "presetIDs": list(available.keys()),
+        },
+        "set.detected_clis": {
+            "name": "Detected CLIs",
+            "summary": "Install one direct adapter for each detected command-line tool.",
+            "presetIDs": matching(lambda _preset_id, item: item.get("mode") == "cli"),
+        },
+        "set.reminders": {
+            "name": "Reminders",
+            "summary": "Install the Reminders read tools plus the direct RemCTL adapter.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "reminders"),
+        },
+        "set.podcasts": {
+            "name": "Podcasts",
+            "summary": "Install Pocket Casts inspection tools plus the direct PocketCTL adapter.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "podcasts"),
+        },
+        "set.steipete_openclaw": {
+            "name": "Steipete / OpenClaw",
+            "summary": "Install presets for Peekaboo, Spogo, Summarize, and Gog when present.",
+            "presetIDs": matching(lambda preset_id, _item: preset_id.startswith(("preset.peekaboo.", "preset.spogo.", "preset.summarize.", "preset.gog."))),
+        },
+        "set.developer": {
+            "name": "Developer",
+            "summary": "Install developer CLIs and read-only git helpers.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "developer"),
+        },
+        "set.text_data": {
+            "name": "Text and Data",
+            "summary": "Install text, JSON, search, and summarization presets.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "text"),
+        },
+        "set.media": {
+            "name": "Media",
+            "summary": "Install image, video, and media-processing presets.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "imageProcessing"),
+        },
+        "set.utilities": {
+            "name": "Utilities",
+            "summary": "Install system, network, automation, and service CLIs.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "utilities"),
+        },
+    }
+    return {set_id: value for set_id, value in sets.items() if value["presetIDs"]}
+
+
+def preset(
+    preset_id: str,
+    name: str,
+    summary: str,
+    executable_path: str,
+    argument_pattern: list[str],
+    capability: str,
+    category: str,
+    timeout_seconds: float,
+    output_limit_kb: int,
+    permissions: list[str] | None = None,
+    mode: str = "template",
+) -> dict[str, Any]:
+    return {
+        "id": preset_id,
+        "name": name,
+        "summary": summary,
+        "executablePath": executable_path,
+        "argumentPattern": argument_pattern,
+        "capability": capability,
+        "category": category,
+        "timeoutSeconds": timeout_seconds,
+        "outputLimitKB": output_limit_kb,
+        "permissionRequirements": normalize_permission_requirements(permissions or []),
+        "mode": mode,
+    }
+
+
+def direct_adapter(
+    preset_id: str,
+    name: str,
+    summary: str,
+    executable_path: str,
+    category: str,
+    timeout_seconds: float,
+    *,
+    capability: str = "destructive",
+    output_limit_kb: int = 2048,
+    permissions: list[str] | None = None,
+) -> dict[str, Any]:
+    return preset(
+        preset_id,
+        name,
+        summary,
+        executable_path,
+        ["{args}"],
+        capability,
+        category,
+        timeout_seconds,
+        output_limit_kb,
+        permissions,
+        mode="cli",
+    )
+
+
+def optional_cli_names() -> list[str]:
+    return [
+        "codex",
+        "remctl",
+        "pocketctl",
+        "peekaboo",
+        "spogo",
+        "summarize",
+        "gog",
+        "claude",
+        "grok",
+        "gh",
+        "llm",
+        "jq",
+        "rg",
+        "yt-dlp",
+        "ffmpeg",
+        "tailscale",
+        "uv",
+        "uvx",
+        "deno",
+        "supabase",
+        "matter",
+        "spark",
+        "frames",
+    ]
+
+
+def resolve_key(value: str, mapping: dict[str, Any], aliases: dict[str, str], label: str) -> str:
+    key = aliases.get(value, value)
+    if key not in mapping:
+        sample = ", ".join(list(mapping.keys())[:12])
+        die(f"Unknown {label}: {value}. Available examples: {sample}")
+    return key
+
+
+def normalize_permission_requirements(requirements: list[str]) -> list[str]:
+    seen = set(requirements)
+    return [requirement for requirement in PERMISSION_REQUIREMENT_ORDER if requirement in seen]
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def app_bundle(root: Path) -> Path:
+    return root / "dist" / f"{APP_NAME}.app"
+
+
+def default_tools_path() -> Path:
+    return Path.home() / "Library" / "Application Support" / APP_NAME / "tools.json"
+
+
+def find_executable(name: str) -> str | None:
+    path = shutil.which(name)
+    if path:
+        return path
+    for directory in COMMON_BIN_DIRS:
+        candidate = directory / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def check_path(name: str, path: Path, *, exists: bool, required: bool = True) -> dict[str, Any]:
+    ok = path.exists() if exists else True
+    return {"name": name, "ok": ok, "required": required, "path": str(path)}
+
+
+def check_executable(name: str, path: str | None, *, required: bool = True) -> dict[str, Any]:
+    ok = bool(path and Path(path).is_file() and os.access(path, os.X_OK))
+    return {"name": name, "ok": ok, "required": required, "path": path}
+
+
+def check_app_signature(path: Path, *, required: bool) -> dict[str, Any]:
+    if not path.exists():
+        return {"name": "app_signature", "ok": False, "required": required, "detail": "app bundle missing"}
+
+    designated = subprocess.run(
+        ["/usr/bin/codesign", "-dr", "-", str(path)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    details = subprocess.run(
+        ["/usr/bin/codesign", "-dv", "--verbose=2", str(path)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    output = "\n".join([designated.stdout, designated.stderr, details.stdout, details.stderr])
+    requirement = first_nonempty_line(designated.stderr) or first_nonempty_line(designated.stdout)
+    is_cdhash_only = "designated => cdhash" in output
+    ok = designated.returncode == 0 and not is_cdhash_only
+    detail = requirement or "missing designated requirement"
+    if is_cdhash_only:
+        detail = "ad-hoc cdhash-only signature; local rebuilds can leave stale Full Disk Access rows"
+
+    return {"name": "app_signature", "ok": ok, "required": required, "detail": detail}
+
+
+def run_remctl_doctor(*, required: bool) -> dict[str, Any]:
+    remctl = find_executable("remctl")
+    if not remctl:
+        return {"name": "remctl_fda", "ok": False, "required": required, "detail": "remctl not found"}
+    result = subprocess.run([remctl, "doctor", "--for-agent", "--json"], text=True, capture_output=True, check=False)
+    ok = result.returncode == 0
+    detail = first_nonempty_line(result.stdout) or first_nonempty_line(result.stderr)
+    return {"name": "remctl_fda", "ok": ok, "required": required, "detail": detail}
+
+
+def legacy_remctl_profile_enabled() -> bool | None:
+    result = subprocess.run(["/usr/bin/defaults", "read", BUNDLE_ID, LEGACY_REMCTL_PROFILE_KEY], text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() not in {"0", "false", "FALSE", "False"}
+
+
+def pgrep(name: str) -> list[int]:
+    result = subprocess.run(["/usr/bin/pgrep", "-x", name], text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        return []
+    return [int(line) for line in result.stdout.splitlines() if line.strip().isdigit()]
+
+
+def run(command: list[str], *, cwd: Path | None = None) -> None:
+    result = subprocess.run(command, cwd=cwd, check=False)
+    if result.returncode != 0:
+        die(f"Command failed with exit {result.returncode}: {' '.join(command)}")
+
+
+def first_nonempty_line(value: str) -> str:
+    for line in value.splitlines():
+        line = line.strip()
+        if line:
+            return line[:240]
+    return ""
+
+
+def print_json_or_text(result: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+    for key, value in result.items():
+        if key == "checks":
+            print("checks:")
+            for check in value:
+                mark = "ok" if check["ok"] else "fail"
+                required = "required" if check.get("required", True) else "optional"
+                detail = check.get("path") or check.get("detail") or ""
+                print(f"  {mark:4} {check['name']} ({required}) {detail}")
+        else:
+            print(f"{key}: {value}")
+
+
+def die(message: str) -> None:
+    print(f"macremotectl: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

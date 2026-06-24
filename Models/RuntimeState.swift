@@ -71,6 +71,28 @@ struct ApprovalRequest: Identifiable, Hashable, Sendable {
     }
 }
 
+struct AuthenticatedClientContext: Equatable, Sendable {
+    let clientID: String
+    let clientName: String
+    let issuer: String
+    let resource: String
+    let scopes: [String]
+    let accessTokenExpiresAt: Date
+}
+
+struct ConnectedClient: Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let redirectURIs: [String]
+    let issuer: String?
+    let resource: String?
+    let scopes: [String]
+    let createdAt: Date
+    let lastAuthorizedAt: Date
+    let activeAccessTokens: Int
+    let activeRefreshTokens: Int
+}
+
 struct ToolCallApprovalRequest: Identifiable, Hashable, Sendable {
     enum State: String, Sendable {
         case pending
@@ -80,12 +102,36 @@ struct ToolCallApprovalRequest: Identifiable, Hashable, Sendable {
     }
 
     let id: UUID
+    let clientID: String?
+    let clientName: String?
     let toolID: String
     let toolName: String
     let capability: ToolCapability
     let argumentsPreview: String
     let createdAt: Date
     var state: State
+
+    init(
+        id: UUID,
+        clientID: String? = nil,
+        clientName: String? = nil,
+        toolID: String,
+        toolName: String,
+        capability: ToolCapability,
+        argumentsPreview: String,
+        createdAt: Date,
+        state: State
+    ) {
+        self.id = id
+        self.clientID = clientID
+        self.clientName = clientName
+        self.toolID = toolID
+        self.toolName = toolName
+        self.capability = capability
+        self.argumentsPreview = argumentsPreview
+        self.createdAt = createdAt
+        self.state = state
+    }
 
     var stateTitle: String {
         switch state {
@@ -102,6 +148,7 @@ enum FullDiskAccessState: Equatable, Sendable {
     case checking
     case ready
     case required
+    case confirmationRequired
     case helperOpened
     case failed(String)
 
@@ -111,8 +158,43 @@ enum FullDiskAccessState: Equatable, Sendable {
         case .checking: "Checking"
         case .ready: "Ready"
         case .required: "Required"
+        case .confirmationRequired: "Confirm Setup"
         case .helperOpened: "Helper Opened"
         case .failed: "Failed"
+        }
+    }
+}
+
+enum FullDiskAccessTargetRole: String, Equatable, Sendable {
+    case hostApp
+    case toolExecutable
+    case toolInterpreter
+    case helperReported
+
+    var title: String {
+        switch self {
+        case .hostApp: "Host app"
+        case .toolExecutable: "Tool"
+        case .toolInterpreter: "Interpreter"
+        case .helperReported: "Helper"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .hostApp: "app.badge"
+        case .toolExecutable: "terminal"
+        case .toolInterpreter: "curlybraces"
+        case .helperReported: "checklist.checked"
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .hostApp: 0
+        case .helperReported: 1
+        case .toolInterpreter: 2
+        case .toolExecutable: 3
         }
     }
 }
@@ -122,12 +204,28 @@ struct FullDiskAccessTarget: Identifiable, Equatable, Sendable {
     let title: String
     let path: String
     let subtitle: String
+    let role: FullDiskAccessTargetRole
+
+    init(
+        title: String,
+        path: String,
+        subtitle: String,
+        role: FullDiskAccessTargetRole = .helperReported
+    ) {
+        self.title = title
+        self.path = path
+        self.subtitle = subtitle
+        self.role = role
+    }
 }
 
 struct FullDiskAccessReport: Equatable, Sendable {
     var state: FullDiskAccessState = .unknown
-    var detail: String = "Check Full Disk Access before exposing full RemCTL over MCP."
+    var detail: String = "Check Full Disk Access before exposing tools that require protected local data."
     var targets: [FullDiskAccessTarget] = []
+    var requiresManualConfirmation = false
+    var confirmationSignature: String?
+    var automaticChecksPassed = false
 
     var isReady: Bool {
         state == .ready
@@ -144,7 +242,7 @@ struct FullDiskAccessPrompt: Identifiable, Equatable, Sendable {
         var title: String {
             switch self {
             case .serverStart: "Full Disk Access Required"
-            case .remCTLTest: "RemCTL Test Blocked"
+            case .remCTLTest: "Reminders Test Blocked"
             case .remoteProof: "Remote MCP Proof Blocked"
             case .manualCheck: "Full Disk Access Required"
             }
@@ -155,17 +253,45 @@ struct FullDiskAccessPrompt: Identifiable, Equatable, Sendable {
             case .serverStart:
                 "MacRemote cannot start an MCP server with FDA-required tools until the app-launched CLI process can read its protected data."
             case .remCTLTest:
-                "The safe RemCTL test must run from the same app process context that remote MCP calls will use."
+                "The test tool must run from the same app process context that remote MCP calls will use."
             case .remoteProof:
                 "Remote MCP verification is blocked until FDA-required tools pass their local permission check."
             case .manualCheck:
-                "Grant access to every listed target, relaunch MacRemote, then check again."
+                "Grant access to every listed target. If System Settings already shows access enabled, relaunch MacRemote, then check again."
             }
         }
     }
 
     let id = UUID()
     let reason: Reason
+}
+
+enum MacOSPrivacyAccessState: Equatable, Sendable {
+    case unknown
+    case checking
+    case ready
+    case required([ToolPermissionRequirement])
+    case failed(String)
+
+    var title: String {
+        switch self {
+        case .unknown: "Unknown"
+        case .checking: "Checking"
+        case .ready: "Ready"
+        case .required: "Required"
+        case .failed: "Failed"
+        }
+    }
+}
+
+struct MacOSPrivacyAccessReport: Equatable, Sendable {
+    var state: MacOSPrivacyAccessState = .unknown
+    var detail: String = "Check macOS privacy access before exposing tools that use protected app data."
+    var checkedRequirements: [ToolPermissionRequirement] = []
+
+    var isReady: Bool {
+        state == .ready
+    }
 }
 
 enum SmokeTestMode: String, Equatable, Sendable {

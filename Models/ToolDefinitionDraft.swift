@@ -25,6 +25,7 @@ struct ToolDefinitionDraft: Equatable {
     var timeoutSeconds: Double = 10
     var outputLimitKB: Int = 512
     var requiresFullDiskAccess = false
+    var permissionRequirements: [ToolPermissionRequirement] = []
 
     var argumentPattern: [String] {
         if mode == .cliAdapter {
@@ -50,7 +51,9 @@ struct ToolDefinitionDraft: Equatable {
             outputByteLimit: outputLimitKB * 1024,
             origin: .userDefined,
             category: category,
-            permissionRequirements: requiresFullDiskAccess ? [.fullDiskAccess] : []
+            permissionRequirements: ToolPermissionRequirement.normalized(
+                permissionRequirements + (requiresFullDiskAccess ? [.fullDiskAccess] : [])
+            )
         )
         try ToolArgumentResolver.validate(tool)
         return tool
@@ -90,7 +93,7 @@ struct ToolDefinitionDraft: Equatable {
                     name: name,
                     title: name.replacingOccurrences(of: "_", with: " ").capitalized,
                     kind: .string,
-                    maximumLength: 256
+                    maximumLength: maximumLength(for: name)
                 ))
             }
         }
@@ -106,6 +109,21 @@ struct ToolDefinitionDraft: Equatable {
         }
 
         return parameters
+    }
+
+    private static func maximumLength(for placeholderName: String) -> Int {
+        switch placeholderName {
+        case "prompt", "instructions":
+            4096
+        case "input", "url":
+            2048
+        case "path", "root", "working_directory", "workdir", "repository":
+            1024
+        case "filter", "pattern", "query":
+            512
+        default:
+            256
+        }
     }
 
     private static func makeID() -> String {

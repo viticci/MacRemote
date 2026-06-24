@@ -60,8 +60,9 @@ the tool surface and that OAuth plus per-call approval gates still apply.
 The main UI is a native `NavigationSplitView` with these sections:
 
 - Dashboard: server, tunnel, and auth status.
-- Tools: allowed tool profiles, generic CLI adapters, and individual command
-  templates.
+- Tools: detected presets, preset sets, generic CLI adapters, and individual
+  command templates.
+- Clients: connected OAuth clients and persistent per-client tool policies.
 - Approvals: pending and recent OAuth authorization requests.
 - Tunnel: Cloudflare setup and current public MCP URL.
 - Logs: execution and auth audit trail.
@@ -135,14 +136,25 @@ MacRemote supports two CLI exposure modes:
   placeholders such as `{query}` become typed MCP parameters. This is the
   safer mode for CLIs where only one subcommand or workflow should be exposed.
 
-The app ships opt-in preset categories that prefill fixed command templates for
-common operations: Filesystem, Utilities, Image Processing, Text, and Developer.
-Presets are convenience drafts, not an expanded default tool surface. Filesystem
-presets must remain read-only and must not include delete, unlink, or trash
-commands. Write-capable image presets must write to explicit output paths and be
-labeled as write tools. Registered tools are distinct from the active exposed
-surface: the full RemCTL profile is enabled by default, but the user can disable
-it and serve only selected custom CLI adapters.
+Tool serialization follows the current MCP tool schema shape:
+
+- `name`: stable programmatic id;
+- `title`: human-readable display name;
+- `description`: behavior, argv, approval, and permission guidance;
+- `inputSchema`: JSON Schema object for model-supplied arguments;
+- `outputSchema`: JSON Schema object for structured command results;
+- `annotations`: `title`, `readOnlyHint`, `destructiveHint`,
+  `idempotentHint`, and `openWorldHint`.
+
+The app ships opt-in preset categories that prefill fixed command templates and
+generic CLI adapters for common operations: Reminders, Podcasts, Filesystem,
+Utilities, Image Processing, Text, and Developer. Presets are convenience drafts,
+not an expanded default tool surface. Filesystem presets must remain read-only
+and must not include delete, unlink, or trash commands. Write-capable image
+presets must write to explicit output paths and be labeled as write tools.
+Registered tools are distinct from the active exposed surface: the user chooses
+which saved tools are exposed, regardless of whether the executable is RemCTL,
+PocketCTL, Codex, or another command.
 
 This follows the practical direction of projects such as `cli2mcp`, which wraps
 arbitrary CLI binaries as MCP tools, while avoiding shell wrappers and keeping
@@ -151,10 +163,11 @@ generic adapter ergonomics by parsing `--help` output into richer flag schemas;
 the security model must still treat every exposed executable as a delegated
 capability rather than a sandbox.
 
-The first remote profile is the full RemCTL CLI, with read helpers for common
+One common optional preset set is the RemCTL CLI, with read helpers for common
 queries:
 
-- executable: `/Users/viticci/bin/remctl`
+- executable: the detected `remctl` path from `PATH` or common user/Homebrew bin
+  directories;
 - full adapter tool: `remctl.run`, which passes validated argv arrays directly
   to RemCTL;
 - read helper tools: `today`, `upcoming`, `overdue`, `lists`, `sections`,
@@ -164,28 +177,32 @@ queries:
   write and delete operations.
 
 Read-only helper tools can execute after OAuth token validation. Write and
-destructive tools require a second host approval for each call. The MCP request
+destructive tools require a second host approval for each call unless the host
+has granted that connected client persistent access to the tool. The MCP request
 waits while the call is shown in the Approvals view with the tool name,
 capability, and argument preview. Denied or expired calls return a JSON-RPC
 error and never reach the process runner.
 
-Tool definitions can declare permission requirements. Full RemCTL uses the
-local Reminders CoreData store for high-fidelity reads and normal RemCTL write
-paths for mutations, so every built-in RemCTL tool declares Full Disk Access.
-When launched from a GUI app bundle, macOS privacy controls can block that
-access unless the app has FDA. MacRemote blocks local server startup when the
-exposed surface contains FDA-required tools until `remctl doctor --for-agent
---json` passes from the app process context. If the check fails, MacRemote shows
-an app-wide permission sheet with the exact RemCTL permission targets,
-copy/reveal actions, Settings routing, and RemCTL's guided Full Disk Access
-helper.
+Tool definitions can declare permission requirements. Full Disk Access is one
+requirement; macOS privacy services such as Reminders, Screen Recording,
+Accessibility, Automation, and Local Network are separate requirements. When
+launched from a GUI app bundle, macOS privacy controls can attribute protected
+access to MacRemote as the host app, to the executable, or to the interpreter
+behind a script-based CLI. MacRemote blocks local server startup when the exposed
+surface contains missing required access. The app shows the exact targets to
+grant, copy/reveal actions, Settings routing, relaunch guidance, and a fresh
+check path.
 
-Generic CLIs do not inherit RemCTL's FDA requirement. The user can mark a custom
-tool as FDA-required when its executable needs protected local data. PocketCTL is
-the first validation case for this separation: when `pocketctl` is installed,
-MacRemote offers PocketCTL presets, can expose a PocketCTL-only surface with the
-RemCTL profile disabled, and the test suite exercises a real
-`pocketctl whoami --json` call through MCP after OAuth.
+No generic CLI inherits another CLI's permission requirement. RemCTL presets
+declare Full Disk Access and Reminders. Peekaboo declares Screen Recording and
+Accessibility. AppleScript-style tools declare Automation and Accessibility.
+Custom tools can declare the same requirements through the app or
+`script/macremotectl --require`.
+
+When tools are added, removed, or toggled while the local server is running, the
+server updates its `tools/list` surface. Connected clients can refresh the tool
+list; clients that cache aggressively may need to reconnect, but the tunnel does
+not need to stop solely because the tool registry changed.
 
 ### Tunnel Manager
 
@@ -283,10 +300,10 @@ The first useful build should include:
 
 - SwiftUI shell with Dashboard, Tools, Approvals, Tunnel, Logs, Settings;
 - local server lifecycle state;
-- default RemCTL registry plus selectable custom CLI exposure;
+- user-defined tool registry with selectable exposure;
 - generic CLI adapter for user-defined executable paths;
-- opt-in preset command categories for common CLI templates;
-- local RemCTL tool runner with tests;
+- opt-in preset sets and command categories for common CLI templates;
+- optional RemCTL, PocketCTL, Codex, and detected CLI presets with tests;
 - security design and threat model artifacts;
 - build/run script and Codex Run action.
 

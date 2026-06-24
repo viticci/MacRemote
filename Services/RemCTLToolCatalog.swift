@@ -1,12 +1,21 @@
 import Foundation
 
 enum RemCTLToolCatalog {
-    static let executablePath = "/Users/viticci/bin/remctl"
+    private static let permissionRequirements: [ToolPermissionRequirement] = [.fullDiskAccess, .reminders]
 
-    static let fullCLITool = ToolDefinition(
+    static var detectedExecutablePath: String? {
+        ExecutableLocator.executablePath(named: "remctl")
+    }
+
+    static var executablePath: String {
+        detectedExecutablePath ?? "\(ExecutableLocator.homeDirectory)/bin/remctl"
+    }
+
+    static var fullCLITool: ToolDefinition {
+        ToolDefinition(
         id: "remctl.run",
         name: "Run RemCTL",
-        summary: "Run the full RemCTL CLI by passing argv directly. Requires MacRemote's Full Disk Access preflight before the server can start.",
+        summary: "Run the Reminders CLI by passing argv directly. Requires Full Disk Access because the command reads protected Reminders data.",
         executablePath: executablePath,
         argumentPattern: ["{args}"],
         parameters: [
@@ -28,10 +37,12 @@ enum RemCTLToolCatalog {
         timeoutSeconds: 30,
         outputByteLimit: 2 * 1024 * 1024,
         category: .reminders,
-        permissionRequirements: [.fullDiskAccess]
-    )
+        permissionRequirements: permissionRequirements
+        )
+    }
 
-    static let readOnlyTools: [ToolDefinition] = [
+    static var readOnlyTools: [ToolDefinition] {
+        [
         ToolDefinition(
             id: "remctl.today",
             name: "Today",
@@ -43,7 +54,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.upcoming",
@@ -65,7 +76,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 1024 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.overdue",
@@ -78,7 +89,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.lists",
@@ -91,7 +102,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.sections",
@@ -104,7 +115,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.stats",
@@ -117,7 +128,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.search",
@@ -137,7 +148,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 1024 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.show",
@@ -157,7 +168,7 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 1024 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         ),
         ToolDefinition(
             id: "remctl.info",
@@ -177,11 +188,12 @@ enum RemCTLToolCatalog {
             timeoutSeconds: 10,
             outputByteLimit: 512 * 1024,
             category: .reminders,
-            permissionRequirements: [.fullDiskAccess]
+            permissionRequirements: permissionRequirements
         )
-    ]
+        ]
+    }
 
-    static let builtInTools: [ToolDefinition] = [fullCLITool] + readOnlyTools
+    static var builtInTools: [ToolDefinition] { [fullCLITool] + readOnlyTools }
 
     static func tool(id: String) -> ToolDefinition? {
         builtInTools.first { $0.id == id }

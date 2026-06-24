@@ -5,10 +5,12 @@ import Network
 enum LocalMCPServerEvent: Sendable {
     case log(AppLogEntry.Level, String)
     case approvalsChanged([ApprovalRequest])
+    case clientsChanged([ConnectedClient])
 }
 
 final class LocalMCPServer: @unchecked Sendable {
     typealias EventHandler = @Sendable (LocalMCPServerEvent) -> Void
+    typealias ToolProvider = @Sendable () -> [ToolDefinition]
 
     private static let latestProtocolVersion = "2025-11-25"
     private static let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
@@ -18,10 +20,11 @@ final class LocalMCPServer: @unchecked Sendable {
     private var listener: NWListener?
     private var activePort: UInt16?
     private let instanceID: String
-    private let tools: [ToolDefinition]
+    private let toolProvider: ToolProvider
     private let authCoordinator: OAuthCoordinator
     private let toolCallApprovalCoordinator: ToolCallApprovalCoordinator?
     private let toolExecutor: any ToolExecuting
+    private let clientToolPermissionStore: ClientToolPermissionStore?
     private let eventHandler: EventHandler?
     private let publicRateLimiter = PublicRequestRateLimiter()
 
@@ -31,13 +34,33 @@ final class LocalMCPServer: @unchecked Sendable {
         authCoordinator: OAuthCoordinator,
         toolCallApprovalCoordinator: ToolCallApprovalCoordinator? = nil,
         toolExecutor: any ToolExecuting,
+        clientToolPermissionStore: ClientToolPermissionStore? = nil,
         eventHandler: EventHandler? = nil
     ) {
         self.instanceID = instanceID
-        self.tools = tools
+        self.toolProvider = { tools }
         self.authCoordinator = authCoordinator
         self.toolCallApprovalCoordinator = toolCallApprovalCoordinator
         self.toolExecutor = toolExecutor
+        self.clientToolPermissionStore = clientToolPermissionStore
+        self.eventHandler = eventHandler
+    }
+
+    init(
+        instanceID: String,
+        toolProvider: @escaping ToolProvider,
+        authCoordinator: OAuthCoordinator,
+        toolCallApprovalCoordinator: ToolCallApprovalCoordinator? = nil,
+        toolExecutor: any ToolExecuting,
+        clientToolPermissionStore: ClientToolPermissionStore? = nil,
+        eventHandler: EventHandler? = nil
+    ) {
+        self.instanceID = instanceID
+        self.toolProvider = toolProvider
+        self.authCoordinator = authCoordinator
+        self.toolCallApprovalCoordinator = toolCallApprovalCoordinator
+        self.toolExecutor = toolExecutor
+        self.clientToolPermissionStore = clientToolPermissionStore
         self.eventHandler = eventHandler
     }
 
@@ -282,15 +305,16 @@ final class LocalMCPServer: @unchecked Sendable {
         ]
 
         if base == localBaseURL(activePort: activePort) {
+            let tools = toolProvider()
             payload["instance_id"] = instanceID
-            payload["tool_profile"] = toolProfileName
+            payload["tool_profile"] = toolProfileName(for: tools)
             payload["tool_count"] = tools.count
         }
 
         return payload
     }
 
-    private var toolProfileName: String {
+    private func toolProfileName(for tools: [ToolDefinition]) -> String {
         guard !tools.isEmpty else { return "empty" }
 
         let builtInCount = tools.filter { $0.origin == .builtIn }.count
@@ -460,6 +484,7 @@ final class LocalMCPServer: @unchecked Sendable {
                 resource: resource
             )
             eventHandler?(.log(.info, "OAuth token issued after host approval."))
+            eventHandler?(.clientsChanged(authCoordinator.connectedClientSnapshot()))
             return jsonResponse(response)
         } catch {
             return oauthErrorResponse(error)
@@ -477,7 +502,11 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         guard let bearerToken = request.bearerToken,
-              authCoordinator.validateAccessToken(bearerToken, issuer: base, resource: mcpResourceURL(base: base)) else {
+              let client = authCoordinator.clientContext(
+                forAccessToken: bearerToken,
+                issuer: base,
+                resource: mcpResourceURL(base: base)
+              ) else {
             if isPublicRequest,
                let response = publicRateLimitResponseIfNeeded(for: .unauthorizedMCP) {
                 return response
@@ -520,10 +549,10 @@ final class LocalMCPServer: @unchecked Sendable {
                 return jsonRPCResult(id: id, result: [:])
             case "tools/list":
                 return jsonRPCResult(id: id, result: [
-                    "tools": tools.map(toolJSON)
+                    "tools": toolProvider().map(toolJSON)
                 ])
             case "tools/call":
-                return await callTool(id: id, message: message)
+                return await callTool(id: id, message: message, client: client)
             case "notifications/initialized":
                 return HTTPResponse(status: .accepted, headers: mcpResponseHeaders(), body: "").data
             default:
@@ -549,7 +578,7 @@ final class LocalMCPServer: @unchecked Sendable {
         return requestedVersion
     }
 
-    private func callTool(id: Any?, message: [String: Any]) async -> Data {
+    private func callTool(id: Any?, message: [String: Any], client: AuthenticatedClientContext) async -> Data {
         guard let params = message["params"] as? [String: Any],
               let name = params["name"] as? String else {
             return jsonRPCError(id: id, code: -32602, message: "Missing tool name.")
@@ -586,20 +615,36 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         do {
-            if let tool = tools.first(where: { $0.id == name }),
+            if let tool = toolProvider().first(where: { $0.id == name }),
                tool.capability != .readOnly {
-                guard let toolCallApprovalCoordinator else {
-                    eventHandler?(.log(.warning, "Blocked \(tool.name): host approval gate is unavailable."))
-                    return jsonRPCError(id: id, code: -32003, message: "Host approval is required for this tool.")
-                }
+                if clientToolPermissionStore?.isAllowed(clientID: client.clientID, toolID: tool.id) == true {
+                    eventHandler?(.log(.info, "\(tool.name) allowed by \(client.clientName)'s client policy."))
+                } else {
+                    guard let toolCallApprovalCoordinator else {
+                        eventHandler?(.log(.warning, "Blocked \(tool.name): host approval gate is unavailable."))
+                        return toolExecutionErrorResult(
+                            id: id,
+                            tool: tool,
+                            message: "Host approval is required for this tool."
+                        )
+                    }
 
-                eventHandler?(.log(.warning, "\(tool.name) is waiting for host approval before execution."))
-                let approved = await toolCallApprovalCoordinator.requestApproval(tool: tool, parameters: arguments)
-                guard approved else {
-                    eventHandler?(.log(.warning, "\(tool.name) was denied or expired before execution."))
-                    return jsonRPCError(id: id, code: -32004, message: "Tool call was not approved on the host Mac.")
+                    eventHandler?(.log(.warning, "\(tool.name) is waiting for host approval before execution."))
+                    let approved = await toolCallApprovalCoordinator.requestApproval(
+                        tool: tool,
+                        parameters: arguments,
+                        client: client
+                    )
+                    guard approved else {
+                        eventHandler?(.log(.warning, "\(tool.name) was denied or expired before execution."))
+                        return toolExecutionErrorResult(
+                            id: id,
+                            tool: tool,
+                            message: "Tool call was not approved on the host Mac."
+                        )
+                    }
+                    eventHandler?(.log(.info, "\(tool.name) approved on host Mac."))
                 }
-                eventHandler?(.log(.info, "\(tool.name) approved on host Mac."))
             }
 
             let outcome = try await toolExecutor.execute(toolID: name, parameters: arguments)
@@ -623,6 +668,31 @@ final class LocalMCPServer: @unchecked Sendable {
         } catch {
             return jsonRPCError(id: id, code: -32000, message: error.localizedDescription)
         }
+    }
+
+    private func toolExecutionErrorResult(id: Any?, tool: ToolDefinition, message: String) -> Data {
+        let structuredContent: [String: Any] = [
+            "toolID": tool.id,
+            "toolName": tool.name,
+            "exitCode": -1,
+            "succeeded": false,
+            "stdout": "",
+            "stderr": message,
+            "durationSeconds": 0,
+            "timedOut": false,
+            "truncatedStdout": false,
+            "truncatedStderr": false
+        ]
+        return jsonRPCResult(id: id, result: [
+            "structuredContent": structuredContent,
+            "content": [
+                [
+                    "type": "text",
+                    "text": serializedJSON(structuredContent)
+                ]
+            ],
+            "isError": true
+        ])
     }
 
     private func structuredContent(for outcome: ToolExecutionOutcome) -> [String: Any] {
@@ -649,7 +719,7 @@ final class LocalMCPServer: @unchecked Sendable {
         [
             "name": tool.id,
             "title": tool.name,
-            "description": tool.summary,
+            "description": toolDescription(for: tool),
             "inputSchema": inputSchema(for: tool),
             "outputSchema": outputSchema(),
             "annotations": [
@@ -657,9 +727,52 @@ final class LocalMCPServer: @unchecked Sendable {
                 "readOnlyHint": tool.capability == .readOnly,
                 "destructiveHint": tool.capability == .destructive,
                 "idempotentHint": tool.capability == .readOnly && !tool.isGenericCLIAdapter,
-                "openWorldHint": tool.isGenericCLIAdapter
+                "openWorldHint": tool.isGenericCLIAdapter || tool.capability != .readOnly
             ]
         ]
+    }
+
+    private func toolDescription(for tool: ToolDefinition) -> String {
+        var parts = [tool.summary]
+
+        if tool.isGenericCLIAdapter {
+            parts.append("Pass exact argv items as the `args` array; optional `stdin` is sent to standard input.")
+            parts.append("MacRemote launches the executable directly without a shell: do not use `~`, `$HOME`, pipes, redirection, globs, command substitution, or environment assignments. Use absolute paths and separate every flag/value into its own argv item.")
+
+            switch URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() {
+            case "codex":
+                parts.append("For Codex, global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`; options after `exec` are parsed by the exec subcommand.")
+            case "remctl":
+                parts.append("For RemCTL, pass the numeric `id` field from JSON results to commands such as `edit`, `info`, `done`, `delete`, `flag`, and `unflag`; do not pass the UUID embedded in `deepLink`.")
+                parts.append("Use `--private` only for private Reminders metadata such as sections, tags, subtasks, images, flags, urgency, assignment, or location alarms. Do not use `--private` for normal due dates or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
+            default:
+                break
+            }
+        } else if tool.parameters.isEmpty {
+            parts.append("This command has no model-supplied arguments.")
+        } else {
+            parts.append("Only the documented schema parameters are accepted.")
+        }
+
+        switch tool.capability {
+        case .readOnly:
+            parts.append("Read-only: expected not to modify local state.")
+        case .write:
+            parts.append("Write-capable: requires host approval before execution.")
+        case .destructive:
+            parts.append("Destructive or broad CLI access: requires host approval before execution.")
+        }
+
+        if tool.permissionRequirements.contains(.fullDiskAccess) {
+            parts.append("Requires Full Disk Access on the host Mac.")
+        }
+        let privacyRequirements = tool.permissionRequirements.filter { !$0.isFullDiskAccess }
+        if !privacyRequirements.isEmpty {
+            let names = privacyRequirements.map(\.title).joined(separator: ", ")
+            parts.append("May require macOS privacy permission for \(names); macOS can attribute child CLI access to MacRemote as the host app.")
+        }
+
+        return parts.joined(separator: " ")
     }
 
     private func outputSchema() -> [String: Any] {
@@ -698,7 +811,7 @@ final class LocalMCPServer: @unchecked Sendable {
         var required = [String]()
 
         for parameter in tool.parameters {
-            properties[parameter.name] = parameterSchema(parameter)
+            properties[parameter.name] = parameterSchema(parameter, for: tool)
             if parameter.required {
                 required.append(parameter.name)
             }
@@ -715,9 +828,10 @@ final class LocalMCPServer: @unchecked Sendable {
         return schema
     }
 
-    private func parameterSchema(_ parameter: ToolParameter) -> [String: Any] {
+    private func parameterSchema(_ parameter: ToolParameter, for tool: ToolDefinition) -> [String: Any] {
         var schema: [String: Any] = [
-            "title": parameter.title
+            "title": parameter.title,
+            "description": parameterDescription(parameter, for: tool)
         ]
 
         switch parameter.kind {
@@ -742,6 +856,20 @@ final class LocalMCPServer: @unchecked Sendable {
             schema["default"] = defaultValue
         }
         return schema
+    }
+
+    private func parameterDescription(_ parameter: ToolParameter, for tool: ToolDefinition) -> String {
+        switch parameter.name {
+        case "args", "argv":
+            if URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() == "remctl" {
+                return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Do not use `--private` for ordinary `edit ID -d DATE` or `edit ID --alarm DATE` calls."
+            }
+            return "Exact argv items to pass to the executable. No shell is used: do not include `~`, variables, pipes, redirection, globs, or combined command strings."
+        case "stdin":
+            return "Optional standard input passed directly to the process."
+        default:
+            return parameter.title
+        }
     }
 
     private func jsonRPCResult(id: Any?, result: [String: Any], status: HTTPResponse.Status = .ok) -> Data {

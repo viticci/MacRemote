@@ -19,10 +19,16 @@ final class ToolCallApprovalCoordinator: @unchecked Sendable {
         self.changeHandler = changeHandler
     }
 
-    func requestApproval(tool: ToolDefinition, parameters: [String: ToolArgumentValue]) async -> Bool {
+    func requestApproval(
+        tool: ToolDefinition,
+        parameters: [String: ToolArgumentValue],
+        client: AuthenticatedClientContext? = nil
+    ) async -> Bool {
         let id = UUID()
         let request = ToolCallApprovalRequest(
             id: id,
+            clientID: client?.clientID,
+            clientName: client?.clientName,
             toolID: tool.id,
             toolName: tool.name,
             capability: tool.capability,

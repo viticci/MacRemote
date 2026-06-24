@@ -28,6 +28,42 @@ final class OAuthCoordinatorTests: XCTestCase {
         }
     }
 
+    func testNativeAppRedirectSchemeCanRegisterForDynamicClients() throws {
+        let coordinator = OAuthCoordinator()
+        let redirectURI = "raycast://extensions/raycast/raycast/mcp-oauth-callback"
+
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Raycast",
+            "redirect_uris": [redirectURI],
+            "scope": "mcp:tools"
+        ])
+
+        XCTAssertNotNil(client["client_id"] as? String)
+        XCTAssertEqual(client["redirect_uris"] as? [String], [redirectURI])
+    }
+
+    func testUnsafeRedirectSchemesAreRejectedForDynamicClients() throws {
+        let coordinator = OAuthCoordinator()
+
+        for redirectURI in [
+            "javascript:alert(1)",
+            "file:///tmp/callback"
+        ] {
+            XCTAssertThrowsError(
+                try coordinator.registerClient(from: [
+                    "client_name": "Unsafe",
+                    "redirect_uris": [redirectURI],
+                    "scope": "mcp:tools"
+                ])
+            ) { error in
+                XCTAssertEqual(
+                    error as? OAuthError,
+                    .invalidRequest("redirect_uri must use HTTPS, loopback HTTP, or a private-use app scheme.")
+                )
+            }
+        }
+    }
+
     func testPendingAuthorizationsAreCapped() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "https://macremote.example"

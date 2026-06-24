@@ -7,14 +7,14 @@ struct ApprovalsView: View {
         VStack(alignment: .leading, spacing: 18) {
             HeaderView(
                 title: "Approvals",
-                subtitle: "Approve new remote clients and write-capable tool calls on this Mac."
+                subtitle: "Approve new remote clients and one-off write-capable tool calls on this Mac."
             )
 
             if appModel.approvals.isEmpty && appModel.toolCallApprovals.isEmpty {
                 ContentUnavailableView(
                     "No Pending Requests",
                     systemImage: "checkmark.shield",
-                    description: Text("Client authorization and write-capable tool calls will appear here.")
+                    description: Text("Client authorization and host-gated tool calls will appear here.")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -144,6 +144,11 @@ private struct ToolCallApprovalRow: View {
                     Text(request.toolID)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let clientName = request.clientName {
+                        Text(clientName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Spacer()
@@ -180,6 +185,12 @@ private struct ToolCallApprovalRow: View {
                         appModel.approveToolCallRequest(request.id)
                     }
                     .buttonStyle(.borderedProminent)
+
+                    if request.clientID != nil {
+                        Button("Always Allow", systemImage: "checkmark.shield") {
+                            appModel.approveToolCallForever(request.id)
+                        }
+                    }
                 }
             }
         }

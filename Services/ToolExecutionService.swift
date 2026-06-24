@@ -39,7 +39,13 @@ struct ConfiguredToolExecutor: ToolExecuting {
             throw ToolValidationError.unknownTool(toolID)
         }
 
-        let arguments = try ToolArgumentResolver.arguments(for: tool, parameters: parameters)
+        var arguments = try ToolArgumentResolver.arguments(for: tool, parameters: parameters)
+        arguments = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: tool,
+            arguments: arguments,
+            runner: runner,
+            environment: environment
+        )
         let standardInput = parameters["stdin"]?.stringValue
         let result = try await runner.run(
             executablePath: tool.executablePath,
