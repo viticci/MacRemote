@@ -80,6 +80,56 @@ final class TunnelServiceTests: XCTestCase {
         XCTAssertEqual(model.selection, .settings)
         XCTAssertTrue(model.logs.first?.message.contains("Rotated instance ID") == true)
     }
+
+    @MainActor
+    func testCustomDomainDeployIsAllowedBeforeLocalServerStarts() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
+        model.serverStatus = .stopped
+        model.localServerURL = nil
+        model.cloudflareZones = [
+            CloudflareZone(
+                id: "zone-id",
+                name: "viticci.net",
+                accountID: "account-id",
+                accountName: "Test Account"
+            )
+        ]
+        model.cloudflareDraft.selectedZoneID = "zone-id"
+        model.cloudflareDraft.subdomain = "macremote-fresh-clients"
+        model.cloudflareDraft.apiToken = "test-token"
+        model.cloudflareCustomDomainState = .ready
+
+        XCTAssertTrue(model.canDeployCustomDomainTunnel)
+        XCTAssertEqual(model.customDomainDeployHint, "Deploy will start the local MCP server first.")
+    }
+
+    @MainActor
+    func testCustomDomainDeployHintRequiresAPIToken() throws {
+        let defaults = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
+
+        let model = try makeIsolatedAppModel(userDefaults: defaults)
+        model.cloudflareZones = [
+            CloudflareZone(
+                id: "zone-id",
+                name: "viticci.net",
+                accountID: "account-id",
+                accountName: "Test Account"
+            )
+        ]
+        model.cloudflareDraft.selectedZoneID = "zone-id"
+        model.cloudflareDraft.subdomain = "macremote-fresh-clients"
+        model.cloudflareCustomDomainState = .ready
+
+        XCTAssertTrue(model.canDeployCustomDomainTunnel)
+        XCTAssertEqual(
+            model.customDomainDeployHint,
+            CloudflareServiceError.missingAPIToken.localizedDescription
+        )
+    }
 }
 
 private func makeIsolatedDefaults(

@@ -12,7 +12,10 @@ public issues with secrets, tunnel URLs, OAuth tokens, or local command output.
 ## Security Model
 
 - The local MCP server binds to `127.0.0.1`.
-- Public access goes through a Cloudflare Tunnel URL containing an instance path.
+- Public access goes through a Cloudflare Tunnel URL containing an instance path;
+  the hostname can be temporary or a user-owned Cloudflare custom domain.
+- Cloudflare Access service-token headers can be added as an outer transport
+  gate for clients that support static headers.
 - A leaked URL alone must not authorize tool calls.
 - OAuth + PKCE and host-side approval are required before token issuance.
 - Tool calls require a valid bearer token bound to the approved resource.

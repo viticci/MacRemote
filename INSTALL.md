@@ -16,6 +16,11 @@ MacRemote needs:
 - macOS 14 or later.
 - Xcode Command Line Tools or Xcode with `/usr/bin/swift`.
 - `cloudflared` for public MCP tunnels.
+- Optional: `wrangler`, authenticated with `wrangler login`, to list Cloudflare
+  domains.
+- Optional: a Cloudflare API token for persistent custom-domain deployment. The
+  token needs read and write access for DNS, Cloudflare Tunnel, Access Apps and
+  Policies, and Access Service Tokens.
 
 Optional CLIs are detected automatically. Install only the commands you want to
 expose, such as RemCTL, PocketCTL, Codex, Peekaboo, Spogo, Summarize, Gog, GitHub
@@ -84,7 +89,8 @@ executable, and sometimes the interpreter used by a script-based CLI.
 In the app:
 
 1. Start the local server from **Dashboard**.
-2. Start the tunnel from **Tunnel**.
+2. Start a temporary tunnel from **Tunnel**, or use **Custom Domain** to deploy a
+   named Cloudflare Tunnel to a domain available to Wrangler on this Mac.
 3. Copy the public MCP URL.
 4. Add that URL to the remote MCP client.
 5. Approve the OAuth client request in **Approvals**.
@@ -94,6 +100,17 @@ The URL shape is:
 ```text
 https://<trycloudflare-host>/mcp/<instance-id>
 ```
+
+Custom domains use the same path:
+
+```text
+https://<subdomain.example.com>/mcp/<instance-id>
+```
+
+Paste the Cloudflare API token into **Custom Domain** before deploying. If you
+enable Cloudflare Access, copy the generated headers into clients that support
+static request headers, such as Raycast. Keep OAuth Type set to Dynamic;
+Cloudflare Access is an outer gate and does not replace MacRemote OAuth.
 
 Rotate the instance ID from **Settings** when the URL should be invalidated.
 

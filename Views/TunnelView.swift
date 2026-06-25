@@ -77,6 +77,8 @@ struct TunnelView: View {
                 }
                 .panelStyle()
 
+                CustomDomainPanel()
+
                 SmokeTestPanel()
 
                 SmokeProofPanel(record: appModel.lastSmokeProof)
@@ -130,6 +132,132 @@ struct TunnelView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
         appModel.appendLog(level: .info, "Copied \(mode.logTitle) command.")
+    }
+}
+
+private struct CustomDomainPanel: View {
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        @Bindable var appModel = appModel
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Custom Domain")
+                    .font(.headline)
+
+                Spacer()
+
+                if appModel.cloudflareCustomDomainState.isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Button("Load Domains", systemImage: "arrow.clockwise") {
+                    appModel.refreshCloudflareDomains()
+                }
+                .disabled(appModel.cloudflareCustomDomainState.isWorking)
+            }
+
+            Text("Use a named Cloudflare Tunnel on one of the domains available to Wrangler on this Mac.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                GridRow {
+                    Text("Status")
+                        .foregroundStyle(.secondary)
+                    Text(appModel.cloudflareCustomDomainState.title)
+                }
+
+                GridRow {
+                    Text("Domain")
+                        .foregroundStyle(.secondary)
+                    Picker("Domain", selection: $appModel.cloudflareDraft.selectedZoneID) {
+                        Text("Choose a domain").tag(Optional<String>.none)
+                        ForEach(appModel.cloudflareZones) { zone in
+                            Text(zone.name).tag(Optional(zone.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280, alignment: .leading)
+                }
+
+                GridRow {
+                    Text("Subdomain")
+                        .foregroundStyle(.secondary)
+                    TextField("macremote", text: $appModel.cloudflareDraft.subdomain)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 280)
+                }
+
+                GridRow {
+                    Text("Hostname")
+                        .foregroundStyle(.secondary)
+                    Text(appModel.customCloudflareHostnamePreview ?? "Enter a valid subdomain")
+                        .foregroundStyle(appModel.customCloudflareHostnamePreview == nil ? .secondary : .primary)
+                        .textSelection(.enabled)
+                }
+
+                GridRow {
+                    Text("Access")
+                        .foregroundStyle(.secondary)
+                    Toggle("Protect with Cloudflare Access service-token headers", isOn: $appModel.cloudflareDraft.protectWithAccess)
+                        .toggleStyle(.checkbox)
+                }
+
+                GridRow {
+                    Text("API Token")
+                        .foregroundStyle(.secondary)
+                    SecureField("Required for deploy", text: $appModel.cloudflareDraft.apiToken)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 360)
+                }
+            }
+
+            Text(appModel.customDomainDeployHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Deploy Custom Domain", systemImage: "network.badge.shield.half.filled") {
+                    appModel.deployCustomDomainTunnel()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!appModel.canDeployCustomDomainTunnel)
+
+                if let headers = appModel.cloudflareAccessHeadersJSON {
+                    Button("Copy Raycast Headers", systemImage: "key.fill") {
+                        copy(headers)
+                        appModel.appendLog(level: .info, "Copied Cloudflare Access headers for Raycast.")
+                    }
+                }
+            }
+
+            if let deployment = appModel.lastCloudflareDeployment {
+                Divider()
+
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+                    ProofRow(label: "Hostname", value: deployment.hostname)
+                    ProofRow(label: "Tunnel", value: deployment.tunnelName)
+                    ProofRow(label: "Protection", value: deployment.accessCredentials == nil ? "MacRemote OAuth only" : "Cloudflare Access + MacRemote OAuth")
+                }
+
+                if deployment.accessCredentials != nil {
+                    Text("Raycast must send the copied `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on every MCP request. Keep Dynamic OAuth enabled for MacRemote's own bearer token.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .panelStyle()
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 }
 

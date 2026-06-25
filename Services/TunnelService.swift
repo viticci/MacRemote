@@ -57,15 +57,57 @@ final class TunnelService: @unchecked Sendable {
             throw TunnelServiceError.cloudflaredUnavailable
         }
 
+        try startProcess(
+            executablePath: path,
+            arguments: [
+                "tunnel",
+                "--no-autoupdate",
+                "--url",
+                localServerURL.absoluteString
+            ],
+            environment: [:],
+            initialPublicURL: nil,
+            startMessage: "cloudflared started for \(localServerURL.absoluteString).",
+            onEvent: onEvent
+        )
+    }
+
+    func startNamedTunnel(deployment: CloudflareCustomDomainDeployment, onEvent: @escaping EventHandler) throws {
+        guard let path = cloudflaredPath() else {
+            throw TunnelServiceError.cloudflaredUnavailable
+        }
+
+        try startProcess(
+            executablePath: path,
+            arguments: [
+                "tunnel",
+                "--no-autoupdate",
+                "run"
+            ],
+            environment: [
+                "TUNNEL_TOKEN": deployment.tunnelToken
+            ],
+            initialPublicURL: deployment.publicURL,
+            startMessage: "cloudflared started for \(deployment.hostname).",
+            onEvent: onEvent
+        )
+    }
+
+    private func startProcess(
+        executablePath path: String,
+        arguments: [String],
+        environment: [String: String],
+        initialPublicURL: URL?,
+        startMessage: String,
+        onEvent: @escaping EventHandler
+    ) throws {
         let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = [
-            "tunnel",
-            "--no-autoupdate",
-            "--url",
-            localServerURL.absoluteString
-        ]
+        process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment
+            .merging(ExecutableLocator.toolEnvironment) { _, new in new }
+            .merging(environment) { _, new in new }
         process.standardOutput = pipe
         process.standardError = pipe
 
@@ -106,14 +148,17 @@ final class TunnelService: @unchecked Sendable {
             self.process = process
             self.outputSource = source
             self.outputPipe = pipe
-            self.publicURL = nil
+            self.publicURL = initialPublicURL
             self.stopping = false
         }
 
         do {
             try process.run()
             source.resume()
-            onEvent(.log("cloudflared started for \(localServerURL.absoluteString)."))
+            if let initialPublicURL {
+                onEvent(.started(initialPublicURL))
+            }
+            onEvent(.log(startMessage))
         } catch {
             lock.withLock {
                 self.process = nil

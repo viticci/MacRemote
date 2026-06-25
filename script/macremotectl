@@ -18,6 +18,9 @@ import shutil
 import stat
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -140,6 +143,23 @@ def main() -> int:
     list_sets_parser.add_argument("--json", action="store_true")
     list_sets_parser.set_defaults(func=command_list_preset_sets)
 
+    cf_zones_parser = subparsers.add_parser("cloudflare-zones", help="List Cloudflare zones available to Wrangler.")
+    cf_zones_parser.add_argument("--json", action="store_true")
+    cf_zones_parser.set_defaults(func=command_cloudflare_zones)
+
+    cf_deploy_parser = subparsers.add_parser("cloudflare-deploy", help="Deploy Cloudflare resources for a MacRemote custom domain. Requires CLOUDFLARE_API_TOKEN.")
+    cf_deploy_parser.add_argument("--zone", required=True, help="Cloudflare zone name or ID, for example viticci.net.")
+    cf_deploy_parser.add_argument("--subdomain", required=True, help="Subdomain label, for example macremote.")
+    cf_deploy_parser.add_argument("--origin-url", required=True, help="Local MacRemote server URL, for example http://127.0.0.1:60735.")
+    cf_deploy_parser.add_argument("--protect-access", action="store_true", help="Create Cloudflare Access service-token protection.")
+    cf_deploy_parser.add_argument("--json", action="store_true")
+    cf_deploy_parser.add_argument(
+        "--print-tunnel-token",
+        action="store_true",
+        help="Print the cloudflared tunnel token. This is sensitive and is omitted by default.",
+    )
+    cf_deploy_parser.set_defaults(func=command_cloudflare_deploy)
+
     preset_parser = subparsers.add_parser("add-preset", help="Add a detected preset to the user tool registry.")
     preset_parser.add_argument("preset", help="Preset id, for example `preset.developer.codex`.")
     preset_parser.add_argument("--replace", action="store_true", help="Replace an existing tool with the same name.")
@@ -189,6 +209,7 @@ def command_doctor(args: argparse.Namespace) -> int:
         check_app_signature(app_path, required=app_path.exists()),
         check_executable("swift", shutil.which("swift")),
         check_executable("cloudflared", find_executable("cloudflared")),
+        check_executable("wrangler", find_executable("wrangler"), required=False),
     ]
 
     for name in optional_cli_names():
@@ -312,6 +333,91 @@ def command_list_preset_sets(args: argparse.Namespace) -> int:
         for set_id, preset_set in sets.items():
             print(f"{set_id}: {preset_set['name']} ({len(preset_set['presetIDs'])} tools)")
             print(f"  {preset_set['summary']}")
+    return 0
+
+
+def command_cloudflare_zones(args: argparse.Namespace) -> int:
+    if not os.environ.get("CLOUDFLARE_API_TOKEN", "").strip():
+        ensure_wrangler_session()
+    zones = cloudflare_zones()
+    result = {"zones": zones, "count": len(zones)}
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        if not zones:
+            print("No active Cloudflare zones found for the Wrangler account.")
+        for zone in zones:
+            print(f"{zone['name']}  {zone['id']}  {zone['account_name']}")
+    return 0
+
+
+def command_cloudflare_deploy(args: argparse.Namespace) -> int:
+    require_cloudflare_api_token()
+    zones = cloudflare_zones()
+    zone = next((item for item in zones if item["id"] == args.zone or item["name"] == args.zone), None)
+    if not zone:
+        die(f"Cloudflare zone not found: {args.zone}")
+    hostname = cloudflare_hostname(args.subdomain, zone["name"])
+    tunnel_name = cloudflare_tunnel_name(hostname)
+    tunnel = cloudflare_existing_tunnel(zone["account_id"], tunnel_name)
+    if not tunnel:
+        tunnel = cloudflare_create_tunnel(zone["account_id"], tunnel_name)
+    cloudflare_put_tunnel_config(zone["account_id"], tunnel["id"], hostname, args.origin_url)
+    cloudflare_ensure_dns_record(zone["id"], hostname, tunnel["id"])
+
+    access_headers = None
+    access_app = None
+    if args.protect_access:
+        access_app = cloudflare_existing_access_app(zone["id"], hostname)
+        if access_app:
+            if not str(access_app.get("name") or "").startswith("MacRemote "):
+                die(f"A non-MacRemote Cloudflare Access application already exists for {hostname}.")
+            if access_app.get("domain") != cloudflare_access_application_domain(hostname):
+                access_app = cloudflare_update_access_app(zone["id"], access_app["id"], hostname)
+        else:
+            access_app = cloudflare_create_access_app(zone["id"], hostname)
+        service_token = cloudflare_create_service_token(zone["id"], hostname)
+        cloudflare_create_service_auth_policy(zone["id"], access_app["id"], service_token["id"])
+        access_headers = {
+            "CF-Access-Client-Id": service_token["client_id"],
+            "CF-Access-Client-Secret": service_token["client_secret"],
+        }
+
+    tunnel_token = cloudflare_tunnel_token(zone["account_id"], tunnel["id"])
+    result = {
+        "hostname": hostname,
+        "public_url": f"https://{hostname}",
+        "mcp_url_hint": f"https://{hostname}/mcp/<instance-id>",
+        "zone": zone,
+        "tunnel": {
+            "id": tunnel["id"],
+            "name": tunnel_name,
+        },
+        "cloudflare_access": {
+            "enabled": bool(args.protect_access),
+            "app_id": access_app["id"] if access_app else None,
+            "headers": access_headers,
+        },
+        "tunnel_token_printed": bool(args.print_tunnel_token),
+    }
+    if args.print_tunnel_token:
+        result["tunnel_token"] = tunnel_token
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"hostname: {hostname}")
+        print(f"public_url: https://{hostname}")
+        print(f"tunnel: {tunnel_name} ({tunnel['id']})")
+        if access_headers:
+            print("raycast_headers:")
+            print(json.dumps(access_headers, indent=2, sort_keys=True))
+        else:
+            print("cloudflare_access: disabled")
+        if args.print_tunnel_token:
+            print(f"tunnel_token: {tunnel_token}")
+        else:
+            print("tunnel_token: hidden (pass --print-tunnel-token to print it)")
     return 0
 
 
@@ -895,6 +1001,354 @@ def resolve_key(value: str, mapping: dict[str, Any], aliases: dict[str, str], la
 def normalize_permission_requirements(requirements: list[str]) -> list[str]:
     seen = set(requirements)
     return [requirement for requirement in PERMISSION_REQUIREMENT_ORDER if requirement in seen]
+
+
+def require_cloudflare_api_token() -> None:
+    if os.environ.get("CLOUDFLARE_API_TOKEN", "").strip():
+        return
+    die(
+        "Set CLOUDFLARE_API_TOKEN before deploying. Required permissions: "
+        "Account Cloudflare Tunnel Read and Write; and for the selected zone: "
+        "Zone Read, DNS Read and Write, Access Apps and Policies Read and Write, "
+        "and Access Service Tokens Read and Write."
+    )
+
+
+def ensure_wrangler_session() -> None:
+    wrangler = find_executable("wrangler")
+    if not wrangler:
+        die("wrangler was not found. Install it with `npm install -g wrangler` or Homebrew.")
+    result = subprocess.run([wrangler, "whoami"], text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        detail = first_nonempty_line(result.stderr) or first_nonempty_line(result.stdout)
+        if detail:
+            die(f"wrangler is not authenticated: {detail}")
+        die("wrangler is not authenticated. Run `wrangler login`.")
+
+
+def cloudflare_zones() -> list[dict[str, Any]]:
+    zones = cloudflare_request(
+        "GET",
+        "/zones",
+        query={"per_page": "50", "status": "active"},
+    )
+    return sorted(
+        [
+            {
+                "id": zone["id"],
+                "name": zone["name"],
+                "account_id": zone["account"]["id"],
+                "account_name": zone["account"]["name"],
+            }
+            for zone in zones
+        ],
+        key=lambda item: item["name"].lower(),
+    )
+
+
+def cloudflare_hostname(subdomain: str, zone_name: str) -> str:
+    normalized = subdomain.strip().lower()
+    if not cloudflare_valid_subdomain(normalized):
+        die("Enter a valid subdomain, such as `macremote` or `macremote-home`.")
+    return f"{normalized}.{zone_name}"
+
+
+def cloudflare_valid_subdomain(value: str) -> bool:
+    labels = value.split(".")
+    if not labels:
+        return False
+    for label in labels:
+        if not 1 <= len(label) <= 63:
+            return False
+        if not re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", label) and not re.match(r"^[a-z0-9]$", label):
+            return False
+    return True
+
+
+def cloudflare_tunnel_name(hostname: str) -> str:
+    return "macremote-" + re.sub(r"[^A-Za-z0-9]", "-", hostname)
+
+
+def cloudflare_existing_tunnel(account_id: str, tunnel_name: str) -> dict[str, Any] | None:
+    tunnels = cloudflare_request(
+        "GET",
+        f"/accounts/{account_id}/cfd_tunnel",
+        query={"per_page": "50", "name": tunnel_name},
+    )
+    return next(
+        (
+            tunnel
+            for tunnel in tunnels
+            if tunnel.get("name") == tunnel_name and not tunnel.get("deleted_at")
+        ),
+        None,
+    )
+
+
+def cloudflare_create_tunnel(account_id: str, tunnel_name: str) -> dict[str, Any]:
+    return cloudflare_request(
+        "POST",
+        f"/accounts/{account_id}/cfd_tunnel",
+        body={
+            "name": tunnel_name,
+            "config_src": "cloudflare",
+        },
+    )
+
+
+def cloudflare_put_tunnel_config(account_id: str, tunnel_id: str, hostname: str, origin_url: str) -> dict[str, Any] | None:
+    return cloudflare_request(
+        "PUT",
+        f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations",
+        body={
+            "config": {
+                "ingress": [
+                    {
+                        "hostname": hostname,
+                        "service": origin_url,
+                    },
+                    {
+                        "service": "http_status:404",
+                    },
+                ],
+            },
+        },
+    )
+
+
+def cloudflare_ensure_dns_record(zone_id: str, hostname: str, tunnel_id: str) -> dict[str, Any]:
+    target = f"{tunnel_id}.cfargotunnel.com"
+    records = cloudflare_request(
+        "GET",
+        f"/zones/{zone_id}/dns_records",
+        query={"type": "CNAME", "name": hostname},
+    )
+    body = cloudflare_dns_record_body(hostname, target)
+    if records:
+        existing = records[0]
+        content = existing.get("content") or ""
+        comment = existing.get("comment") or ""
+        if content != target and not comment.startswith("MacRemote"):
+            die(f"A non-MacRemote DNS record already exists for {hostname}.")
+        return cloudflare_request(
+            "PATCH",
+            f"/zones/{zone_id}/dns_records/{existing['id']}",
+            body=body,
+        )
+    return cloudflare_request(
+        "POST",
+        f"/zones/{zone_id}/dns_records",
+        body=body,
+    )
+
+
+def cloudflare_dns_record_body(hostname: str, target: str) -> dict[str, Any]:
+    return {
+        "type": "CNAME",
+        "name": hostname,
+        "content": target,
+        "ttl": 1,
+        "proxied": True,
+        "comment": "MacRemote Cloudflare Tunnel",
+    }
+
+
+def cloudflare_create_service_token(zone_id: str, hostname: str) -> dict[str, Any]:
+    return cloudflare_request(
+        "POST",
+        f"/zones/{zone_id}/access/service_tokens",
+        body={
+            "name": f"MacRemote {hostname}",
+            "duration": "8760h",
+        },
+    )
+
+
+def cloudflare_existing_access_app(zone_id: str, hostname: str) -> dict[str, Any] | None:
+    apps = cloudflare_request(
+        "GET",
+        f"/zones/{zone_id}/access/apps",
+        query={"per_page": "100"},
+    )
+    return next((app for app in apps if app.get("domain") == hostname), None) or next(
+        (app for app in apps if app.get("domain") == cloudflare_access_application_domain(hostname)),
+        None,
+    )
+
+
+def cloudflare_access_application_domain(hostname: str) -> str:
+    return f"{hostname}/mcp/*"
+
+
+def cloudflare_access_application_body(hostname: str) -> dict[str, Any]:
+    return {
+        "name": f"MacRemote {hostname}",
+        "domain": cloudflare_access_application_domain(hostname),
+        "type": "self_hosted",
+        "app_launcher_visible": False,
+        "session_duration": "24h",
+    }
+
+
+def cloudflare_create_access_app(zone_id: str, hostname: str) -> dict[str, Any]:
+    return cloudflare_request(
+        "POST",
+        f"/zones/{zone_id}/access/apps",
+        body=cloudflare_access_application_body(hostname),
+    )
+
+
+def cloudflare_update_access_app(zone_id: str, app_id: str, hostname: str) -> dict[str, Any]:
+    return cloudflare_request(
+        "PUT",
+        f"/zones/{zone_id}/access/apps/{app_id}",
+        body=cloudflare_access_application_body(hostname),
+    )
+
+
+def cloudflare_create_service_auth_policy(zone_id: str, app_id: str, service_token_id: str) -> dict[str, Any] | None:
+    policies = cloudflare_access_policies(zone_id, app_id)
+    existing = next(
+        (policy for policy in policies if str(policy.get("name") or "").startswith("MacRemote Raycast Service Token")),
+        None,
+    )
+    if existing and existing.get("id"):
+        precedence = existing.get("precedence") or cloudflare_next_policy_precedence(policies)
+        return cloudflare_request(
+            "PUT",
+            f"/zones/{zone_id}/access/apps/{app_id}/policies/{existing['id']}",
+            body=cloudflare_service_auth_policy_body(service_token_id, int(precedence)),
+        )
+
+    return cloudflare_request(
+        "POST",
+        f"/zones/{zone_id}/access/apps/{app_id}/policies",
+        body=cloudflare_service_auth_policy_body(
+            service_token_id,
+            cloudflare_next_policy_precedence(policies),
+        ),
+    )
+
+
+def cloudflare_access_policies(zone_id: str, app_id: str) -> list[dict[str, Any]]:
+    return cloudflare_request(
+        "GET",
+        f"/zones/{zone_id}/access/apps/{app_id}/policies",
+        query={"per_page": "50"},
+    )
+
+
+def cloudflare_service_auth_policy_body(service_token_id: str, precedence: int) -> dict[str, Any]:
+    return {
+        "name": "MacRemote Raycast Service Token",
+        "decision": "non_identity",
+        "precedence": precedence,
+        "session_duration": "24h",
+        "include": [
+            {
+                "service_token": {
+                    "token_id": service_token_id,
+                },
+            },
+        ],
+    }
+
+
+def cloudflare_next_policy_precedence(policies: list[dict[str, Any]]) -> int:
+    used = {int(policy["precedence"]) for policy in policies if policy.get("precedence") is not None}
+    candidate = 1
+    while candidate in used:
+        candidate += 1
+    return candidate
+
+
+def cloudflare_tunnel_token(account_id: str, tunnel_id: str) -> str:
+    token = cloudflare_request("GET", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/token")
+    if not isinstance(token, str) or not token:
+        die("Cloudflare did not return a tunnel token.")
+    return token
+
+
+def cloudflare_request(
+    method: str,
+    path: str,
+    *,
+    query: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+) -> Any:
+    token = wrangler_oauth_token()
+    url = "https://api.cloudflare.com/client/v4" + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    data = None
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        message = cloudflare_error_message(error.read())
+        die(message or f"Cloudflare API returned HTTP {error.code}.")
+    except urllib.error.URLError as error:
+        die(f"Cloudflare API request failed: {error.reason}")
+    except json.JSONDecodeError as error:
+        die(f"Cloudflare API returned invalid JSON: {error}")
+
+    if not payload.get("success"):
+        die(cloudflare_api_messages(payload) or "Cloudflare API request failed.")
+    return payload.get("result")
+
+
+def cloudflare_error_message(data: bytes) -> str:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    return cloudflare_api_messages(payload)
+
+
+def cloudflare_api_messages(payload: dict[str, Any]) -> str:
+    messages: list[str] = []
+    for item in payload.get("errors") or []:
+        message = item.get("message")
+        if message:
+            messages.append(str(message))
+    return "; ".join(messages)
+
+
+def wrangler_oauth_token() -> str:
+    if token := os.environ.get("CLOUDFLARE_API_TOKEN"):
+        return token
+    config_path = Path.home() / "Library" / "Preferences" / ".wrangler" / "config" / "default.toml"
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        die("Wrangler OAuth config was not found. Run `wrangler login`.")
+    token = toml_string_value("oauth_token", text)
+    if not token:
+        die("Wrangler OAuth token was not found. Run `wrangler login`.")
+    return token
+
+
+def toml_string_value(key: str, text: str) -> str | None:
+    for line in text.splitlines():
+        trimmed = line.strip()
+        if not trimmed.startswith(key) or "=" not in trimmed:
+            continue
+        _, value = trimmed.split("=", 1)
+        value = value.strip()
+        if "#" in value:
+            value = value.split("#", 1)[0].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return value
+    return None
 
 
 def repo_root() -> Path:

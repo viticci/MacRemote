@@ -44,6 +44,54 @@ enum TunnelStatus: Equatable, Sendable {
     }
 }
 
+enum CloudflareCustomDomainState: Equatable, Sendable {
+    case idle
+    case loadingDomains
+    case ready
+    case preparingLocalServer
+    case deploying
+    case deployed(String)
+    case failed(String)
+
+    var title: String {
+        switch self {
+        case .idle: "Not Loaded"
+        case .loadingDomains: "Loading Domains"
+        case .ready: "Ready"
+        case .preparingLocalServer: "Starting Local Server"
+        case .deploying: "Deploying"
+        case .deployed: "Deployed"
+        case .failed: "Failed"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .idle:
+            return "Load Cloudflare domains from the Wrangler account on this Mac."
+        case .loadingDomains:
+            return "Checking Wrangler auth and loading Cloudflare zones."
+        case .ready:
+            return "Choose a domain and subdomain, then deploy a named tunnel."
+        case .preparingLocalServer:
+            return "Starting the local MCP server before deploying the named tunnel."
+        case .deploying:
+            return "Creating or updating Cloudflare Tunnel, DNS, and optional Access resources."
+        case .deployed(let hostname):
+            return hostname
+        case .failed(let message):
+            return message
+        }
+    }
+
+    var isWorking: Bool {
+        switch self {
+        case .loadingDomains, .preparingLocalServer, .deploying: true
+        default: false
+        }
+    }
+}
+
 struct ApprovalRequest: Identifiable, Hashable, Sendable {
     enum State: String, Sendable {
         case pending

@@ -32,12 +32,23 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
 5. Start the local MCP server in **Dashboard**. This remains blocked until
    required permission checks pass from MacRemote's process context.
 
-6. Start the Cloudflare Tunnel in **Tunnel** and copy the public MCP URL. It
-   should look like:
+6. Start the Cloudflare Tunnel in **Tunnel** and copy the public MCP URL. For a
+   quick tunnel it should look like:
 
    ```text
    https://<host>.trycloudflare.com/mcp/<instance-id>
    ```
+
+   For a custom Cloudflare domain deployed from the same view, it should look
+   like:
+
+   ```text
+   https://<subdomain.example.com>/mcp/<instance-id>
+   ```
+
+   If Cloudflare Access was enabled, configure the generated
+   `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers in the remote
+   client before running the smoke test.
 
 7. In **Tunnel**, run **Check Readiness**. Remote proof requires:
 

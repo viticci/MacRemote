@@ -25,6 +25,10 @@ final class AppModel {
     var smokeTestState: SmokeTestState = .idle
     var anthropicCredentialState: AnthropicCredentialState = .unknown
     var lastSmokeProof: SmokeProofRecord?
+    var cloudflareZones: [CloudflareZone] = []
+    var cloudflareDraft = CloudflareCustomDomainDraft()
+    var cloudflareCustomDomainState: CloudflareCustomDomainState = .idle
+    var lastCloudflareDeployment: CloudflareCustomDomainDeployment?
 
     private static let instanceIDKey = "MacRemote.instanceID"
     private static let remCTLProfileEnabledKey = "MacRemote.remCTLProfileEnabled"
@@ -39,6 +43,7 @@ final class AppModel {
     private let fullDiskAccessService = FullDiskAccessService()
     private let macOSPrivacyAccessService = MacOSPrivacyAccessService()
     private let smokeTestService = SmokeTestService()
+    private let cloudflareService = CloudflareService()
     private let processRunner = ProcessRunner()
     private var authCoordinator: OAuthCoordinator!
     private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
@@ -107,24 +112,31 @@ final class AppModel {
     }
 
     func startLocalServer() {
+        Task {
+            _ = await ensureLocalServerRunning()
+        }
+    }
+
+    private func ensureLocalServerRunning() async -> URL? {
         switch serverStatus {
-        case .running, .starting:
-            return
+        case .running(let url):
+            return url
+        case .starting:
+            return nil
         case .stopped, .failed:
             break
         }
 
         serverStatus = .starting
-        Task {
-            let accessReady = await refreshAccessStatusForServerStart()
-            guard accessReady else {
-                serverStatus = .failed("Required macOS access is missing for exposed tools.")
-                tunnelStatus = tunnelService.status(localServerURL: localServerURL)
-                return
-            }
-
-            startLocalServerAfterPermissionCheck()
+        let accessReady = await refreshAccessStatusForServerStart()
+        guard accessReady else {
+            serverStatus = .failed("Required macOS access is missing for exposed tools.")
+            tunnelStatus = tunnelService.status(localServerURL: localServerURL)
+            return nil
         }
+
+        startLocalServerAfterPermissionCheck()
+        return localServerURL
     }
 
     private func startLocalServerAfterPermissionCheck() {
@@ -619,6 +631,110 @@ final class AppModel {
         appendLog(level: .info, "Cloudflare Tunnel stopped.")
     }
 
+    func refreshCloudflareDomains() {
+        guard !cloudflareCustomDomainState.isWorking else {
+            appendLog(level: .warning, "Wait for the current Cloudflare operation to finish.")
+            return
+        }
+
+        cloudflareCustomDomainState = .loadingDomains
+        appendLog(level: .info, "Loading Cloudflare domains from Wrangler.")
+
+        Task {
+            do {
+                let zones = try await cloudflareService.loadZones(apiToken: cloudflareDraft.trimmedAPIToken)
+                cloudflareZones = zones
+                if cloudflareDraft.selectedZoneID == nil || !zones.contains(where: { $0.id == cloudflareDraft.selectedZoneID }) {
+                    cloudflareDraft.selectedZoneID = zones.first?.id
+                }
+                cloudflareCustomDomainState = .ready
+                appendLog(level: .info, "Loaded \(zones.count) Cloudflare domain\(zones.count == 1 ? "" : "s").")
+            } catch {
+                let message = error.localizedDescription
+                cloudflareCustomDomainState = .failed(message)
+                appendLog(level: .error, "Cloudflare domains failed to load: \(message)")
+            }
+        }
+    }
+
+    func deployCustomDomainTunnel() {
+        guard !cloudflareCustomDomainState.isWorking else {
+            appendLog(level: .warning, "Wait for the current Cloudflare operation to finish.")
+            return
+        }
+        guard tunnelStatus.isRunning == false else {
+            appendLog(level: .warning, "Stop the current tunnel before deploying a custom domain tunnel.")
+            return
+        }
+        guard let selectedCloudflareZone else {
+            cloudflareCustomDomainState = .failed(CloudflareServiceError.zoneRequired.localizedDescription)
+            appendLog(level: .warning, "Select a Cloudflare domain before deploying.")
+            return
+        }
+        let subdomain = cloudflareDraft.subdomain
+        guard CloudflareService.isValidSubdomain(subdomain.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            let message = CloudflareServiceError.invalidSubdomain.localizedDescription
+            cloudflareCustomDomainState = .failed(message)
+            appendLog(level: .warning, message)
+            return
+        }
+        let protectWithAccess = cloudflareDraft.protectWithAccess
+        let apiToken = cloudflareDraft.trimmedAPIToken
+        guard !apiToken.isEmpty else {
+            let message = CloudflareServiceError.missingAPIToken.localizedDescription
+            cloudflareCustomDomainState = .failed(message)
+            appendLog(level: .warning, message)
+            return
+        }
+
+        cloudflareCustomDomainState = localServerURL == nil ? .preparingLocalServer : .deploying
+
+        Task {
+            do {
+                guard let localServerURL = await ensureLocalServerRunning() else {
+                    let message: String
+                    if case .failed(let detail) = serverStatus {
+                        message = detail
+                    } else {
+                        message = customDomainDeployHint
+                    }
+                    tunnelStatus = tunnelService.status(localServerURL: self.localServerURL)
+                    cloudflareCustomDomainState = .failed(message)
+                    appendLog(level: .warning, message)
+                    return
+                }
+
+                cloudflareCustomDomainState = .deploying
+                tunnelStatus = .starting
+                appendLog(level: .info, "Deploying Cloudflare custom domain tunnel for \(customCloudflareHostnamePreview ?? selectedCloudflareZone.name).")
+
+                let deployment = try await cloudflareService.deployCustomDomain(
+                    zone: selectedCloudflareZone,
+                    subdomain: subdomain,
+                    localServerURL: localServerURL,
+                    protectWithAccess: protectWithAccess,
+                    apiToken: apiToken
+                )
+                lastCloudflareDeployment = deployment
+                try tunnelService.startNamedTunnel(deployment: deployment) { [weak self] event in
+                    Task { @MainActor in
+                        self?.handleTunnelEvent(event)
+                    }
+                }
+                cloudflareCustomDomainState = .deployed(deployment.hostname)
+                appendLog(
+                    level: .info,
+                    "Deployed Cloudflare custom domain tunnel for \(deployment.hostname)\(deployment.accessCredentials == nil ? "" : " with Access service-token protection")."
+                )
+            } catch {
+                let message = error.localizedDescription
+                tunnelStatus = tunnelService.status(localServerURL: localServerURL)
+                cloudflareCustomDomainState = .failed(message)
+                appendLog(level: .error, "Cloudflare custom domain deploy failed: \(message)")
+            }
+        }
+    }
+
     func checkSmokeReadiness() {
         guard !smokeTestState.isRunning else {
             appendLog(level: .warning, "Wait for the current smoke test before checking readiness again.")
@@ -739,6 +855,67 @@ final class AppModel {
             return self.publicMCPURL(for: publicURL)
         }
         return nil
+    }
+
+    var selectedCloudflareZone: CloudflareZone? {
+        guard let selectedZoneID = cloudflareDraft.selectedZoneID else { return nil }
+        return cloudflareZones.first { $0.id == selectedZoneID }
+    }
+
+    var customCloudflareHostnamePreview: String? {
+        guard let selectedCloudflareZone else { return nil }
+        return try? CloudflareService.hostname(
+            subdomain: cloudflareDraft.subdomain,
+            zoneName: selectedCloudflareZone.name
+        )
+    }
+
+    var canDeployCustomDomainTunnel: Bool {
+        guard selectedCloudflareZone != nil,
+              CloudflareService.isValidSubdomain(cloudflareDraft.subdomain.trimmingCharacters(in: .whitespacesAndNewlines)),
+              !cloudflareCustomDomainState.isWorking,
+              !tunnelStatus.isRunning else {
+            return false
+        }
+        if case .starting = serverStatus {
+            return false
+        }
+        if case .starting = tunnelStatus {
+            return false
+        }
+        return true
+    }
+
+    var customDomainDeployHint: String {
+        if cloudflareCustomDomainState.isWorking {
+            return cloudflareCustomDomainState.detail
+        }
+        if selectedCloudflareZone == nil {
+            return "Select a Cloudflare domain."
+        }
+        if !CloudflareService.isValidSubdomain(cloudflareDraft.subdomain.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return CloudflareServiceError.invalidSubdomain.localizedDescription
+        }
+        if cloudflareDraft.trimmedAPIToken.isEmpty {
+            return CloudflareServiceError.missingAPIToken.localizedDescription
+        }
+        if tunnelStatus.isRunning {
+            return "Stop the current tunnel before deploying a custom domain tunnel."
+        }
+        if case .starting = tunnelStatus {
+            return "Wait for the current tunnel to finish starting."
+        }
+        if case .starting = serverStatus {
+            return "Wait for the local MCP server to finish starting."
+        }
+        if localServerURL == nil {
+            return "Deploy will start the local MCP server first."
+        }
+        return cloudflareCustomDomainState.detail
+    }
+
+    var cloudflareAccessHeadersJSON: String? {
+        lastCloudflareDeployment?.accessCredentials?.raycastHeadersJSON
     }
 
     var toolExposureSummary: ToolExposureSummary {
