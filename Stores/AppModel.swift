@@ -39,6 +39,11 @@ final class AppModel {
             persistPushoverSettings()
         }
     }
+    var brrrSettings: BrrrSettings {
+        didSet {
+            persistBrrrSettings()
+        }
+    }
 
     private static let instanceIDKey = "MacRemote.instanceID"
     private static let remCTLProfileEnabledKey = "MacRemote.remCTLProfileEnabled"
@@ -47,6 +52,8 @@ final class AppModel {
     private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
     private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
     private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"
+    private static let brrrEnabledKey = "MacRemote.brrr.enabled"
+    private static let brrrWebhookSecretKey = "MacRemote.brrr.webhookSecret"
     private static let connectorProviderKey = "MacRemote.connector.provider"
     private static let connectorAccessModeKey = "MacRemote.connector.accessMode"
     private static let tunnelSupervisionActiveKey = "MacRemote.tunnelSupervision.active"
@@ -62,6 +69,7 @@ final class AppModel {
     private let smokeTestService = SmokeTestService()
     private let cloudflareService = CloudflareService()
     private let pushoverSender: any PushoverSending
+    private let brrrSender: any BrrrSending
     private let processRunner = ProcessRunner()
     private var authCoordinator: OAuthCoordinator!
     private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
@@ -72,14 +80,17 @@ final class AppModel {
     init(
         userDefaults: UserDefaults = .standard,
         toolStore: ToolRegistryStore = ToolRegistryStore(),
-        pushoverSender: any PushoverSending = PushoverService()
+        pushoverSender: any PushoverSending = PushoverService(),
+        brrrSender: any BrrrSending = BrrrService()
     ) {
         self.userDefaults = userDefaults
         self.toolStore = toolStore
         self.clientToolPermissionStore = ClientToolPermissionStore(userDefaults: userDefaults)
         self.toolSurfaceRuntime = ToolSurfaceRuntime(environment: Self.toolEnvironment)
         self.pushoverSender = pushoverSender
+        self.brrrSender = brrrSender
         self.pushoverSettings = Self.loadPushoverSettings(from: userDefaults)
+        self.brrrSettings = Self.loadBrrrSettings(from: userDefaults)
         let loadedConnectorProvider = Self.loadConnectorProvider(from: userDefaults)
         self.connectorProvider = loadedConnectorProvider
         self.cloudflareDraft = CloudflareCustomDomainDraft(
@@ -1063,6 +1074,22 @@ final class AppModel {
         )
     }
 
+    func sendBrrrTestNotification() {
+        guard brrrSettings.isConfigured else {
+            appendLog(level: .warning, BrrrServiceError.missingCredentials.localizedDescription)
+            return
+        }
+
+        sendBrrrNotification(
+            BrrrMessage(
+                title: "MacRemote",
+                message: "Brrr notifications are configured.",
+                threadID: "macremote-test"
+            ),
+            successLog: "Brrr test notification sent."
+        )
+    }
+
     private static func makeInstanceID(userDefaults: UserDefaults) -> String {
         if let existing = userDefaults.string(forKey: instanceIDKey),
            existing.range(of: #"^[a-f0-9]{32}$"#, options: .regularExpression) != nil {
@@ -1079,6 +1106,13 @@ final class AppModel {
             isEnabled: userDefaults.bool(forKey: pushoverEnabledKey),
             userKey: userDefaults.string(forKey: pushoverUserKeyKey) ?? "",
             apiToken: userDefaults.string(forKey: pushoverAPITokenKey) ?? ""
+        )
+    }
+
+    private static func loadBrrrSettings(from userDefaults: UserDefaults) -> BrrrSettings {
+        BrrrSettings(
+            isEnabled: userDefaults.bool(forKey: brrrEnabledKey),
+            webhookSecret: userDefaults.string(forKey: brrrWebhookSecretKey) ?? ""
         )
     }
 
@@ -1108,6 +1142,11 @@ final class AppModel {
         userDefaults.set(pushoverSettings.trimmedAPIToken, forKey: Self.pushoverAPITokenKey)
     }
 
+    private func persistBrrrSettings() {
+        userDefaults.set(brrrSettings.isEnabled, forKey: Self.brrrEnabledKey)
+        userDefaults.set(brrrSettings.trimmedWebhookSecret, forKey: Self.brrrWebhookSecretKey)
+    }
+
     private func handleAuthorizationApprovalsChanged(_ approvals: [ApprovalRequest]) {
         self.approvals = approvals
         connectedClients = authCoordinator.connectedClientSnapshot()
@@ -1118,7 +1157,7 @@ final class AppModel {
     }
 
     private func notifyForNewAuthorizationApprovals(_ approvals: [ApprovalRequest]) {
-        guard pushoverSettings.isConfigured else { return }
+        guard hasConfiguredNotificationProvider else { return }
 
         let newPendingRequests = approvals
             .filter { request in
@@ -1128,13 +1167,25 @@ final class AppModel {
 
         for request in newPendingRequests {
             notifiedAuthorizationRequestIDs.insert(request.id)
-            sendPushoverNotification(
-                PushoverMessage(
-                    title: "MacRemote Approval Request",
-                    message: "\(request.clientName) is requesting MacRemote access. Open MacRemote on the host Mac to approve or deny it."
-                )
+            sendNotificationToConfiguredProviders(
+                title: "MacRemote Approval Request",
+                message: "\(request.clientName) is requesting MacRemote access. Open MacRemote on the host Mac to approve or deny it.",
+                threadID: "macremote-approval"
             )
         }
+    }
+
+    private var hasConfiguredNotificationProvider: Bool {
+        pushoverSettings.isConfigured || brrrSettings.isConfigured
+    }
+
+    private func sendNotificationToConfiguredProviders(title: String, message: String, threadID: String? = nil) {
+        sendPushoverNotification(
+            PushoverMessage(title: title, message: message)
+        )
+        sendBrrrNotification(
+            BrrrMessage(title: title, message: message, threadID: threadID)
+        )
     }
 
     private func sendPushoverNotification(_ message: PushoverMessage, successLog: String? = nil) {
@@ -1161,6 +1212,30 @@ final class AppModel {
         }
     }
 
+    private func sendBrrrNotification(_ message: BrrrMessage, successLog: String? = nil) {
+        let settings = brrrSettings
+        guard settings.isConfigured else { return }
+
+        let sender = brrrSender
+        Task { [weak self, settings, message, sender, successLog] in
+            do {
+                try await sender.send(message, using: settings)
+                if let successLog {
+                    await MainActor.run {
+                        self?.appendLog(level: .info, successLog)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self?.appendLog(
+                        level: .warning,
+                        "Brrr notification failed: \(self?.singleLine(error.localizedDescription) ?? error.localizedDescription)"
+                    )
+                }
+            }
+        }
+    }
+
     private func recordTunnelSupervision(publicURL: URL) {
         userDefaults.set(true, forKey: Self.tunnelSupervisionActiveKey)
         userDefaults.set(publicURL.absoluteString, forKey: Self.tunnelSupervisionURLKey)
@@ -1179,11 +1254,10 @@ final class AppModel {
         let suffix = previousURL.map { " Previous public URL: \($0)." } ?? ""
         let message = "MacRemote restarted while a Cloudflare Tunnel was marked active. Tunnel supervision was interrupted; confirm the tunnel is still running or restart it from MacRemote.\(suffix)"
         appendLog(level: .warning, message)
-        sendPushoverNotification(
-            PushoverMessage(
-                title: "MacRemote Tunnel Supervision Interrupted",
-                message: message
-            )
+        sendNotificationToConfiguredProviders(
+            title: "MacRemote Tunnel Supervision Interrupted",
+            message: message,
+            threadID: "macremote-tunnel"
         )
     }
 
@@ -1663,11 +1737,10 @@ final class AppModel {
             clearTunnelSupervision()
             tunnelStatus = .failed(message)
             appendLog(level: .error, message)
-            sendPushoverNotification(
-                PushoverMessage(
-                    title: "MacRemote Tunnel Stopped",
-                    message: "\(message) Open MacRemote on the host Mac to restart the tunnel."
-                )
+            sendNotificationToConfiguredProviders(
+                title: "MacRemote Tunnel Stopped",
+                message: "\(message) Open MacRemote on the host Mac to restart the tunnel.",
+                threadID: "macremote-tunnel"
             )
         }
     }

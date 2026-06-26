@@ -104,6 +104,31 @@ struct SettingsView: View {
                 .disabled(!appModel.pushoverSettings.isConfigured)
             }
 
+            Section("Brrr") {
+                Toggle("Send Brrr alerts", isOn: $appModel.brrrSettings.isEnabled)
+                    .toggleStyle(.checkbox)
+
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        Text("Secret")
+                            .foregroundStyle(.secondary)
+                        SecureField("Webhook Secret", text: $appModel.brrrSettings.webhookSecret)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 360)
+                    }
+                }
+                .disabled(!appModel.brrrSettings.isEnabled)
+
+                Text("MacRemote sends Brrr alerts through `/v1/send` with the webhook secret in the Authorization header.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Send Test Notification", systemImage: "paperplane") {
+                    appModel.sendBrrrTestNotification()
+                }
+                .disabled(!appModel.brrrSettings.isConfigured)
+            }
+
             Section("Full Disk Access") {
                 LabeledContent("Status") {
                     HStack(spacing: 8) {

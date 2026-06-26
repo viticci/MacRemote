@@ -17,6 +17,7 @@ they are optional tools the user can add from detected presets or define by hand
   Cloudflare custom domain.
 - OAuth + PKCE with host-side approval before token issuance.
 - Per-client tool policies for pre-approving selected tools.
+- Optional Pushover or Brrr alerts for approval requests and tunnel failures.
 - Direct process execution with no shell interpolation.
 - Generic CLI adapters for whole-command delegation.
 - Command templates for narrow, schema-driven MCP tools.
@@ -87,6 +88,24 @@ Access protection is enabled, copy the generated Raycast headers into the
 client as static request headers. MacRemote OAuth still remains required.
 
 For persistent custom domains, follow the full setup below.
+
+## Notifications
+
+MacRemote can send alerts through Pushover, Brrr, or both. Alerts fire when a
+new OAuth client is waiting for host approval, when `cloudflared` exits
+unexpectedly, and when MacRemote starts after a tunnel was previously marked
+active.
+
+Configure notifications from **Settings**:
+
+- **Pushover**: enable Pushover alerts, then enter the Pushover User ID and API
+  key.
+- **Brrr**: enable Brrr alerts, then enter the webhook secret. MacRemote sends
+  Brrr messages with `POST https://api.brrr.now/v1/send` and an
+  `Authorization: Bearer <secret>` header, so the secret is not placed in the
+  URL.
+
+Use **Send Test Notification** after saving each provider.
 
 ## Persistent Cloudflare Custom Domains
 
