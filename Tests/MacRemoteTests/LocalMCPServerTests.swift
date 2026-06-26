@@ -302,7 +302,7 @@ final class LocalMCPServerTests: XCTestCase {
         let toolsResult = try XCTUnwrap(toolsList.json["result"] as? [String: Any])
         let tools = try XCTUnwrap(toolsResult["tools"] as? [[String: Any]])
         let listedTool = try XCTUnwrap(tools.first)
-        XCTAssertEqual(listedTool["name"] as? String, "test.echo")
+        XCTAssertEqual(listedTool["name"] as? String, "test_echo")
         XCTAssertEqual(listedTool["title"] as? String, "Echo")
         let description = try XCTUnwrap(listedTool["description"] as? String)
         XCTAssertTrue(description.contains("Echo a test value."))
@@ -330,7 +330,7 @@ final class LocalMCPServerTests: XCTestCase {
                 "id": "call",
                 "method": "tools/call",
                 "params": [
-                    "name": "test.echo",
+                    "name": "test_echo",
                     "arguments": [
                         "value": "hello"
                     ]
@@ -340,6 +340,7 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(toolCall.statusCode, 200)
         let callResult = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
         let structuredContent = try XCTUnwrap(callResult["structuredContent"] as? [String: Any])
+        XCTAssertEqual(structuredContent["toolID"] as? String, "test.echo")
         XCTAssertEqual(structuredContent["stdout"] as? String, "echo:hello")
         XCTAssertEqual(structuredContent["succeeded"] as? Bool, true)
         let content = try XCTUnwrap(callResult["content"] as? [[String: Any]])
@@ -356,6 +357,64 @@ final class LocalMCPServerTests: XCTestCase {
             ]
         )
         XCTAssertEqual(legacyMCPPath.statusCode, 200)
+    }
+
+    func testDottedToolNamesRemainCallableForExistingClients() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [
+                        ToolParameter(
+                            name: "value",
+                            title: "Value",
+                            kind: .string,
+                            maximumLength: 64
+                        )
+                    ],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "call",
+                "method": "tools/call",
+                "params": [
+                    "name": "test.echo",
+                    "arguments": [
+                        "value": "legacy"
+                    ]
+                ]
+            ]
+        )
+
+        XCTAssertEqual(toolCall.statusCode, 200)
+        let callResult = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try XCTUnwrap(callResult["structuredContent"] as? [String: Any])
+        XCTAssertEqual(structuredContent["toolID"] as? String, "test.echo")
+        XCTAssertEqual(structuredContent["stdout"] as? String, "echo:legacy")
     }
 
     func testPublicForwardedRequestsMustUseInstanceMCPPath() async throws {
@@ -759,7 +818,7 @@ final class LocalMCPServerTests: XCTestCase {
                     "id": "call",
                     "method": "tools/call",
                     "params": [
-                        "name": "test.remctl.run",
+                        "name": "test_remctl_run",
                         "arguments": [
                             "args": ["add", "Test", "-l", "Work"]
                         ]
@@ -839,7 +898,7 @@ final class LocalMCPServerTests: XCTestCase {
                 "id": "call",
                 "method": "tools/call",
                 "params": [
-                    "name": "test.remctl.run",
+                    "name": "test_remctl_run",
                     "arguments": [
                         "args": ["--help"]
                     ]
@@ -896,14 +955,100 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let initialList = try await toolsList(base: base, accessToken: accessToken)
-        XCTAssertEqual(initialList.map { $0["name"] as? String }, ["test.first"])
+        XCTAssertEqual(initialList.map { $0["name"] as? String }, ["test_first"])
 
         runtime.update(tools: [firstTool, secondTool])
         let updatedList = try await toolsList(base: base, accessToken: accessToken)
         XCTAssertEqual(
             Set(updatedList.compactMap { $0["name"] as? String }),
-            Set(["test.first", "test.second"])
+            Set(["test_first", "test_second"])
         )
+    }
+
+    func testMCPToolNamesAreClaudeCompatible() async throws {
+        let coordinator = OAuthCoordinator()
+        let tools = [
+            ToolDefinition(
+                id: "preset.filesystem.list_directory",
+                name: "List Directory",
+                summary: "List a directory.",
+                executablePath: "/bin/ls",
+                argumentPattern: ["{path}"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 2,
+                outputByteLimit: 1024
+            ),
+            ToolDefinition(
+                id: "custom.31a0edd6b19a5788",
+                name: "Today",
+                summary: "Return reminders.",
+                executablePath: "/bin/echo",
+                argumentPattern: ["today"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 2,
+                outputByteLimit: 1024
+            ),
+            ToolDefinition(
+                id: String(repeating: "very.long.", count: 10),
+                name: "Long",
+                summary: "Long internal id.",
+                executablePath: "/bin/echo",
+                argumentPattern: ["long"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 2,
+                outputByteLimit: 1024
+            ),
+            ToolDefinition(
+                id: "same.name",
+                name: "Same Name",
+                summary: "First colliding id.",
+                executablePath: "/bin/echo",
+                argumentPattern: ["same"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 2,
+                outputByteLimit: 1024
+            ),
+            ToolDefinition(
+                id: "same_name",
+                name: "Same Name Collision",
+                summary: "Second colliding id.",
+                executablePath: "/bin/echo",
+                argumentPattern: ["same"],
+                parameters: [],
+                capability: .readOnly,
+                timeoutSeconds: 2,
+                outputByteLimit: 1024
+            )
+        ]
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: tools,
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let listedTools = try await toolsList(base: base, accessToken: accessToken)
+        let names = listedTools.compactMap { $0["name"] as? String }
+        XCTAssertEqual(names.count, tools.count)
+        XCTAssertTrue(names.contains("preset_filesystem_list_directory"))
+        XCTAssertTrue(names.contains("custom_31a0edd6b19a5788"))
+        XCTAssertTrue(names.contains("same_name"))
+        XCTAssertEqual(Set(names).count, names.count)
+
+        for name in names {
+            XCTAssertLessThanOrEqual(name.count, 64)
+            XCTAssertNotNil(name.range(of: #"^[a-zA-Z0-9_-]{1,64}$"#, options: .regularExpression))
+        }
     }
 }
 

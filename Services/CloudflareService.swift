@@ -11,11 +11,42 @@ struct CloudflareAccessCredentials: Equatable, Sendable {
     let clientID: String
     let clientSecret: String
 
-    var raycastHeadersJSON: String {
+    var standardHeadersJSON: String {
         let payload = [
             "CF-Access-Client-Id": clientID,
             "CF-Access-Client-Secret": clientSecret
         ]
+        return Self.prettyJSONString(payload)
+    }
+
+    var authorizationHeaderValue: String {
+        let payload = [
+            "cf-access-client-id": clientID,
+            "cf-access-client-secret": clientSecret
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
+
+    var authorizationHeaderJSON: String {
+        Self.prettyJSONString(["Authorization": authorizationHeaderValue])
+    }
+
+    func headersJSON(for mode: CloudflareAccessMode) -> String? {
+        switch mode {
+        case .macRemoteOAuthOnly:
+            nil
+        case .serviceTokenHeaders:
+            standardHeadersJSON
+        case .serviceTokenAuthorizationHeader:
+            authorizationHeaderJSON
+        }
+    }
+
+    private static func prettyJSONString(_ payload: [String: String]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]),
               let text = String(data: data, encoding: .utf8) else {
             return "{}"
@@ -30,6 +61,7 @@ struct CloudflareCustomDomainDeployment: Equatable, Sendable {
     let tunnelID: String
     let tunnelName: String
     let tunnelToken: String
+    let accessMode: CloudflareAccessMode
     let accessCredentials: CloudflareAccessCredentials?
 
     var publicURL: URL {
@@ -40,7 +72,7 @@ struct CloudflareCustomDomainDeployment: Equatable, Sendable {
 struct CloudflareCustomDomainDraft: Equatable, Sendable {
     var selectedZoneID: String?
     var subdomain: String = "macremote"
-    var protectWithAccess: Bool = true
+    var accessMode: CloudflareAccessMode = .serviceTokenHeaders
     var apiToken: String = ""
 
     var trimmedAPIToken: String {
@@ -137,7 +169,7 @@ struct CloudflareService: Sendable {
         zone: CloudflareZone,
         subdomain: String,
         localServerURL: URL,
-        protectWithAccess: Bool,
+        accessMode: CloudflareAccessMode,
         apiToken: String? = nil
     ) async throws -> CloudflareCustomDomainDeployment {
         guard cloudflaredPath() != nil else {
@@ -152,7 +184,7 @@ struct CloudflareService: Sendable {
         try await preflightPermissions(
             zone: zone,
             hostname: hostname,
-            protectWithAccess: protectWithAccess,
+            accessMode: accessMode,
             apiToken: apiToken
         )
 
@@ -174,24 +206,26 @@ struct CloudflareService: Sendable {
         try await ensureDNSRecord(zoneID: zone.id, hostname: hostname, tunnelID: tunnel.id, apiToken: apiToken)
 
         let accessCredentials: CloudflareAccessCredentials?
-        if protectWithAccess {
+        if accessMode.requiresCloudflareAccess {
             let app: CloudflareAccessApplicationDTO
             if let existing = try await existingAccessApplication(hostname: hostname, zoneID: zone.id, apiToken: apiToken) {
                 guard existing.name?.hasPrefix("MacRemote ") == true else {
                     throw CloudflareServiceError.existingAccessApplication(hostname)
                 }
-                if existing.domain == Self.accessApplicationDomain(hostname: hostname) {
-                    app = existing
-                } else {
-                    app = try await updateAccessApplication(
-                        appID: existing.id,
-                        hostname: hostname,
-                        zoneID: zone.id,
-                        apiToken: apiToken
-                    )
-                }
+                app = try await updateAccessApplication(
+                    appID: existing.id,
+                    hostname: hostname,
+                    accessMode: accessMode,
+                    zoneID: zone.id,
+                    apiToken: apiToken
+                )
             } else {
-                app = try await createAccessApplication(hostname: hostname, zoneID: zone.id, apiToken: apiToken)
+                app = try await createAccessApplication(
+                    hostname: hostname,
+                    accessMode: accessMode,
+                    zoneID: zone.id,
+                    apiToken: apiToken
+                )
             }
             let serviceToken = try await createServiceToken(
                 zoneID: zone.id,
@@ -220,6 +254,7 @@ struct CloudflareService: Sendable {
             tunnelID: tunnel.id,
             tunnelName: tunnelName,
             tunnelToken: tunnelToken,
+            accessMode: accessMode,
             accessCredentials: accessCredentials
         )
     }
@@ -286,7 +321,7 @@ struct CloudflareService: Sendable {
     private func preflightPermissions(
         zone: CloudflareZone,
         hostname: String,
-        protectWithAccess: Bool,
+        accessMode: CloudflareAccessMode,
         apiToken: String?
     ) async throws {
         let _: CloudflareAPIResponse<[CloudflareTunnelDTO]> = try await request(
@@ -308,7 +343,7 @@ struct CloudflareService: Sendable {
                 URLQueryItem(name: "name", value: hostname)
             ]
         )
-        guard protectWithAccess else { return }
+        guard accessMode.requiresCloudflareAccess else { return }
         let _: CloudflareAPIResponse<[CloudflareAccessApplicationDTO]> = try await request(
             method: "GET",
             path: "/zones/\(zone.id)/access/apps",
@@ -461,13 +496,18 @@ struct CloudflareService: Sendable {
             apps.first { $0.domain == Self.accessApplicationDomain(hostname: hostname) }
     }
 
-    private func createAccessApplication(hostname: String, zoneID: String, apiToken: String?) async throws -> CloudflareAccessApplicationDTO {
+    private func createAccessApplication(
+        hostname: String,
+        accessMode: CloudflareAccessMode,
+        zoneID: String,
+        apiToken: String?
+    ) async throws -> CloudflareAccessApplicationDTO {
         let response: CloudflareAPIResponse<CloudflareAccessApplicationDTO> = try await request(
             method: "POST",
             path: "/zones/\(zoneID)/access/apps",
             apiToken: apiToken,
             operation: "create Cloudflare Access application",
-            body: accessApplicationBody(hostname: hostname)
+            body: accessApplicationBody(hostname: hostname, accessMode: accessMode)
         )
         return try response.requiredResult()
     }
@@ -475,6 +515,7 @@ struct CloudflareService: Sendable {
     private func updateAccessApplication(
         appID: String,
         hostname: String,
+        accessMode: CloudflareAccessMode,
         zoneID: String,
         apiToken: String?
     ) async throws -> CloudflareAccessApplicationDTO {
@@ -483,19 +524,23 @@ struct CloudflareService: Sendable {
             path: "/zones/\(zoneID)/access/apps/\(appID)",
             apiToken: apiToken,
             operation: "update Cloudflare Access application",
-            body: accessApplicationBody(hostname: hostname)
+            body: accessApplicationBody(hostname: hostname, accessMode: accessMode)
         )
         return try response.requiredResult()
     }
 
-    private func accessApplicationBody(hostname: String) -> [String: Any] {
-        [
+    private func accessApplicationBody(hostname: String, accessMode: CloudflareAccessMode) -> [String: Any] {
+        var body: [String: Any] = [
             "name": "MacRemote \(hostname)",
             "domain": Self.accessApplicationDomain(hostname: hostname),
             "type": "self_hosted",
             "app_launcher_visible": false,
             "session_duration": "24h"
-        ] as [String: Any]
+        ]
+        if let headerName = accessMode.readServiceTokensFromHeader {
+            body["read_service_tokens_from_header"] = headerName
+        }
+        return body
     }
 
     private func createServiceAuthPolicy(
@@ -506,7 +551,10 @@ struct CloudflareService: Sendable {
         apiToken: String?
     ) async throws {
         let policies = try await accessPolicies(zoneID: zoneID, appID: appID, apiToken: apiToken)
-        if let existing = policies.first(where: { $0.name?.hasPrefix("MacRemote Raycast Service Token") == true }),
+        if let existing = policies.first(where: {
+            $0.name?.hasPrefix("MacRemote Service Token") == true ||
+            $0.name?.hasPrefix("MacRemote Raycast Service Token") == true
+        }),
            let policyID = existing.id {
             let precedence = existing.precedence ?? Self.nextAccessPolicyPrecedence(after: policies)
             let _: CloudflareAPIResponse<CloudflareAccessPolicyDTO> = try await request(
@@ -546,7 +594,7 @@ struct CloudflareService: Sendable {
 
     private func serviceAuthPolicyBody(serviceTokenID: String, precedence: Int) -> [String: Any] {
         [
-            "name": "MacRemote Raycast Service Token",
+            "name": "MacRemote Service Token",
             "decision": "non_identity",
             "precedence": precedence,
             "session_duration": "24h",

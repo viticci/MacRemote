@@ -6,30 +6,29 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             Color.clear
-                .frame(height: 48)
+                .frame(height: 64)
+                .accessibilityHidden(true)
 
             List(selection: $selection) {
-                Section("MacRemote") {
-                    ForEach(NavigationSection.allCases) { section in
-                        HStack(spacing: 10) {
-                            Image(systemName: section.systemImage)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 18)
+                ForEach(NavigationSection.allCases) { section in
+                    HStack(spacing: 10) {
+                        Image(systemName: section.systemImage)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18)
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(section.title)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(section.title)
+                                .lineLimit(1)
+
+                            if let detail = section.detail {
+                                Text(detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                                     .lineLimit(1)
-
-                                if let detail = section.detail {
-                                    Text(detail)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
                             }
                         }
-                        .tag(section)
                     }
+                    .tag(section)
                 }
             }
             .listStyle(.sidebar)

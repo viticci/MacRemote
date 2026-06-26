@@ -202,8 +202,16 @@ private struct CustomDomainPanel: View {
                 GridRow {
                     Text("Access")
                         .foregroundStyle(.secondary)
-                    Toggle("Protect with Cloudflare Access service-token headers", isOn: $appModel.cloudflareDraft.protectWithAccess)
-                        .toggleStyle(.checkbox)
+                    Picker("Access", selection: Binding(
+                        get: { appModel.cloudflareDraft.accessMode },
+                        set: { appModel.setCloudflareAccessMode($0) }
+                    )) {
+                        ForEach(CloudflareAccessMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280, alignment: .leading)
                 }
 
                 GridRow {
@@ -227,10 +235,10 @@ private struct CustomDomainPanel: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!appModel.canDeployCustomDomainTunnel)
 
-                if let headers = appModel.cloudflareAccessHeadersJSON {
-                    Button("Copy Raycast Headers", systemImage: "key.fill") {
-                        copy(headers)
-                        appModel.appendLog(level: .info, "Copied Cloudflare Access headers for Raycast.")
+                if let credentials = appModel.cloudflareAccessCredentialsJSON {
+                    Button(appModel.cloudflareAccessCopyButtonTitle, systemImage: "key.fill") {
+                        copy(credentials)
+                        appModel.appendLog(level: .info, "Copied Cloudflare Access credentials.")
                     }
                 }
             }
@@ -241,11 +249,11 @@ private struct CustomDomainPanel: View {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
                     ProofRow(label: "Hostname", value: deployment.hostname)
                     ProofRow(label: "Tunnel", value: deployment.tunnelName)
-                    ProofRow(label: "Protection", value: deployment.accessCredentials == nil ? "MacRemote OAuth only" : "Cloudflare Access + MacRemote OAuth")
+                    ProofRow(label: "Protection", value: deployment.accessMode.protectionTitle)
                 }
 
                 if deployment.accessCredentials != nil {
-                    Text("Raycast must send the copied `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on every MCP request. Keep Dynamic OAuth enabled for MacRemote's own bearer token.")
+                    Text(deployment.accessMode.detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -76,7 +76,7 @@ enum CloudflareCustomDomainState: Equatable, Sendable {
         case .preparingLocalServer:
             return "Starting the local MCP server before deploying the named tunnel."
         case .deploying:
-            return "Creating or updating Cloudflare Tunnel, DNS, and optional Access resources."
+            return "Creating or updating Cloudflare Tunnel, DNS, and selected Access resources."
         case .deployed(let hostname):
             return hostname
         case .failed(let message):

@@ -7,7 +7,37 @@ struct SettingsView: View {
     @State private var isShowingRevokeOAuthConfirmation = false
 
     var body: some View {
+        @Bindable var appModel = appModel
+
         Form {
+            Section("Connectors") {
+                Picker("Provider", selection: Binding(
+                    get: { appModel.connectorProvider },
+                    set: { appModel.setConnectorProvider($0) }
+                )) {
+                    ForEach(ConnectorProviderProfile.allCases) { provider in
+                        Label(provider.title, systemImage: provider.systemImage)
+                            .tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Picker("Privacy", selection: Binding(
+                    get: { appModel.cloudflareDraft.accessMode },
+                    set: { appModel.setCloudflareAccessMode($0) }
+                )) {
+                    ForEach(CloudflareAccessMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage)
+                            .tag(mode)
+                    }
+                }
+
+                ConnectorProfileSummary(
+                    provider: appModel.connectorProvider,
+                    accessMode: appModel.cloudflareDraft.accessMode
+                )
+            }
+
             Section("Local Server") {
                 LabeledContent("Bind address") {
                     Text("127.0.0.1")
@@ -39,6 +69,39 @@ struct SettingsView: View {
                     isShowingRevokeOAuthConfirmation = true
                 }
                 .buttonStyle(.bordered)
+            }
+
+            Section("Pushover") {
+                Toggle("Send Pushover alerts", isOn: $appModel.pushoverSettings.isEnabled)
+                    .toggleStyle(.checkbox)
+
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        Text("User ID")
+                            .foregroundStyle(.secondary)
+                        SecureField("Pushover User Key", text: $appModel.pushoverSettings.userKey)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 360)
+                    }
+
+                    GridRow {
+                        Text("API Key")
+                            .foregroundStyle(.secondary)
+                        SecureField("Pushover API Token", text: $appModel.pushoverSettings.apiToken)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 360)
+                    }
+                }
+                .disabled(!appModel.pushoverSettings.isEnabled)
+
+                Text("MacRemote sends alerts when a new OAuth client needs host approval, when cloudflared exits unexpectedly, and when the app restarts after a tunnel was marked active.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Send Test Notification", systemImage: "paperplane") {
+                    appModel.sendPushoverTestNotification()
+                }
+                .disabled(!appModel.pushoverSettings.isConfigured)
             }
 
             Section("Full Disk Access") {
@@ -331,5 +394,47 @@ struct SettingsView: View {
         case .unknown:
             .secondary
         }
+    }
+}
+
+private struct ConnectorProfileSummary: View {
+    let provider: ConnectorProviderProfile
+    let accessMode: CloudflareAccessMode
+
+    private var compatibility: ConnectorCompatibility {
+        provider.status(for: accessMode)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                StatusBadge(
+                    title: provider.authLabel,
+                    systemImage: "person.badge.key",
+                    tint: .blue
+                )
+                StatusBadge(
+                    title: provider.headerLabel,
+                    systemImage: "curlybraces",
+                    tint: .purple
+                )
+                StatusBadge(
+                    title: accessMode.shortTitle,
+                    systemImage: accessMode.systemImage,
+                    tint: .secondary
+                )
+                StatusBadge(
+                    title: compatibility.title,
+                    systemImage: compatibility.systemImage,
+                    tint: compatibility.tint
+                )
+            }
+
+            Text(provider.setupLine(for: accessMode))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 2)
     }
 }

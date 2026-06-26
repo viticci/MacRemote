@@ -548,8 +548,12 @@ final class LocalMCPServer: @unchecked Sendable {
             case "ping":
                 return jsonRPCResult(id: id, result: [:])
             case "tools/list":
+                let tools = toolProvider()
+                let toolNames = MCPToolNameMapper.publicNames(for: tools)
                 return jsonRPCResult(id: id, result: [
-                    "tools": toolProvider().map(toolJSON)
+                    "tools": tools.map { tool in
+                        toolJSON(tool, publicName: toolNames[tool.id] ?? MCPToolNameMapper.publicName(for: tool.id))
+                    }
                 ])
             case "tools/call":
                 return await callTool(id: id, message: message, client: client)
@@ -615,8 +619,12 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         do {
-            if let tool = toolProvider().first(where: { $0.id == name }),
-               tool.capability != .readOnly {
+            let tools = toolProvider()
+            guard let tool = MCPToolNameMapper.resolve(name, in: tools) else {
+                throw ToolValidationError.unknownTool(name)
+            }
+
+            if tool.capability != .readOnly {
                 if clientToolPermissionStore?.isAllowed(clientID: client.clientID, toolID: tool.id) == true {
                     eventHandler?(.log(.info, "\(tool.name) allowed by \(client.clientName)'s client policy."))
                 } else {
@@ -647,7 +655,7 @@ final class LocalMCPServer: @unchecked Sendable {
                 }
             }
 
-            let outcome = try await toolExecutor.execute(toolID: name, parameters: arguments)
+            let outcome = try await toolExecutor.execute(toolID: tool.id, parameters: arguments)
             let structuredContent = structuredContent(for: outcome)
             eventHandler?(.log(
                 outcome.succeeded ? .info : .warning,
@@ -715,9 +723,9 @@ final class LocalMCPServer: @unchecked Sendable {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func toolJSON(_ tool: ToolDefinition) -> [String: Any] {
+    private func toolJSON(_ tool: ToolDefinition, publicName: String) -> [String: Any] {
         [
-            "name": tool.id,
+            "name": publicName,
             "title": tool.name,
             "description": toolDescription(for: tool),
             "inputSchema": inputSchema(for: tool),
@@ -1020,6 +1028,92 @@ final class LocalMCPServer: @unchecked Sendable {
                 Darwin.bind(socketDescriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
             }
         }
+    }
+}
+
+private enum MCPToolNameMapper {
+    private static let maxLength = 64
+
+    static func publicNames(for tools: [ToolDefinition]) -> [String: String] {
+        var namesByID = [String: String]()
+        var usedNames = Set<String>()
+
+        for tool in tools {
+            let baseName = publicName(for: tool.id)
+            var candidate = baseName
+            var collisionIndex = 0
+            while usedNames.contains(candidate) {
+                collisionIndex += 1
+                candidate = publicName(
+                    for: "\(tool.id)-\(collisionIndex)",
+                    preferredPrefix: baseName,
+                    forceSuffix: true
+                )
+            }
+            namesByID[tool.id] = candidate
+            usedNames.insert(candidate)
+        }
+
+        return namesByID
+    }
+
+    static func publicName(for id: String, preferredPrefix: String? = nil, forceSuffix: Bool = false) -> String {
+        let sanitized = sanitize(preferredPrefix ?? id)
+        let base = sanitized.isEmpty ? "tool" : sanitized
+        guard forceSuffix || base.count > maxLength else {
+            return base
+        }
+
+        let suffix = "_\(shortHash(id))"
+        let prefixLength = max(1, maxLength - suffix.count)
+        return String(base.prefix(prefixLength)) + suffix
+    }
+
+    static func resolve(_ name: String, in tools: [ToolDefinition]) -> ToolDefinition? {
+        if let exactMatch = tools.first(where: { $0.id == name }) {
+            return exactMatch
+        }
+
+        let namesByID = publicNames(for: tools)
+        guard let internalID = namesByID.first(where: { $0.value == name })?.key else {
+            return nil
+        }
+        return tools.first { $0.id == internalID }
+    }
+
+    private static func sanitize(_ value: String) -> String {
+        var output = ""
+        output.reserveCapacity(value.count)
+
+        for scalar in value.unicodeScalars {
+            if isAllowed(scalar) {
+                output.unicodeScalars.append(scalar)
+            } else if output.last != "_" {
+                output.append("_")
+            }
+        }
+
+        return output.trimmingCharacters(in: CharacterSet(charactersIn: "_-"))
+    }
+
+    private static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 48...57, 65...90, 97...122:
+            true
+        case 45, 95:
+            true
+        default:
+            false
+        }
+    }
+
+    private static func shortHash(_ value: String) -> String {
+        var hash: UInt64 = 14695981039346656037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return String(format: "%012llx", hash)
     }
 }
 

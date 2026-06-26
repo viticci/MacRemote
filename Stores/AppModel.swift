@@ -26,14 +26,31 @@ final class AppModel {
     var anthropicCredentialState: AnthropicCredentialState = .unknown
     var lastSmokeProof: SmokeProofRecord?
     var cloudflareZones: [CloudflareZone] = []
-    var cloudflareDraft = CloudflareCustomDomainDraft()
+    var cloudflareDraft: CloudflareCustomDomainDraft
     var cloudflareCustomDomainState: CloudflareCustomDomainState = .idle
     var lastCloudflareDeployment: CloudflareCustomDomainDeployment?
+    var connectorProvider: ConnectorProviderProfile = .raycast {
+        didSet {
+            persistConnectorSettings()
+        }
+    }
+    var pushoverSettings: PushoverSettings {
+        didSet {
+            persistPushoverSettings()
+        }
+    }
 
     private static let instanceIDKey = "MacRemote.instanceID"
     private static let remCTLProfileEnabledKey = "MacRemote.remCTLProfileEnabled"
     private static let disabledToolIDsKey = "MacRemote.disabledToolIDs"
     private static let confirmedFullDiskAccessSignatureKey = "MacRemote.confirmedFullDiskAccessSignature"
+    private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
+    private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
+    private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"
+    private static let connectorProviderKey = "MacRemote.connector.provider"
+    private static let connectorAccessModeKey = "MacRemote.connector.accessMode"
+    private static let tunnelSupervisionActiveKey = "MacRemote.tunnelSupervision.active"
+    private static let tunnelSupervisionURLKey = "MacRemote.tunnelSupervision.url"
 
     private let userDefaults: UserDefaults
     private let tunnelService = TunnelService()
@@ -44,17 +61,33 @@ final class AppModel {
     private let macOSPrivacyAccessService = MacOSPrivacyAccessService()
     private let smokeTestService = SmokeTestService()
     private let cloudflareService = CloudflareService()
+    private let pushoverSender: any PushoverSending
     private let processRunner = ProcessRunner()
     private var authCoordinator: OAuthCoordinator!
     private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
     private var localServer: LocalMCPServer?
     private var approvalCoordinatorGeneration = 0
+    private var notifiedAuthorizationRequestIDs: Set<UUID> = []
 
-    init(userDefaults: UserDefaults = .standard, toolStore: ToolRegistryStore = ToolRegistryStore()) {
+    init(
+        userDefaults: UserDefaults = .standard,
+        toolStore: ToolRegistryStore = ToolRegistryStore(),
+        pushoverSender: any PushoverSending = PushoverService()
+    ) {
         self.userDefaults = userDefaults
         self.toolStore = toolStore
         self.clientToolPermissionStore = ClientToolPermissionStore(userDefaults: userDefaults)
         self.toolSurfaceRuntime = ToolSurfaceRuntime(environment: Self.toolEnvironment)
+        self.pushoverSender = pushoverSender
+        self.pushoverSettings = Self.loadPushoverSettings(from: userDefaults)
+        let loadedConnectorProvider = Self.loadConnectorProvider(from: userDefaults)
+        self.connectorProvider = loadedConnectorProvider
+        self.cloudflareDraft = CloudflareCustomDomainDraft(
+            selectedZoneID: nil,
+            subdomain: "macremote",
+            accessMode: Self.loadConnectorAccessMode(from: userDefaults) ?? loadedConnectorProvider.recommendedAccessMode,
+            apiToken: ""
+        )
         self.instanceID = AppModel.makeInstanceID(userDefaults: userDefaults)
         let persistedDisabledToolIDs = Set(userDefaults.stringArray(forKey: Self.disabledToolIDsKey) ?? [])
 
@@ -84,6 +117,7 @@ final class AppModel {
             level: .info,
             "MacRemote initialized with \(toolExposureSummary.total) exposed tools."
         )
+        warnIfTunnelSupervisionWasInterrupted()
     }
 
     private func installApprovalCoordinators() {
@@ -93,8 +127,7 @@ final class AppModel {
         authCoordinator = OAuthCoordinator { [weak self] approvals in
             Task { @MainActor in
                 guard self?.approvalCoordinatorGeneration == generation else { return }
-                self?.approvals = approvals
-                self?.connectedClients = self?.authCoordinator.connectedClientSnapshot() ?? []
+                self?.handleAuthorizationApprovalsChanged(approvals)
             }
         }
         toolCallApprovalCoordinator = ToolCallApprovalCoordinator { [weak self] approvals in
@@ -180,6 +213,7 @@ final class AppModel {
     }
 
     func stopLocalServer() {
+        clearTunnelSupervision()
         tunnelService.stop()
         localServer?.stop()
         localServer = nil
@@ -216,12 +250,28 @@ final class AppModel {
     func revokeOAuthGrants() {
         let summary = authCoordinator.revokeAllGrants()
         approvals = []
+        notifiedAuthorizationRequestIDs.removeAll()
         connectedClients = []
         clientToolPermissionSnapshot = clientToolPermissionStore.clear()
         appendLog(
             level: .warning,
             "Revoked OAuth grants: \(summary.clients) clients, \(summary.authorizations) authorizations, \(summary.accessTokens) access tokens, \(summary.refreshTokens) refresh tokens."
         )
+    }
+
+    func setConnectorProvider(_ provider: ConnectorProviderProfile) {
+        guard connectorProvider != provider else { return }
+        connectorProvider = provider
+        setCloudflareAccessMode(provider.recommendedAccessMode)
+    }
+
+    func setCloudflareAccessMode(_ mode: CloudflareAccessMode) {
+        guard cloudflareDraft.accessMode != mode else {
+            persistConnectorSettings()
+            return
+        }
+        cloudflareDraft.accessMode = mode
+        persistConnectorSettings()
     }
 
     func runRemCTLTodayTest() {
@@ -626,6 +676,7 @@ final class AppModel {
     }
 
     func stopTunnel() {
+        clearTunnelSupervision()
         tunnelService.stop()
         tunnelStatus = localServerURL == nil ? .stopped : .ready
         appendLog(level: .info, "Cloudflare Tunnel stopped.")
@@ -678,7 +729,7 @@ final class AppModel {
             appendLog(level: .warning, message)
             return
         }
-        let protectWithAccess = cloudflareDraft.protectWithAccess
+        let accessMode = cloudflareDraft.accessMode
         let apiToken = cloudflareDraft.trimmedAPIToken
         guard !apiToken.isEmpty else {
             let message = CloudflareServiceError.missingAPIToken.localizedDescription
@@ -712,7 +763,7 @@ final class AppModel {
                     zone: selectedCloudflareZone,
                     subdomain: subdomain,
                     localServerURL: localServerURL,
-                    protectWithAccess: protectWithAccess,
+                    accessMode: accessMode,
                     apiToken: apiToken
                 )
                 lastCloudflareDeployment = deployment
@@ -724,7 +775,7 @@ final class AppModel {
                 cloudflareCustomDomainState = .deployed(deployment.hostname)
                 appendLog(
                     level: .info,
-                    "Deployed Cloudflare custom domain tunnel for \(deployment.hostname)\(deployment.accessCredentials == nil ? "" : " with Access service-token protection")."
+                    "Deployed Cloudflare custom domain tunnel for \(deployment.hostname) with \(deployment.accessMode.protectionTitle)."
                 )
             } catch {
                 let message = error.localizedDescription
@@ -914,8 +965,13 @@ final class AppModel {
         return cloudflareCustomDomainState.detail
     }
 
-    var cloudflareAccessHeadersJSON: String? {
-        lastCloudflareDeployment?.accessCredentials?.raycastHeadersJSON
+    var cloudflareAccessCredentialsJSON: String? {
+        guard let deployment = lastCloudflareDeployment else { return nil }
+        return deployment.accessCredentials?.headersJSON(for: deployment.accessMode)
+    }
+
+    var cloudflareAccessCopyButtonTitle: String {
+        lastCloudflareDeployment?.accessMode.copyButtonTitle ?? "Copy Access"
     }
 
     var toolExposureSummary: ToolExposureSummary {
@@ -992,6 +1048,21 @@ final class AppModel {
         }
     }
 
+    func sendPushoverTestNotification() {
+        guard pushoverSettings.isConfigured else {
+            appendLog(level: .warning, PushoverServiceError.missingCredentials.localizedDescription)
+            return
+        }
+
+        sendPushoverNotification(
+            PushoverMessage(
+                title: "MacRemote",
+                message: "Pushover notifications are configured."
+            ),
+            successLog: "Pushover test notification sent."
+        )
+    }
+
     private static func makeInstanceID(userDefaults: UserDefaults) -> String {
         if let existing = userDefaults.string(forKey: instanceIDKey),
            existing.range(of: #"^[a-f0-9]{32}$"#, options: .regularExpression) != nil {
@@ -1001,6 +1072,119 @@ final class AppModel {
         let instanceID = newInstanceID()
         userDefaults.set(instanceID, forKey: instanceIDKey)
         return instanceID
+    }
+
+    private static func loadPushoverSettings(from userDefaults: UserDefaults) -> PushoverSettings {
+        PushoverSettings(
+            isEnabled: userDefaults.bool(forKey: pushoverEnabledKey),
+            userKey: userDefaults.string(forKey: pushoverUserKeyKey) ?? "",
+            apiToken: userDefaults.string(forKey: pushoverAPITokenKey) ?? ""
+        )
+    }
+
+    private static func loadConnectorProvider(from userDefaults: UserDefaults) -> ConnectorProviderProfile {
+        guard let rawValue = userDefaults.string(forKey: connectorProviderKey),
+              let provider = ConnectorProviderProfile(rawValue: rawValue) else {
+            return .raycast
+        }
+        return provider
+    }
+
+    private static func loadConnectorAccessMode(from userDefaults: UserDefaults) -> CloudflareAccessMode? {
+        guard let rawValue = userDefaults.string(forKey: connectorAccessModeKey) else {
+            return nil
+        }
+        return CloudflareAccessMode(rawValue: rawValue)
+    }
+
+    private func persistConnectorSettings() {
+        userDefaults.set(connectorProvider.rawValue, forKey: Self.connectorProviderKey)
+        userDefaults.set(cloudflareDraft.accessMode.rawValue, forKey: Self.connectorAccessModeKey)
+    }
+
+    private func persistPushoverSettings() {
+        userDefaults.set(pushoverSettings.isEnabled, forKey: Self.pushoverEnabledKey)
+        userDefaults.set(pushoverSettings.trimmedUserKey, forKey: Self.pushoverUserKeyKey)
+        userDefaults.set(pushoverSettings.trimmedAPIToken, forKey: Self.pushoverAPITokenKey)
+    }
+
+    private func handleAuthorizationApprovalsChanged(_ approvals: [ApprovalRequest]) {
+        self.approvals = approvals
+        connectedClients = authCoordinator.connectedClientSnapshot()
+        notifyForNewAuthorizationApprovals(approvals)
+        if approvals.contains(where: { $0.state == .pending }) {
+            selection = .approvals
+        }
+    }
+
+    private func notifyForNewAuthorizationApprovals(_ approvals: [ApprovalRequest]) {
+        guard pushoverSettings.isConfigured else { return }
+
+        let newPendingRequests = approvals
+            .filter { request in
+                request.state == .pending && !notifiedAuthorizationRequestIDs.contains(request.id)
+            }
+            .sorted { $0.createdAt < $1.createdAt }
+
+        for request in newPendingRequests {
+            notifiedAuthorizationRequestIDs.insert(request.id)
+            sendPushoverNotification(
+                PushoverMessage(
+                    title: "MacRemote Approval Request",
+                    message: "\(request.clientName) is requesting MacRemote access. Open MacRemote on the host Mac to approve or deny it."
+                )
+            )
+        }
+    }
+
+    private func sendPushoverNotification(_ message: PushoverMessage, successLog: String? = nil) {
+        let settings = pushoverSettings
+        guard settings.isConfigured else { return }
+
+        let sender = pushoverSender
+        Task { [weak self, settings, message, sender, successLog] in
+            do {
+                try await sender.send(message, using: settings)
+                if let successLog {
+                    await MainActor.run {
+                        self?.appendLog(level: .info, successLog)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self?.appendLog(
+                        level: .warning,
+                        "Pushover notification failed: \(self?.singleLine(error.localizedDescription) ?? error.localizedDescription)"
+                    )
+                }
+            }
+        }
+    }
+
+    private func recordTunnelSupervision(publicURL: URL) {
+        userDefaults.set(true, forKey: Self.tunnelSupervisionActiveKey)
+        userDefaults.set(publicURL.absoluteString, forKey: Self.tunnelSupervisionURLKey)
+    }
+
+    private func clearTunnelSupervision() {
+        userDefaults.removeObject(forKey: Self.tunnelSupervisionActiveKey)
+        userDefaults.removeObject(forKey: Self.tunnelSupervisionURLKey)
+    }
+
+    private func warnIfTunnelSupervisionWasInterrupted() {
+        guard userDefaults.bool(forKey: Self.tunnelSupervisionActiveKey) else { return }
+
+        let previousURL = userDefaults.string(forKey: Self.tunnelSupervisionURLKey)
+        clearTunnelSupervision()
+        let suffix = previousURL.map { " Previous public URL: \($0)." } ?? ""
+        let message = "MacRemote restarted while a Cloudflare Tunnel was marked active. Tunnel supervision was interrupted; confirm the tunnel is still running or restart it from MacRemote.\(suffix)"
+        appendLog(level: .warning, message)
+        sendPushoverNotification(
+            PushoverMessage(
+                title: "MacRemote Tunnel Supervision Interrupted",
+                message: message
+            )
+        )
     }
 
     private static func newInstanceID() -> String {
@@ -1376,6 +1560,7 @@ final class AppModel {
 
     private func stopExposureForInstanceRotation() {
         toolCallApprovalCoordinator.denyAllPending()
+        clearTunnelSupervision()
         tunnelService.stop()
         localServer?.stop()
         localServer = nil
@@ -1456,11 +1641,7 @@ final class AppModel {
         case .log(let level, let message):
             appendLog(level: level, message)
         case .approvalsChanged(let approvals):
-            self.approvals = approvals
-            connectedClients = authCoordinator.connectedClientSnapshot()
-            if approvals.contains(where: { $0.state == .pending }) {
-                selection = .approvals
-            }
+            handleAuthorizationApprovalsChanged(approvals)
         case .clientsChanged(let clients):
             connectedClients = clients
         }
@@ -1472,13 +1653,22 @@ final class AppModel {
             appendLog(level: .info, message)
         case .started(let publicURL):
             tunnelStatus = .running(publicURL)
+            recordTunnelSupervision(publicURL: publicURL)
             appendLog(level: .info, "Cloudflare Tunnel ready at \(publicURL.absoluteString).")
         case .stopped:
+            clearTunnelSupervision()
             tunnelStatus = tunnelService.status(localServerURL: localServerURL)
             appendLog(level: .info, "Cloudflare Tunnel process exited.")
         case .failed(let message):
+            clearTunnelSupervision()
             tunnelStatus = .failed(message)
             appendLog(level: .error, message)
+            sendPushoverNotification(
+                PushoverMessage(
+                    title: "MacRemote Tunnel Stopped",
+                    message: "\(message) Open MacRemote on the host Mac to restart the tunnel."
+                )
+            )
         }
     }
 }

@@ -230,9 +230,9 @@ final class TunnelService: @unchecked Sendable {
         }
 
         if exitCode == 0 {
-            onEvent(.stopped)
+            onEvent(.failed("cloudflared exited unexpectedly with status 0."))
         } else {
-            onEvent(.failed("cloudflared exited with status \(exitCode)."))
+            onEvent(.failed("cloudflared exited unexpectedly with status \(exitCode)."))
         }
     }
 }

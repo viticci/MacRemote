@@ -1209,7 +1209,11 @@ def cloudflare_update_access_app(zone_id: str, app_id: str, hostname: str) -> di
 def cloudflare_create_service_auth_policy(zone_id: str, app_id: str, service_token_id: str) -> dict[str, Any] | None:
     policies = cloudflare_access_policies(zone_id, app_id)
     existing = next(
-        (policy for policy in policies if str(policy.get("name") or "").startswith("MacRemote Raycast Service Token")),
+        (
+            policy
+            for policy in policies
+            if str(policy.get("name") or "").startswith(("MacRemote Service Token", "MacRemote Raycast Service Token"))
+        ),
         None,
     )
     if existing and existing.get("id"):
@@ -1240,7 +1244,7 @@ def cloudflare_access_policies(zone_id: str, app_id: str) -> list[dict[str, Any]
 
 def cloudflare_service_auth_policy_body(service_token_id: str, precedence: int) -> dict[str, Any]:
     return {
-        "name": "MacRemote Raycast Service Token",
+        "name": "MacRemote Service Token",
         "decision": "non_identity",
         "precedence": precedence,
         "session_duration": "24h",
