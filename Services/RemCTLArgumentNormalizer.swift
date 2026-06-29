@@ -29,11 +29,13 @@ enum RemCTLArgumentNormalizer {
         "upcoming"
     ])
 
-    private static let privateOnlyFlags: Set<String> = [
+    private static let privateMetadataFlags: Set<String> = [
+        "-f",
         "-t",
         "--assign",
         "--early-reminder",
         "--flagged",
+        "--flag",
         "--grocery",
         "--image",
         "--latitude",
@@ -127,15 +129,15 @@ enum RemCTLArgumentNormalizer {
             return false
         }
 
-        return !arguments[(commandIndex + 1)...].contains { isPrivateOnlyArgument($0) }
+        return !arguments[(commandIndex + 1)...].contains { isPrivateMetadataArgument($0) }
     }
 
-    private static func isPrivateOnlyArgument(_ argument: String) -> Bool {
-        if privateOnlyFlags.contains(argument) {
+    private static func isPrivateMetadataArgument(_ argument: String) -> Bool {
+        if privateMetadataFlags.contains(argument) {
             return true
         }
 
-        return privateOnlyFlags.contains { flag in
+        return privateMetadataFlags.contains { flag in
             argument.hasPrefix("\(flag)=")
         }
     }

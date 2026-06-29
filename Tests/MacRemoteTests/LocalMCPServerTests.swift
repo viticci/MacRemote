@@ -878,6 +878,7 @@ final class LocalMCPServerTests: XCTestCase {
         let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
         XCTAssertTrue(argsDescription.contains("Use numeric reminder IDs"))
         XCTAssertTrue(argsDescription.contains("Use `--private --url`"))
+        XCTAssertTrue(argsDescription.contains("add --private -f"))
         XCTAssertTrue(argsDescription.contains("do not use `--private`"))
     }
 

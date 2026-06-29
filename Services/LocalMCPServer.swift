@@ -912,7 +912,7 @@ final class LocalMCPServer: @unchecked Sendable {
         case "args", "argv":
             switch URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() {
             case "remctl":
-                return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Use `--private --url` for synced rich URL attachments, but do not use `--private` for ordinary `edit ID -d DATE` or `edit ID --alarm DATE` calls."
+                return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Use `--private --url` for synced rich URL attachments and `add --private -f` or `add --private --flag` for real private flag writes, but do not use `--private` for ordinary `edit ID -d DATE` or `edit ID --alarm DATE` calls."
             case "pocketctl":
                 return "Exact PocketCTL argv items. No shell is used. Prefer `--json`; use `--dry-run --json` before queue, playlist, bookmark, archive, progress, or played-state writes unless the user explicitly requested the write."
             case "habitctl":

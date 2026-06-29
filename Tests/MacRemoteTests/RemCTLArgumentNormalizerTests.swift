@@ -70,6 +70,76 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
         )
     }
 
+    func testStripsPrivateForNormalAddFields() async throws {
+        let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: [
+                "add",
+                "Draft column",
+                "--private",
+                "-l",
+                "Work",
+                "-d",
+                "2026-06-30 10:00",
+                "--alarm",
+                "15m",
+                "--json"
+            ]
+        ) { _ in nil }
+
+        XCTAssertEqual(
+            normalized,
+            [
+                "add",
+                "Draft column",
+                "-l",
+                "Work",
+                "-d",
+                "2026-06-30 10:00",
+                "--alarm",
+                "15m",
+                "--json"
+            ]
+        )
+    }
+
+    func testKeepsPrivateForRemCTLPrivateMetadataArguments() async throws {
+        let cases = [
+            ["add", "Tagged", "--private", "-t", "work", "--json"],
+            ["add", "Tagged", "--private", "--tags=work", "--json"],
+            ["add", "Linked", "--private", "--url=https://example.com", "--json"],
+            ["add", "Groceries", "--private", "--grocery", "--json"],
+            ["add", "Sectioned", "--private", "--section", "Research", "--json"],
+            ["add", "Sectioned", "--private", "--section-id=DCD255E2-7CF5-4B45-9566-3F9A5D84AFA8", "--json"],
+            ["add", "Sectioned", "--private", "--new-section", "Research", "--json"],
+            ["add", "Parent", "--private", "--subtask", "Child", "--json"],
+            ["add", "Image", "--private", "--image", "/tmp/example.png", "--json"],
+            ["add", "Flagged", "--private", "-f", "--json"],
+            ["add", "Flagged", "--private", "--flag", "--json"],
+            ["add", "Urgent", "--private", "--urgent", "--json"],
+            ["add", "Not urgent", "--private", "--no-urgent", "--json"],
+            ["add", "Early", "--private", "--early-reminder", "15m", "--json"],
+            ["add", "Assigned", "--private", "--assign", "me", "--json"],
+            ["add", "Unassigned", "--private", "--unassign", "--json"],
+            ["edit", "23829", "--private", "--flagged", "--json"],
+            ["edit", "23829", "--private", "--no-flagged", "--json"],
+            ["edit", "23829", "--private", "--location-title", "Apple Park", "--json"],
+            ["edit", "23829", "--private", "--latitude", "37.3349", "--json"],
+            ["edit", "23829", "--private", "--longitude=-122.0090", "--json"],
+            ["edit", "23829", "--private", "--radius", "200", "--json"],
+            ["edit", "23829", "--private", "--proximity=leaving", "--json"]
+        ]
+
+        for arguments in cases {
+            let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+                for: remCTLAdapter(),
+                arguments: arguments
+            ) { _ in nil }
+
+            XCTAssertEqual(normalized, arguments, "Failed to preserve --private for \(arguments)")
+        }
+    }
+
     func testKeepsPrivateForPrivateMetadataEdits() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
@@ -95,6 +165,64 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
         ) { _ in nil }
 
         XCTAssertEqual(normalized, ["add", "Research", "-l", "Projects", "--private", "--url=https://example.com", "--json"])
+    }
+
+    func testKeepsPrivateForRealFlagAdds() async throws {
+        let normalizedShortFlag = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["add", "Flag me", "-l", "Projects", "--private", "-f", "--json"]
+        ) { _ in nil }
+
+        XCTAssertEqual(normalizedShortFlag, ["add", "Flag me", "-l", "Projects", "--private", "-f", "--json"])
+
+        let normalizedLongFlag = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["add", "Flag me", "-l", "Projects", "--private", "--flag", "--json"]
+        ) { _ in nil }
+
+        XCTAssertEqual(normalizedLongFlag, ["add", "Flag me", "-l", "Projects", "--private", "--flag", "--json"])
+    }
+
+    func testKeepsPrivateForKnownPrivateMetadataFlagTokens() async throws {
+        let flags = [
+            "-f",
+            "-t",
+            "--assign",
+            "--early-reminder",
+            "--flag",
+            "--flagged",
+            "--grocery",
+            "--image",
+            "--latitude",
+            "--location-title",
+            "--longitude",
+            "--new-section",
+            "--no-flagged",
+            "--no-urgent",
+            "--proximity",
+            "--radius",
+            "--section",
+            "--section-id",
+            "--subtask",
+            "--tags",
+            "--unassign",
+            "--url",
+            "--urgent"
+        ]
+
+        // Command-specific validity belongs to RemCTL. This test keeps the
+        // normalizer's token-level preservation list from regressing silently.
+        for flag in flags {
+            let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+                for: remCTLAdapter(),
+                arguments: ["add", "Research", "--private", flag, "--json"]
+            ) { _ in nil }
+
+            XCTAssertTrue(
+                normalized.contains("--private"),
+                "`--private` should be preserved for \(flag)"
+            )
+        }
     }
 
     func testLeavesOtherGenericCLIsUntouched() async throws {
