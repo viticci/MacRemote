@@ -230,6 +230,7 @@ private struct ToolPanel: View {
     private var categoryTint: Color {
         switch tool.category {
         case .reminders: .blue
+        case .habits: .mint
         case .podcasts: .purple
         case .filesystem: .orange
         case .utilities: .green
@@ -490,6 +491,7 @@ private extension ToolCategory {
     var systemImage: String {
         switch self {
         case .reminders: "checklist"
+        case .habits: "figure.mind.and.body"
         case .podcasts: "podcasts"
         case .filesystem: "folder"
         case .utilities: "wrench.and.screwdriver"

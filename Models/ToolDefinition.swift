@@ -21,6 +21,7 @@ enum ToolOrigin: String, Codable, Sendable {
 
 enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
     case reminders
+    case habits
     case podcasts
     case filesystem
     case utilities
@@ -33,6 +34,7 @@ enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .reminders: "Reminders"
+        case .habits: "Habits"
         case .podcasts: "Podcasts"
         case .filesystem: "Filesystem"
         case .utilities: "Utilities"

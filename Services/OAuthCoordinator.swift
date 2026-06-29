@@ -22,15 +22,61 @@ final class OAuthCoordinator: @unchecked Sendable {
 
     private struct Client {
         let id: String
+        let trustID: String
         let name: String
         let redirectURIs: [String]
         let scopes: Set<String>
         let createdAt: Date
+
+        init(id: String, trustID: String, name: String, redirectURIs: [String], scopes: Set<String>, createdAt: Date) {
+            self.id = id
+            self.trustID = trustID
+            self.name = name
+            self.redirectURIs = redirectURIs
+            self.scopes = scopes
+            self.createdAt = createdAt
+        }
+
+        init(stored: OAuthStoredClient) {
+            self.id = stored.id
+            self.name = stored.name
+            self.redirectURIs = stored.redirectURIs
+            self.scopes = Set(stored.scopes)
+            self.createdAt = stored.createdAt
+            self.trustID = stored.trustID ?? OAuthCoordinator.clientTrustID(
+                name: stored.name,
+                redirectURIs: stored.redirectURIs,
+                scopes: Set(stored.scopes)
+            )
+        }
+
+        var stored: OAuthStoredClient {
+            OAuthStoredClient(
+                id: id,
+                trustID: trustID,
+                name: name,
+                redirectURIs: redirectURIs,
+                scopes: scopes.sorted(),
+                createdAt: createdAt
+            )
+        }
+
+        func merged(name: String, redirectURIs: [String], scopes: Set<String>) -> Client {
+            Client(
+                id: id,
+                trustID: trustID,
+                name: self.name.isEmpty ? name : self.name,
+                redirectURIs: Array(Set(self.redirectURIs + redirectURIs)).sorted(),
+                scopes: self.scopes.union(scopes),
+                createdAt: createdAt
+            )
+        }
     }
 
     private struct PendingAuthorization {
         let id: UUID
         let clientID: String
+        let clientTrustID: String
         let clientName: String
         let redirectURI: String
         let scopes: Set<String>
@@ -48,6 +94,8 @@ final class OAuthCoordinator: @unchecked Sendable {
         var approvalRequest: ApprovalRequest {
             ApprovalRequest(
                 id: id,
+                clientID: clientID,
+                clientTrustID: clientTrustID,
                 clientName: clientName,
                 redirectURI: redirectURI,
                 issuer: issuer,
@@ -66,6 +114,36 @@ final class OAuthCoordinator: @unchecked Sendable {
         let scopes: Set<String>
         let issuedAt: Date
         let expiresAt: Date
+
+        init(clientID: String, issuer: String, resource: String, scopes: Set<String>, issuedAt: Date, expiresAt: Date) {
+            self.clientID = clientID
+            self.issuer = issuer
+            self.resource = resource
+            self.scopes = scopes
+            self.issuedAt = issuedAt
+            self.expiresAt = expiresAt
+        }
+
+        init(stored: OAuthStoredToken) {
+            self.clientID = stored.clientID
+            self.issuer = stored.issuer
+            self.resource = stored.resource
+            self.scopes = Set(stored.scopes)
+            self.issuedAt = stored.issuedAt
+            self.expiresAt = stored.expiresAt
+        }
+
+        func stored(tokenHash: String) -> OAuthStoredToken {
+            OAuthStoredToken(
+                tokenHash: tokenHash,
+                clientID: clientID,
+                issuer: issuer,
+                resource: resource,
+                scopes: scopes.sorted(),
+                issuedAt: issuedAt,
+                expiresAt: expiresAt
+            )
+        }
     }
 
     private struct RefreshTokenRecord {
@@ -75,17 +153,50 @@ final class OAuthCoordinator: @unchecked Sendable {
         let scopes: Set<String>
         let issuedAt: Date
         let expiresAt: Date
+
+        init(clientID: String, issuer: String, resource: String, scopes: Set<String>, issuedAt: Date, expiresAt: Date) {
+            self.clientID = clientID
+            self.issuer = issuer
+            self.resource = resource
+            self.scopes = scopes
+            self.issuedAt = issuedAt
+            self.expiresAt = expiresAt
+        }
+
+        init(stored: OAuthStoredToken) {
+            self.clientID = stored.clientID
+            self.issuer = stored.issuer
+            self.resource = stored.resource
+            self.scopes = Set(stored.scopes)
+            self.issuedAt = stored.issuedAt
+            self.expiresAt = stored.expiresAt
+        }
+
+        func stored(tokenHash: String) -> OAuthStoredToken {
+            OAuthStoredToken(
+                tokenHash: tokenHash,
+                clientID: clientID,
+                issuer: issuer,
+                resource: resource,
+                scopes: scopes.sorted(),
+                issuedAt: issuedAt,
+                expiresAt: expiresAt
+            )
+        }
     }
 
     private let lock = NSLock()
     private let changeHandler: ChangeHandler?
+    private let grantStore: OAuthGrantStore?
     private var clients: [String: Client] = [:]
     private var authorizations: [UUID: PendingAuthorization] = [:]
     private var accessTokensByHash: [String: AccessTokenRecord] = [:]
     private var refreshTokensByHash: [String: RefreshTokenRecord] = [:]
 
-    init(changeHandler: ChangeHandler? = nil) {
+    init(changeHandler: ChangeHandler? = nil, grantStore: OAuthGrantStore? = nil) {
         self.changeHandler = changeHandler
+        self.grantStore = grantStore
+        loadPersistedGrants()
     }
 
     func registerClient(from jsonObject: Any) throws -> [String: Any] {
@@ -96,30 +207,46 @@ final class OAuthCoordinator: @unchecked Sendable {
         let clientName = sanitizeClientName(object["client_name"] as? String)
         let redirectURIs = try parseRedirectURIs(object["redirect_uris"])
         let scopes = parseScopes(object["scope"] as? String)
+        let trustID = Self.clientTrustID(name: clientName, redirectURIs: redirectURIs, scopes: scopes)
         let clientID = "macremote-client-\(Self.randomToken(byteCount: 16))"
         let client = Client(
             id: clientID,
+            trustID: trustID,
             name: clientName,
             redirectURIs: redirectURIs,
             scopes: scopes,
             createdAt: Date()
         )
 
-        try lock.withLock {
+        let registeredClient: Client = try lock.withLock {
+            if let existing = clients.values.first(where: { $0.trustID == trustID }) {
+                let merged = existing.merged(name: clientName, redirectURIs: redirectURIs, scopes: scopes)
+                clients[existing.id] = merged
+                try persistGrantSnapshotLocked()
+                return merged
+            }
+
             guard clients.count < Self.maxRegisteredClients else {
                 throw OAuthError.invalidRequest("Too many registered OAuth clients. Revoke grants and try again.")
             }
             clients[clientID] = client
+            do {
+                try persistGrantSnapshotLocked()
+            } catch {
+                clients.removeValue(forKey: clientID)
+                throw error
+            }
+            return client
         }
 
         return [
-            "client_id": clientID,
-            "client_name": clientName,
-            "redirect_uris": redirectURIs,
+            "client_id": registeredClient.id,
+            "client_name": registeredClient.name,
+            "redirect_uris": registeredClient.redirectURIs,
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
-            "scope": scopes.sorted().joined(separator: " ")
+            "scope": registeredClient.scopes.sorted().joined(separator: " ")
         ]
     }
 
@@ -141,12 +268,18 @@ final class OAuthCoordinator: @unchecked Sendable {
         }
 
         let requestedScopes = parseScopes(queryItems["scope"])
-        let client = try clientForAuthorization(clientID: clientID, redirectURI: redirectURI, requestedScopes: requestedScopes)
+        let client = try clientForAuthorization(
+            clientID: clientID,
+            redirectURI: redirectURI,
+            requestedScopes: requestedScopes,
+            recoveryName: recoveredClientName(queryItems: queryItems, redirectURI: redirectURI)
+        )
         let resolvedResource = try resolveRequestedResource(queryItems["resource"], expectedResource: resource)
         let id = UUID()
         let authorization = PendingAuthorization(
             id: id,
             clientID: clientID,
+            clientTrustID: client.trustID,
             clientName: client.name,
             redirectURI: redirectURI,
             scopes: requestedScopes,
@@ -280,6 +413,7 @@ final class OAuthCoordinator: @unchecked Sendable {
             let client = clients[record.clientID]
             return AuthenticatedClientContext(
                 clientID: record.clientID,
+                clientTrustID: client?.trustID ?? record.clientID,
                 clientName: client?.name ?? "Remote MCP Client",
                 issuer: record.issuer,
                 resource: record.resource,
@@ -315,6 +449,7 @@ final class OAuthCoordinator: @unchecked Sendable {
             authorizations.removeAll()
             accessTokensByHash.removeAll()
             refreshTokensByHash.removeAll()
+            grantStore?.clear()
             return summary
         }
         notify([])
@@ -356,7 +491,7 @@ final class OAuthCoordinator: @unchecked Sendable {
                 throw OAuthError.invalidGrant("Client or redirect URI mismatch.")
             }
             guard authorization.issuer == issuer else {
-                throw OAuthError.invalidGrant("Issuer mismatch.")
+                throw OAuthError.invalidGrant(Self.issuerMismatchDescription(expected: authorization.issuer, actual: issuer))
             }
             let requestedResource = try resolveRequestedResource(form["resource"], expectedResource: resource)
             guard authorization.resource == requestedResource else {
@@ -378,7 +513,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         let scopes = lock.withLock {
             authorizations[authorizationID]?.scopes ?? ["mcp:tools"]
         }
-        return issueTokenResponse(clientID: clientID, issuer: issuer, resource: resource, scopes: scopes, now: now)
+        return try issueTokenResponse(clientID: clientID, issuer: issuer, resource: resource, scopes: scopes, now: now)
     }
 
     private func exchangeRefreshToken(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {
@@ -397,7 +532,7 @@ final class OAuthCoordinator: @unchecked Sendable {
                 throw OAuthError.invalidGrant("Refresh token expired.")
             }
             guard record.issuer == issuer else {
-                throw OAuthError.invalidGrant("Issuer mismatch.")
+                throw OAuthError.invalidGrant(Self.issuerMismatchDescription(expected: record.issuer, actual: issuer))
             }
             let requestedResource = try resolveRequestedResource(form["resource"], expectedResource: resource)
             guard record.resource == requestedResource else {
@@ -407,10 +542,10 @@ final class OAuthCoordinator: @unchecked Sendable {
             return record
         }
 
-        return issueTokenResponse(clientID: record.clientID, issuer: issuer, resource: resource, scopes: record.scopes, now: now)
+        return try issueTokenResponse(clientID: record.clientID, issuer: issuer, resource: resource, scopes: record.scopes, now: now)
     }
 
-    private func issueTokenResponse(clientID: String, issuer: String, resource: String, scopes: Set<String>, now: Date) -> [String: Any] {
+    private func issueTokenResponse(clientID: String, issuer: String, resource: String, scopes: Set<String>, now: Date) throws -> [String: Any] {
         let accessToken = Self.randomToken(byteCount: 32)
         let refreshToken = Self.randomToken(byteCount: 32)
         let accessHash = Self.sha256Hex(accessToken)
@@ -418,7 +553,7 @@ final class OAuthCoordinator: @unchecked Sendable {
         let accessExpiresIn = 900
         let refreshExpiresIn = 86_400
 
-        lock.withLock {
+        try lock.withLock {
             accessTokensByHash[accessHash] = AccessTokenRecord(
                 clientID: clientID,
                 issuer: issuer,
@@ -435,6 +570,7 @@ final class OAuthCoordinator: @unchecked Sendable {
                 issuedAt: now,
                 expiresAt: now.addingTimeInterval(TimeInterval(refreshExpiresIn))
             )
+            try persistGrantSnapshotLocked()
         }
 
         return [
@@ -489,10 +625,82 @@ final class OAuthCoordinator: @unchecked Sendable {
         return string
     }
 
-    private func clientForAuthorization(clientID: String, redirectURI: String, requestedScopes: Set<String>) throws -> Client {
+    private static func clientTrustID(name: String, redirectURIs: [String], scopes: Set<String>) -> String {
+        let normalizedScopes = scopes.sorted().joined(separator: " ")
+        let normalizedName = normalizedClientName(name)
+        let redirects = redirectURIs.map(canonicalTrustRedirectURI).sorted()
+        let allLoopback = redirectURIs.allSatisfy(isLoopbackRedirectURI)
+        let identity: String
+
+        if allLoopback {
+            identity = "loopback:\(normalizedName)"
+        } else {
+            identity = "redirects:\(redirects.joined(separator: "|"))"
+        }
+
+        let material = "macremote-client-trust:v1\n\(identity)\nscopes:\(normalizedScopes)"
+        return "macremote-trust-\(sha256Hex(material).prefix(24))"
+    }
+
+    private static func normalizedClientName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let scalars = trimmed.unicodeScalars.map { scalar -> Character in
+            CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : "-"
+        }
+        let collapsed = String(scalars)
+            .split(separator: "-")
+            .joined(separator: "-")
+        return collapsed.isEmpty ? "remote-mcp-client" : collapsed
+    }
+
+    private static func canonicalTrustRedirectURI(_ rawValue: String) -> String {
+        guard var components = URLComponents(string: rawValue),
+              let rawScheme = components.scheme else {
+            return rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        let scheme = rawScheme.lowercased()
+        components.scheme = scheme
+        components.host = components.host?.lowercased()
+
+        if isLoopbackRedirectURI(rawValue) {
+            components.port = nil
+            components.query = nil
+            components.fragment = nil
+            return "loopback-http"
+        }
+
+        components.fragment = nil
+        return components.string ?? rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isLoopbackRedirectURI(_ rawValue: String) -> Bool {
+        guard let components = URLComponents(string: rawValue),
+              components.scheme?.lowercased() == "http" else {
+            return false
+        }
+        let host = components.host?.lowercased()
+        return host == "127.0.0.1" || host == "localhost"
+    }
+
+    private static func issuerMismatchDescription(expected: String, actual: String) -> String {
+        "Issuer mismatch. OAuth was started with \(expected), but token exchange used \(actual). Restart login using one MacRemote URL consistently: local 127.0.0.1 or the public tunnel URL, not both."
+    }
+
+    private func clientForAuthorization(
+        clientID: String,
+        redirectURI: String,
+        requestedScopes: Set<String>,
+        recoveryName: String
+    ) throws -> Client {
         try lock.withLock {
             guard let client = clients[clientID] else {
-                throw OAuthError.invalidRequest("Unknown client_id.")
+                return try recoverDynamicClient(
+                    clientID: clientID,
+                    clientName: recoveryName,
+                    redirectURI: redirectURI,
+                    requestedScopes: requestedScopes
+                )
             }
             guard client.redirectURIs.contains(redirectURI) else {
                 throw OAuthError.invalidRequest("Unregistered redirect_uri.")
@@ -502,6 +710,80 @@ final class OAuthCoordinator: @unchecked Sendable {
             }
             return client
         }
+    }
+
+    private func recoverDynamicClient(
+        clientID: String,
+        clientName: String,
+        redirectURI: String,
+        requestedScopes: Set<String>
+    ) throws -> Client {
+        let redirectURIs = try parseRedirectURIs([redirectURI])
+        guard Self.isRecoverableDynamicClientID(clientID, redirectURI: redirectURI) else {
+            throw OAuthError.invalidRequest("Unknown client_id.")
+        }
+        guard !requestedScopes.isEmpty else {
+            throw OAuthError.invalidRequest("Unsupported scope.")
+        }
+        guard clients.count < Self.maxRegisteredClients else {
+            throw OAuthError.invalidRequest("Too many registered OAuth clients. Revoke grants and try again.")
+        }
+        let sanitizedName = sanitizeClientName(clientName)
+        let trustID = Self.clientTrustID(name: sanitizedName, redirectURIs: redirectURIs, scopes: requestedScopes)
+
+        let client = Client(
+            id: clientID,
+            trustID: trustID,
+            name: sanitizedName,
+            redirectURIs: redirectURIs,
+            scopes: requestedScopes,
+            createdAt: Date()
+        )
+        clients[clientID] = client
+        do {
+            try persistGrantSnapshotLocked()
+        } catch {
+            clients.removeValue(forKey: clientID)
+            throw error
+        }
+        return client
+    }
+
+    private static func isRecoverableDynamicClientID(_ clientID: String) -> Bool {
+        let prefix = "macremote-client-"
+        guard clientID.hasPrefix(prefix), clientID.count <= 128 else { return false }
+        let suffix = clientID.dropFirst(prefix.count)
+        guard (16...64).contains(suffix.count) else { return false }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+        return suffix.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    private static func isRecoverableDynamicClientID(_ clientID: String, redirectURI: String) -> Bool {
+        guard isRecoverableDynamicClientID(clientID),
+              let components = URLComponents(string: redirectURI),
+              components.scheme?.lowercased() == "https",
+              components.host?.isEmpty == false else {
+            return false
+        }
+        return true
+    }
+
+    private func recoveredClientName(queryItems: [String: String], redirectURI: String) -> String {
+        if let name = queryItems["client_name"], !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return name
+        }
+
+        let host = URLComponents(string: redirectURI)?.host?.lowercased()
+        if host?.contains("notion") == true || queryItems["notion_user_id"] != nil {
+            return "Notion"
+        }
+        if host?.contains("claude") == true {
+            return "Claude"
+        }
+        if host?.contains("raycast") == true {
+            return "Raycast"
+        }
+        return host ?? "Remote MCP Client"
     }
 
     private func parseRedirectURIs(_ value: Any?) throws -> [String] {
@@ -596,6 +878,7 @@ final class OAuthCoordinator: @unchecked Sendable {
 
             return ConnectedClient(
                 id: client.id,
+                trustID: client.trustID,
                 name: client.name,
                 redirectURIs: client.redirectURIs,
                 issuer: issuer,
@@ -645,6 +928,45 @@ final class OAuthCoordinator: @unchecked Sendable {
     private func pruneExpiredTokens(now: Date) {
         accessTokensByHash = accessTokensByHash.filter { $0.value.expiresAt > now }
         refreshTokensByHash = refreshTokensByHash.filter { $0.value.expiresAt > now }
+    }
+
+    private func loadPersistedGrants() {
+        guard let snapshot = try? grantStore?.loadSnapshot() else { return }
+        let now = Date()
+        let loadedClients = snapshot.clients
+            .prefix(Self.maxRegisteredClients)
+            .map { Client(stored: $0) }
+        clients = Dictionary(uniqueKeysWithValues: loadedClients.map { ($0.id, $0) })
+
+        accessTokensByHash = Dictionary(
+            uniqueKeysWithValues: snapshot.accessTokens.compactMap { token in
+                guard clients[token.clientID] != nil, token.expiresAt > now else { return nil }
+                return (token.tokenHash, AccessTokenRecord(stored: token))
+            }
+        )
+        refreshTokensByHash = Dictionary(
+            uniqueKeysWithValues: snapshot.refreshTokens.compactMap { token in
+                guard clients[token.clientID] != nil, token.expiresAt > now else { return nil }
+                return (token.tokenHash, RefreshTokenRecord(stored: token))
+            }
+        )
+        try? persistGrantSnapshotLocked()
+    }
+
+    private func persistGrantSnapshotLocked() throws {
+        guard let grantStore else { return }
+        let snapshot = OAuthGrantSnapshot(
+            clients: clients.values
+                .sorted { $0.createdAt < $1.createdAt }
+                .map(\.stored),
+            accessTokens: accessTokensByHash
+                .map { tokenHash, record in record.stored(tokenHash: tokenHash) }
+                .sorted { $0.issuedAt < $1.issuedAt },
+            refreshTokens: refreshTokensByHash
+                .map { tokenHash, record in record.stored(tokenHash: tokenHash) }
+                .sorted { $0.issuedAt < $1.issuedAt }
+        )
+        try grantStore.saveSnapshot(snapshot)
     }
 
     private func redirectURI(for authorization: PendingAuthorization, code: String) -> String {

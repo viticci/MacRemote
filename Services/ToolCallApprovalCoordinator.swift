@@ -28,6 +28,7 @@ final class ToolCallApprovalCoordinator: @unchecked Sendable {
         let request = ToolCallApprovalRequest(
             id: id,
             clientID: client?.clientID,
+            clientTrustID: client?.clientTrustID,
             clientName: client?.clientName,
             toolID: tool.id,
             toolName: tool.name,

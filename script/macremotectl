@@ -31,6 +31,7 @@ LEGACY_REMCTL_PROFILE_KEY = "MacRemote.remCTLProfileEnabled"
 BLOCKED_EXECUTABLES = {"bash", "csh", "env", "fish", "sh", "tcsh", "zsh"}
 VALID_CATEGORIES = {
     "reminders",
+    "habits",
     "podcasts",
     "filesystem",
     "utilities",
@@ -76,6 +77,8 @@ COMMON_BIN_DIRS = [
 ]
 LEGACY_PRESET_ALIASES = {
     "date": "preset.utilities.current_date",
+    "habitctl-run": "preset.habitctl.run",
+    "habitctl-today": "preset.habitctl.today",
     "pocketctl-now": "preset.pocketctl.now",
     "pocketctl-run": "preset.pocketctl.run",
     "pocketctl-triage": "preset.pocketctl.triage",
@@ -85,6 +88,7 @@ PRESET_SET_ALIASES = {
     "all": "set.all_system_presets",
     "detected": "set.detected_clis",
     "developer": "set.developer",
+    "habits": "set.habits",
     "media": "set.media",
     "podcasts": "set.podcasts",
     "reminders": "set.reminders",
@@ -658,6 +662,7 @@ def presets() -> dict[str, dict[str, Any]]:
     items.extend(base_presets())
     items.extend(codex_presets())
     items.extend(remctl_presets())
+    items.extend(habitctl_presets())
     items.extend(pocketctl_presets())
     items.extend(named_cli_presets())
     items.extend(generic_cli_presets(items))
@@ -729,9 +734,36 @@ def pocketctl_presets() -> list[dict[str, Any]]:
     if not executable:
         return []
     return [
+        preset("preset.pocketctl.doctor", "PocketCTL Doctor", "Run PocketCTL agent health checks as JSON.", executable, ["doctor", "--for-agent", "--json"], "readOnly", "podcasts", 15, 2048),
         preset("preset.pocketctl.triage", "PocketCTL Triage", "Return a live Pocket Casts triage board as JSON.", executable, ["triage", "--json"], "readOnly", "podcasts", 20, 2048),
         preset("preset.pocketctl.now", "PocketCTL Now", "Return the live first Up Next episode as JSON.", executable, ["now", "--json"], "readOnly", "podcasts", 15, 1024),
-        direct_adapter("preset.pocketctl.run", "Run PocketCTL", "Run PocketCTL by passing argv directly. Write-capable calls require per-call host approval.", executable, "podcasts", 30),
+        preset("preset.pocketctl.up_next", "PocketCTL Up Next", "Return the live Up Next queue as JSON.", executable, ["up-next", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.in_progress", "PocketCTL In Progress", "Return in-progress episodes from Pocket Casts as JSON.", executable, ["in-progress", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.history", "PocketCTL History", "Return recent Pocket Casts history as JSON.", executable, ["history", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.subscriptions", "PocketCTL Subscriptions", "Return subscribed podcasts and folders as JSON.", executable, ["subscriptions", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.bookmarks", "PocketCTL Bookmarks", "Return Pocket Casts bookmarks as JSON.", executable, ["bookmarks", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.playlists", "PocketCTL Playlists", "Return Pocket Casts playlists and filters as JSON.", executable, ["playlists", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.search_online", "PocketCTL Online Search", "Search Pocket Casts live cache and return JSON results.", executable, ["search-online", "{query}", "--json"], "readOnly", "podcasts", 20, 2048),
+        preset("preset.pocketctl.show", "PocketCTL Show Episode", "Return one episode with metadata, notes, and transcript status as JSON.", executable, ["show", "{episodeID}", "--json"], "readOnly", "podcasts", 20, 2048),
+        direct_adapter("preset.pocketctl.run", "Run PocketCTL", "Run PocketCTL by passing argv directly. Prefer `--json`; use `--dry-run --json` before queue, playlist, bookmark, archive, progress, or played-state writes.", executable, "podcasts", 30),
+    ]
+
+
+def habitctl_presets() -> list[dict[str, Any]]:
+    executable = find_executable("habitctl")
+    if not executable:
+        return []
+    return [
+        preset("preset.habitctl.doctor", "HabitCTL Doctor", "Run HabitCTL agent health checks as JSON.", executable, ["doctor", "--for-agent", "--json"], "readOnly", "habits", 15, 1024),
+        preset("preset.habitctl.today", "HabitCTL Today", "Return today's Habitify journal overview as JSON.", executable, ["today", "--json"], "readOnly", "habits", 15, 2048),
+        preset("preset.habitctl.journal", "HabitCTL Journal", "Return the Habitify journal for a date as JSON.", executable, ["journal", "--date", "{date}", "--json"], "readOnly", "habits", 15, 2048),
+        preset("preset.habitctl.habits", "HabitCTL Habits", "List active Habitify habits as JSON.", executable, ["habits", "--active", "--json"], "readOnly", "habits", 15, 2048),
+        preset("preset.habitctl.show", "HabitCTL Show Habit", "Inspect one Habitify habit by name or id as JSON.", executable, ["show", "{habit}", "--json"], "readOnly", "habits", 15, 2048),
+        preset("preset.habitctl.search", "HabitCTL Search", "Find Habitify habits by name and return JSON results.", executable, ["search", "{query}", "--json"], "readOnly", "habits", 15, 2048),
+        preset("preset.habitctl.streaks", "HabitCTL Streaks", "Return current Habitify streaks from the journal as JSON.", executable, ["streaks", "--json"], "readOnly", "habits", 15, 2048),
+        preset("preset.habitctl.stats", "HabitCTL Stats", "Return statistics for one Habitify habit as JSON.", executable, ["stats", "{habit}", "--json"], "readOnly", "habits", 20, 2048),
+        preset("preset.habitctl.areas", "HabitCTL Areas", "List Habitify areas as JSON.", executable, ["areas", "--json"], "readOnly", "habits", 15, 1024),
+        direct_adapter("preset.habitctl.run", "Run HabitCTL", "Run HabitCTL by passing argv directly. Prefer `--json`; use `--dry-run --json` before creating, editing, deleting, checking, logging, archiving, or note writes.", executable, "habits", 30),
     ]
 
 
@@ -800,7 +832,6 @@ def named_cli_presets() -> list[dict[str, Any]]:
         ("uvx", "preset.uvx.run", "UVX CLI", "Run uvx by passing argv directly for Python tool execution.", "developer"),
         ("supabase", "preset.supabase.run", "Supabase CLI", "Run Supabase CLI by passing argv directly for local and hosted project workflows.", "developer"),
         ("xcodegen", "preset.xcodegen.run", "XcodeGen CLI", "Run XcodeGen by passing argv directly. Project generation writes require host approval.", "developer"),
-        ("claude-session", "preset.claude_session.run", "Claude Session CLI", "Run claude-session by passing argv directly for local agent-session workflows.", "developer"),
         ("grok-session", "preset.grok_session.run", "Grok Session CLI", "Run grok-session by passing argv directly for local agent-session workflows.", "developer"),
         ("cora", "preset.cora.run", "Cora CLI", "Run Cora by passing argv directly.", "developer"),
         ("monologue", "preset.monologue.run", "Monologue CLI", "Run Monologue by passing argv directly.", "text"),
@@ -821,7 +852,7 @@ def named_cli_presets() -> list[dict[str, Any]]:
 def generic_cli_presets(existing: list[dict[str, Any]]) -> list[dict[str, Any]]:
     existing_ids = {item["id"] for item in existing}
     descriptors = [
-        ("claude", "preset.claude.run", "Claude CLI", "Run Claude by passing argv directly for local agent workflows.", "developer", "destructive", 60, []),
+        ("claude", "preset.claude.run", "Claude Code", "Run Claude Code by passing argv directly. For remote MCP use, prefer non-interactive invocations such as `--print`, `--output-format json` or `--output-format stream-json`, explicit `--model`, `--permission-mode`, `--add-dir`, `--mcp-config`, and `--strict-mcp-config`; avoid bare interactive sessions and login flows unless the host Mac is attended.", "developer", "destructive", 60, []),
         ("grok", "preset.grok.run", "Grok CLI", "Run Grok by passing argv directly for local agent workflows.", "developer", "destructive", 60, []),
         ("swift", "preset.swift.run", "Swift CLI", "Run Swift by passing argv directly for package, build, and script workflows.", "developer", "destructive", 60, []),
         ("xcodebuild", "preset.xcodebuild.run", "Xcodebuild CLI", "Run xcodebuild by passing argv directly for Apple platform build workflows.", "developer", "destructive", 60, []),
@@ -849,7 +880,8 @@ def generic_cli_presets(existing: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         executable = find_executable(executable_name)
         if executable:
-            items.append(direct_adapter(preset_id, name, summary, executable, category, timeout, capability=capability, permissions=permissions))
+            output_limit_kb = 5120 if preset_id == "preset.claude.run" else 2048
+            items.append(direct_adapter(preset_id, name, summary, executable, category, timeout, capability=capability, output_limit_kb=output_limit_kb, permissions=permissions))
     return items
 
 
@@ -872,6 +904,11 @@ def preset_sets(available: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any
             "name": "Reminders",
             "summary": "Install the Reminders read tools plus the direct RemCTL adapter.",
             "presetIDs": matching(lambda _preset_id, item: item["category"] == "reminders"),
+        },
+        "set.habits": {
+            "name": "Habits",
+            "summary": "Install Habitify inspection tools plus the direct HabitCTL adapter.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "habits"),
         },
         "set.podcasts": {
             "name": "Podcasts",

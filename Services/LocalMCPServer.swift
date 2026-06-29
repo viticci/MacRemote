@@ -15,6 +15,12 @@ final class LocalMCPServer: @unchecked Sendable {
     private static let latestProtocolVersion = "2025-11-25"
     private static let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
     private static let protocolVersionHeader = "MCP-Protocol-Version"
+    private static let connectorIconPath = "/macremote-icon.png"
+    private static let connectorIconFileName = "MacRemoteConnectorIcon.png"
+    private static let faviconICOPath = "/favicon.ico"
+    private static let faviconICOFileName = "Favicon.ico"
+    private static let faviconPNGPath = "/favicon.png"
+    private static let faviconPNGFileName = "Favicon.png"
 
     private let queue = DispatchQueue(label: "com.macremote.local-server")
     private var listener: NWListener?
@@ -161,6 +167,18 @@ final class LocalMCPServer: @unchecked Sendable {
             return jsonResponse(protectedResourceMetadata(base: base))
         }
 
+        if request.method == "GET", request.path == Self.connectorIconPath {
+            return staticIconResponse(fileName: Self.connectorIconFileName, contentType: "image/png")
+        }
+
+        if request.method == "GET", request.path == Self.faviconICOPath {
+            return staticIconResponse(fileName: Self.faviconICOFileName, contentType: "image/x-icon")
+        }
+
+        if request.method == "GET", request.path == Self.faviconPNGPath {
+            return staticIconResponse(fileName: Self.faviconPNGFileName, contentType: "image/png")
+        }
+
         if isMCPPath(request.path, allowLegacyPath: allowsLegacyMCPPath(base: base, activePort: activePort)) {
             switch request.method {
             case "POST":
@@ -207,6 +225,10 @@ final class LocalMCPServer: @unchecked Sendable {
 
     private func mcpResourceURL(base: String) -> String {
         "\(base)\(mcpEndpointPath)"
+    }
+
+    private func connectorIconURL(base: String) -> String {
+        "\(base)\(Self.connectorIconPath)"
     }
 
     private func localBaseURL(activePort: UInt16) -> String {
@@ -542,7 +564,15 @@ final class LocalMCPServer: @unchecked Sendable {
                     ],
                     "serverInfo": [
                         "name": "MacRemote",
-                        "version": "0.1.0"
+                        "version": "0.1.0",
+                        "title": "MacRemote",
+                        "icons": [
+                            [
+                                "src": connectorIconURL(base: base),
+                                "mimeType": "image/png",
+                                "sizes": ["512x512"]
+                            ]
+                        ]
                     ]
                 ])
             case "ping":
@@ -625,7 +655,11 @@ final class LocalMCPServer: @unchecked Sendable {
             }
 
             if tool.capability != .readOnly {
-                if clientToolPermissionStore?.isAllowed(clientID: client.clientID, toolID: tool.id) == true {
+                if clientToolPermissionStore?.isAllowed(
+                    clientID: client.clientID,
+                    clientTrustID: client.clientTrustID,
+                    toolID: tool.id
+                ) == true {
                     eventHandler?(.log(.info, "\(tool.name) allowed by \(client.clientName)'s client policy."))
                 } else {
                     guard let toolCallApprovalCoordinator else {
@@ -748,11 +782,18 @@ final class LocalMCPServer: @unchecked Sendable {
             parts.append("MacRemote launches the executable directly without a shell: do not use `~`, `$HOME`, pipes, redirection, globs, command substitution, or environment assignments. Use absolute paths and separate every flag/value into its own argv item.")
 
             switch URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() {
+            case "claude":
+                parts.append("For Claude Code, prefer non-interactive MCP-safe calls using `--print` with `--output-format text`, `json`, or `stream-json`; pass the prompt as the final argv item or via `stdin` with `--input-format text`.")
+                parts.append("Use explicit flags such as `--model`, `--permission-mode`, `--allowedTools`, `--disallowedTools`, `--add-dir`, `--mcp-config`, `--strict-mcp-config`, `--session-id`, and `--max-budget-usd` as separate argv items. Avoid bare interactive sessions, `auth login`, and `mcp login` unless the host Mac is attended.")
             case "codex":
                 parts.append("For Codex, global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`; options after `exec` are parsed by the exec subcommand.")
             case "remctl":
                 parts.append("For RemCTL, pass the numeric `id` field from JSON results to commands such as `edit`, `info`, `done`, `delete`, `flag`, and `unflag`; do not pass the UUID embedded in `deepLink`.")
                 parts.append("Use `--private` only for private Reminders metadata such as sections, tags, subtasks, images, flags, urgency, assignment, or location alarms. Do not use `--private` for normal due dates or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
+            case "pocketctl":
+                parts.append("For PocketCTL, prefer `--json` for reads. Before queue, playlist, bookmark, archive, progress, or played-state writes, use the matching command with `--dry-run --json` unless the user explicitly asked to perform the write.")
+            case "habitctl":
+                parts.append("For HabitCTL, prefer `--json` for reads. Before creating, editing, deleting, checking, logging, archiving, or note writes, use `--dry-run --json` when the command supports it unless the user explicitly asked to perform the write.")
             default:
                 break
             }
@@ -869,10 +910,16 @@ final class LocalMCPServer: @unchecked Sendable {
     private func parameterDescription(_ parameter: ToolParameter, for tool: ToolDefinition) -> String {
         switch parameter.name {
         case "args", "argv":
-            if URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() == "remctl" {
+            switch URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() {
+            case "remctl":
                 return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Do not use `--private` for ordinary `edit ID -d DATE` or `edit ID --alarm DATE` calls."
+            case "pocketctl":
+                return "Exact PocketCTL argv items. No shell is used. Prefer `--json`; use `--dry-run --json` before queue, playlist, bookmark, archive, progress, or played-state writes unless the user explicitly requested the write."
+            case "habitctl":
+                return "Exact HabitCTL argv items. No shell is used. Prefer `--json`; use `--dry-run --json` before creating, editing, deleting, checking, logging, archiving, or note writes when supported unless the user explicitly requested the write."
+            default:
+                return "Exact argv items to pass to the executable. No shell is used: do not include `~`, variables, pipes, redirection, globs, or combined command strings."
             }
-            return "Exact argv items to pass to the executable. No shell is used: do not include `~`, variables, pipes, redirection, globs, or combined command strings."
         case "stdin":
             return "Optional standard input passed directly to the process."
         default:
@@ -964,6 +1011,51 @@ final class LocalMCPServer: @unchecked Sendable {
         ).data
     }
 
+    private func staticIconResponse(fileName: String, contentType: String) -> Data {
+        guard let data = Self.staticResourceData(fileName: fileName) else {
+            return jsonErrorResponse(
+                status: .notFound,
+                error: "icon_not_found",
+                description: "\(fileName) is missing."
+            )
+        }
+
+        return HTTPResponse(
+            status: .ok,
+            headers: [
+                "Cache-Control": "public, max-age=86400",
+                "Content-Type": contentType
+            ],
+            bodyData: data
+        ).data
+    }
+
+    private static func staticResourceData(fileName: String) -> Data? {
+        let fileManager = FileManager.default
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = URL(fileURLWithPath: fileName)
+        let resourceName = url.deletingPathExtension().lastPathComponent
+        let resourceExtension = url.pathExtension.isEmpty ? nil : url.pathExtension
+
+        let candidateURLs = [
+            Bundle.main.resourceURL?.appendingPathComponent(fileName),
+            Bundle.main.url(forResource: resourceName, withExtension: resourceExtension),
+            URL(fileURLWithPath: fileManager.currentDirectoryPath)
+                .appendingPathComponent("Resources")
+                .appendingPathComponent(fileName),
+            sourceRoot
+                .appendingPathComponent("Resources")
+                .appendingPathComponent(fileName)
+        ].compactMap { $0 }
+
+        for url in candidateURLs where fileManager.fileExists(atPath: url.path) {
+            return try? Data(contentsOf: url)
+        }
+        return nil
+    }
+
     private func authorizationPageHTML(requestID: UUID) -> String {
         """
         <!doctype html>
@@ -971,6 +1063,9 @@ final class LocalMCPServer: @unchecked Sendable {
         <head>
           <meta charset="utf-8">
           <title>MacRemote Approval</title>
+          <link rel="icon" href="/favicon.ico" sizes="any">
+          <link rel="icon" type="image/png" href="/favicon.png">
+          <link rel="apple-touch-icon" href="/macremote-icon.png">
           <style>
             body { font: -apple-system-body; margin: 42px; max-width: 680px; color: #1d1d1f; }
             code { background: #f5f5f7; padding: 2px 5px; border-radius: 5px; }

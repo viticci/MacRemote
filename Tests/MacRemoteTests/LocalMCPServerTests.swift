@@ -49,6 +49,35 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertNil(publicHealth.json["tool_profile"])
     }
 
+    func testIconEndpointsServePublicAssets() async throws {
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [],
+            authCoordinator: OAuthCoordinator(),
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let connectorIcon = try await getWithHeaders(url: base.appendingPathComponent("macremote-icon.png"))
+        XCTAssertEqual(connectorIcon.statusCode, 200)
+        XCTAssertEqual(Data(connectorIcon.data.prefix(8)), Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        XCTAssertEqual(headerValue(connectorIcon.headers, named: "Content-Type"), "image/png")
+
+        let faviconPNG = try await getWithHeaders(url: base.appendingPathComponent("favicon.png"))
+        XCTAssertEqual(faviconPNG.statusCode, 200)
+        XCTAssertEqual(Data(faviconPNG.data.prefix(8)), Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        XCTAssertEqual(headerValue(faviconPNG.headers, named: "Content-Type"), "image/png")
+
+        let faviconICO = try await getWithHeaders(url: base.appendingPathComponent("favicon.ico"))
+        XCTAssertEqual(faviconICO.statusCode, 200)
+        XCTAssertEqual(Data(faviconICO.data.prefix(4)), Data([0x00, 0x00, 0x01, 0x00]))
+        XCTAssertEqual(headerValue(faviconICO.headers, named: "Content-Type"), "image/x-icon")
+    }
+
     func testPublicOAuthRegistrationIsRateLimitedButLoopbackIsNot() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
@@ -287,6 +316,35 @@ final class LocalMCPServerTests: XCTestCase {
         )
         XCTAssertEqual(token.statusCode, 200)
         let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
+
+        let initialize = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "init",
+                "method": "initialize",
+                "params": [
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": [:],
+                    "clientInfo": [
+                        "name": "HTTP Test",
+                        "version": "1.0"
+                    ]
+                ]
+            ]
+        )
+        XCTAssertEqual(initialize.statusCode, 200)
+        let initializeResult = try XCTUnwrap(initialize.json["result"] as? [String: Any])
+        let serverInfo = try XCTUnwrap(initializeResult["serverInfo"] as? [String: Any])
+        XCTAssertEqual(serverInfo["name"] as? String, "MacRemote")
+        XCTAssertEqual(serverInfo["title"] as? String, "MacRemote")
+        let icons = try XCTUnwrap(serverInfo["icons"] as? [[String: Any]])
+        let icon = try XCTUnwrap(icons.first)
+        XCTAssertEqual(icon["src"] as? String, "http://127.0.0.1:\(port)/macremote-icon.png")
+        XCTAssertEqual(icon["mimeType"] as? String, "image/png")
+        XCTAssertEqual(icon["sizes"] as? [String], ["512x512"])
 
         let toolsList = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -724,6 +782,55 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(annotations["idempotentHint"] as? Bool, false)
     }
 
+    func testClaudeCLIAdapterDescriptionExplainsMCPFriendlyInvocation() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = ToolDefinition(
+            id: "test.claude",
+            name: "Claude Code",
+            summary: "Run Claude Code by passing argv directly.",
+            executablePath: "/usr/local/bin/claude",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(
+                    name: "args",
+                    title: "Arguments",
+                    kind: .stringArray,
+                    required: false
+                ),
+                ToolParameter(
+                    name: "stdin",
+                    title: "Standard Input",
+                    kind: .string,
+                    required: false
+                )
+            ],
+            capability: .destructive,
+            timeoutSeconds: 60,
+            outputByteLimit: 5 * 1024 * 1024
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try XCTUnwrap(tools.first)
+        let description = try XCTUnwrap(listedTool["description"] as? String)
+        XCTAssertTrue(description.contains("non-interactive MCP-safe calls"))
+        XCTAssertTrue(description.contains("`--print`"))
+        XCTAssertTrue(description.contains("`--output-format text`, `json`, or `stream-json`"))
+        XCTAssertTrue(description.contains("`--mcp-config`"))
+        XCTAssertTrue(description.contains("Avoid bare interactive sessions"))
+    }
+
     func testRemCTLCLIAdapterDescriptionExplainsNumericIDsAndPrivateFlag() async throws {
         let coordinator = OAuthCoordinator()
         let tool = ToolDefinition(
@@ -770,6 +877,102 @@ final class LocalMCPServerTests: XCTestCase {
         let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
         XCTAssertTrue(argsDescription.contains("Use numeric reminder IDs"))
         XCTAssertTrue(argsDescription.contains("Do not use `--private`"))
+    }
+
+    func testPocketCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = ToolDefinition(
+            id: "test.pocketctl",
+            name: "Run PocketCTL",
+            summary: "Run PocketCTL by passing argv directly.",
+            executablePath: "/usr/local/bin/pocketctl",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(
+                    name: "args",
+                    title: "Arguments",
+                    kind: .stringArray,
+                    required: false
+                )
+            ],
+            capability: .destructive,
+            timeoutSeconds: 30,
+            outputByteLimit: 2048 * 1024,
+            category: .podcasts
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try XCTUnwrap(tools.first)
+        let description = try XCTUnwrap(listedTool["description"] as? String)
+        XCTAssertTrue(description.contains("For PocketCTL, prefer `--json`"))
+        XCTAssertTrue(description.contains("`--dry-run --json`"))
+
+        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
+        let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
+        XCTAssertTrue(argsDescription.contains("Exact PocketCTL argv items"))
+        XCTAssertTrue(argsDescription.contains("played-state writes"))
+    }
+
+    func testHabitCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = ToolDefinition(
+            id: "test.habitctl",
+            name: "Run HabitCTL",
+            summary: "Run HabitCTL by passing argv directly.",
+            executablePath: "/usr/local/bin/habitctl",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(
+                    name: "args",
+                    title: "Arguments",
+                    kind: .stringArray,
+                    required: false
+                )
+            ],
+            capability: .destructive,
+            timeoutSeconds: 30,
+            outputByteLimit: 2048 * 1024,
+            category: .habits
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try XCTUnwrap(tools.first)
+        let description = try XCTUnwrap(listedTool["description"] as? String)
+        XCTAssertTrue(description.contains("For HabitCTL, prefer `--json`"))
+        XCTAssertTrue(description.contains("checking, logging, archiving"))
+
+        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
+        let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
+        XCTAssertTrue(argsDescription.contains("Exact HabitCTL argv items"))
+        XCTAssertTrue(argsDescription.contains("note writes"))
     }
 
     func testDestructiveMCPToolCallRequiresHostApproval() async throws {
@@ -1166,13 +1369,21 @@ private func waitForPendingToolApproval(
 }
 
 private func get(url: URL, headers: [String: String] = [:]) async throws -> (statusCode: Int, data: Data) {
+    let response = try await getWithHeaders(url: url, headers: headers)
+    return (response.statusCode, response.data)
+}
+
+private func getWithHeaders(
+    url: URL,
+    headers: [String: String] = [:]
+) async throws -> (statusCode: Int, data: Data, headers: [AnyHashable: Any]) {
     var request = URLRequest(url: url)
     for (key, value) in headers {
         request.setValue(value, forHTTPHeaderField: key)
     }
     let (data, response) = try await URLSession.shared.data(for: request)
     let http = try XCTUnwrap(response as? HTTPURLResponse)
-    return (http.statusCode, data)
+    return (http.statusCode, data, http.allHeaderFields)
 }
 
 private func getJSON(url: URL, headers: [String: String] = [:]) async throws -> (statusCode: Int, json: [String: Any]) {

@@ -82,7 +82,7 @@ enum DefaultToolPresetCatalog {
     }
 
     static var presets: [DefaultToolPreset] {
-        codexPresets + remCTLPresets + pocketCTLPresets + popularCLIPresets + basePresets
+        codexPresets + remCTLPresets + habitCTLPresets + pocketCTLPresets + popularCLIPresets + basePresets
     }
 
     static var preferredCategory: ToolCategory {
@@ -131,6 +131,16 @@ enum DefaultToolPresetCatalog {
                 name: "Reminders",
                 summary: "Install the Reminders read tools plus the direct RemCTL adapter.",
                 presetIDs: remCTLPresetIDs
+            ))
+        }
+
+        let habitCTLPresetIDs = habitCTLPresets.map(\.id)
+        if !habitCTLPresetIDs.isEmpty {
+            sets.append(DefaultToolPresetSet(
+                id: "set.habits",
+                name: "Habits",
+                summary: "Install Habitify inspection tools plus the direct HabitCTL adapter.",
+                presetIDs: habitCTLPresetIDs
             ))
         }
 
@@ -431,6 +441,10 @@ enum DefaultToolPresetCatalog {
         ExecutableLocator.executablePath(named: "pocketctl")
     }
 
+    static var habitCTLExecutablePath: String? {
+        ExecutableLocator.executablePath(named: "habitctl")
+    }
+
     static var remCTLExecutablePath: String? {
         RemCTLToolCatalog.detectedExecutablePath
     }
@@ -476,6 +490,17 @@ enum DefaultToolPresetCatalog {
 
         return [
             DefaultToolPreset(
+                id: "preset.pocketctl.doctor",
+                name: "PocketCTL Doctor",
+                summary: "Run PocketCTL agent health checks as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["doctor", "--for-agent", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 15,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
                 id: "preset.pocketctl.triage",
                 name: "PocketCTL Triage",
                 summary: "Return a live Pocket Casts triage board as JSON.",
@@ -498,13 +523,219 @@ enum DefaultToolPresetCatalog {
                 outputLimitKB: 1024
             ),
             DefaultToolPreset(
+                id: "preset.pocketctl.up_next",
+                name: "PocketCTL Up Next",
+                summary: "Return the live Up Next queue as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["up-next", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.in_progress",
+                name: "PocketCTL In Progress",
+                summary: "Return in-progress episodes from Pocket Casts as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["in-progress", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.history",
+                name: "PocketCTL History",
+                summary: "Return recent Pocket Casts history as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["history", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.subscriptions",
+                name: "PocketCTL Subscriptions",
+                summary: "Return subscribed podcasts and folders as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["subscriptions", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.bookmarks",
+                name: "PocketCTL Bookmarks",
+                summary: "Return Pocket Casts bookmarks as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["bookmarks", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.playlists",
+                name: "PocketCTL Playlists",
+                summary: "Return Pocket Casts playlists and filters as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["playlists", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.search_online",
+                name: "PocketCTL Online Search",
+                summary: "Search Pocket Casts live cache and return JSON results.",
+                executablePath: executablePath,
+                argumentPattern: ["search-online", "{query}", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.show",
+                name: "PocketCTL Show Episode",
+                summary: "Return one episode with metadata, notes, and transcript status as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["show", "{episodeID}", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
                 id: "preset.pocketctl.run",
                 name: "Run PocketCTL",
-                summary: "Run PocketCTL by passing argv directly. Write-capable calls require per-call host approval.",
+                summary: "Run PocketCTL by passing argv directly. Prefer `--json`; use `--dry-run --json` before queue, playlist, bookmark, archive, progress, or played-state writes.",
                 executablePath: executablePath,
                 argumentPattern: ["{args}"],
                 capability: .destructive,
                 category: .podcasts,
+                timeoutSeconds: 30,
+                outputLimitKB: 2048,
+                mode: .cliAdapter
+            )
+        ]
+    }
+
+    private static var habitCTLPresets: [DefaultToolPreset] {
+        guard let executablePath = habitCTLExecutablePath else { return [] }
+
+        return [
+            DefaultToolPreset(
+                id: "preset.habitctl.doctor",
+                name: "HabitCTL Doctor",
+                summary: "Run HabitCTL agent health checks as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["doctor", "--for-agent", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 1024
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.today",
+                name: "HabitCTL Today",
+                summary: "Return today's Habitify journal overview as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["today", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.journal",
+                name: "HabitCTL Journal",
+                summary: "Return the Habitify journal for a date as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["journal", "--date", "{date}", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.habits",
+                name: "HabitCTL Habits",
+                summary: "List active Habitify habits as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["habits", "--active", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.show",
+                name: "HabitCTL Show Habit",
+                summary: "Inspect one Habitify habit by name or id as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["show", "{habit}", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.search",
+                name: "HabitCTL Search",
+                summary: "Find Habitify habits by name and return JSON results.",
+                executablePath: executablePath,
+                argumentPattern: ["search", "{query}", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.streaks",
+                name: "HabitCTL Streaks",
+                summary: "Return current Habitify streaks from the journal as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["streaks", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.stats",
+                name: "HabitCTL Stats",
+                summary: "Return statistics for one Habitify habit as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["stats", "{habit}", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.areas",
+                name: "HabitCTL Areas",
+                summary: "List Habitify areas as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["areas", "--json"],
+                capability: .readOnly,
+                category: .habits,
+                timeoutSeconds: 15,
+                outputLimitKB: 1024
+            ),
+            DefaultToolPreset(
+                id: "preset.habitctl.run",
+                name: "Run HabitCTL",
+                summary: "Run HabitCTL by passing argv directly. Prefer `--json`; use `--dry-run --json` before creating, editing, deleting, checking, logging, archiving, or note writes.",
+                executablePath: executablePath,
+                argumentPattern: ["{args}"],
+                capability: .destructive,
+                category: .habits,
                 timeoutSeconds: 30,
                 outputLimitKB: 2048,
                 mode: .cliAdapter
@@ -618,13 +849,17 @@ enum DefaultToolPresetCatalog {
         }
     }
 
+    private static let claudeCodeSummary = "Run Claude Code by passing argv directly. For remote MCP use, prefer non-interactive invocations such as `--print`, `--output-format json` or `--output-format stream-json`, explicit `--model`, `--permission-mode`, `--add-dir`, `--mcp-config`, and `--strict-mcp-config`; avoid bare interactive sessions and login flows unless the host Mac is attended."
+
     private static let genericCLIAdapterDescriptors: [GenericCLIAdapterDescriptor] = [
         GenericCLIAdapterDescriptor(
             executableName: "claude",
             presetID: "preset.claude.run",
-            name: "Claude CLI",
-            summary: "Run Claude by passing argv directly for local agent workflows.",
-            category: .developer
+            name: "Claude Code",
+            summary: claudeCodeSummary,
+            category: .developer,
+            timeoutSeconds: 60,
+            outputLimitKB: 5120
         ),
         GenericCLIAdapterDescriptor(
             executableName: "grok",
@@ -1173,17 +1408,6 @@ enum DefaultToolPresetCatalog {
 
     private static var agentSessionPresets: [DefaultToolPreset] {
         var presets: [DefaultToolPreset] = []
-
-        if let claudeSession = ExecutableLocator.executablePath(named: "claude-session") {
-            presets.append(directAdapter(
-                id: "preset.claude_session.run",
-                name: "Claude Session CLI",
-                summary: "Run claude-session by passing argv directly for local agent-session workflows.",
-                executablePath: claudeSession,
-                category: .developer,
-                timeoutSeconds: 60
-            ))
-        }
 
         if let grokSession = ExecutableLocator.executablePath(named: "grok-session") {
             presets.append(directAdapter(

@@ -187,10 +187,51 @@ final class ToolRegistryTests: XCTestCase {
         }
 
         let presets = DefaultToolPresetCatalog.presets(in: .podcasts)
+        let presetIDs = Set(presets.map(\.id))
         XCTAssertFalse(presets.isEmpty)
         XCTAssertTrue(presets.allSatisfy { $0.executablePath == executablePath })
+        XCTAssertTrue(presetIDs.isSuperset(of: [
+            "preset.pocketctl.doctor",
+            "preset.pocketctl.triage",
+            "preset.pocketctl.now",
+            "preset.pocketctl.up_next",
+            "preset.pocketctl.in_progress",
+            "preset.pocketctl.history",
+            "preset.pocketctl.subscriptions",
+            "preset.pocketctl.bookmarks",
+            "preset.pocketctl.playlists",
+            "preset.pocketctl.search_online",
+            "preset.pocketctl.show",
+            "preset.pocketctl.run"
+        ]))
         XCTAssertTrue(presets.contains { $0.id == "preset.pocketctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
         XCTAssertTrue(DefaultToolPresetCatalog.categories.contains(.podcasts))
+    }
+
+    func testHabitCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
+        guard let executablePath = DefaultToolPresetCatalog.habitCTLExecutablePath else {
+            throw XCTSkip("HabitCTL is not installed on this Mac.")
+        }
+
+        let presets = DefaultToolPresetCatalog.presets(in: .habits)
+        let presetIDs = Set(presets.map(\.id))
+        XCTAssertFalse(presets.isEmpty)
+        XCTAssertTrue(presets.allSatisfy { $0.executablePath == executablePath })
+        XCTAssertTrue(presetIDs.isSuperset(of: [
+            "preset.habitctl.doctor",
+            "preset.habitctl.today",
+            "preset.habitctl.journal",
+            "preset.habitctl.habits",
+            "preset.habitctl.show",
+            "preset.habitctl.search",
+            "preset.habitctl.streaks",
+            "preset.habitctl.stats",
+            "preset.habitctl.areas",
+            "preset.habitctl.run"
+        ]))
+        XCTAssertTrue(presets.contains { $0.id == "preset.habitctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
+        XCTAssertTrue(DefaultToolPresetCatalog.categories.contains(.habits))
+        XCTAssertTrue(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.habitctl.run" })
     }
 
     func testCodexPresetIsAvailableWhenExecutableIsInstalled() throws {
@@ -215,6 +256,23 @@ final class ToolRegistryTests: XCTestCase {
         })
         XCTAssertEqual(DefaultToolPresetCatalog.preferredCategory, .developer)
         XCTAssertTrue(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.developer.codex" })
+    }
+
+    func testClaudeCodePresetUsesClaudeCLIWhenInstalled() throws {
+        guard let executablePath = ExecutableLocator.executablePath(named: "claude") else {
+            throw XCTSkip("Claude Code is not installed on this Mac.")
+        }
+
+        let preset = try XCTUnwrap(DefaultToolPresetCatalog.preset(id: "preset.claude.run"))
+        XCTAssertEqual(preset.name, "Claude Code")
+        XCTAssertEqual(preset.executablePath, executablePath)
+        XCTAssertEqual(preset.mode, .cliAdapter)
+        XCTAssertEqual(preset.capability, .destructive)
+        XCTAssertEqual(preset.timeoutSeconds, 60)
+        XCTAssertEqual(preset.outputLimitKB, 5120)
+        XCTAssertTrue(preset.summary.contains("--print"))
+        XCTAssertTrue(preset.summary.contains("--output-format"))
+        XCTAssertNil(DefaultToolPresetCatalog.preset(id: "preset.claude_session.run"))
     }
 
     func testRemCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
@@ -251,13 +309,13 @@ final class ToolRegistryTests: XCTestCase {
             ("deno", "preset.deno.run"),
             ("supabase", "preset.supabase.run"),
             ("xcodegen", "preset.xcodegen.run"),
-            ("claude-session", "preset.claude_session.run"),
             ("grok-session", "preset.grok_session.run"),
             ("cora", "preset.cora.run"),
             ("monologue", "preset.monologue.run"),
             ("matter", "preset.matter.run"),
             ("spark", "preset.spark.run"),
-            ("frames", "preset.frames.run")
+            ("frames", "preset.frames.run"),
+            ("habitctl", "preset.habitctl.run")
         ]
 
         for (executable, presetID) in expected where ExecutableLocator.executablePath(named: executable) != nil {
@@ -393,5 +451,30 @@ final class ToolRegistryTests: XCTestCase {
                     || argument.localizedCaseInsensitiveContains("remove")
             })
         }
+    }
+
+    func testClientToolPermissionStoreUsesStableTrustIDAcrossClientIDChurn() throws {
+        let suiteName = "MacRemoteTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = ClientToolPermissionStore(userDefaults: defaults)
+
+        _ = store.setAllowed(
+            true,
+            clientID: "macremote-client-old",
+            clientTrustID: "macremote-trust-codex",
+            toolID: "preset.remctl.run"
+        )
+
+        XCTAssertTrue(store.isAllowed(
+            clientID: "macremote-client-new",
+            clientTrustID: "macremote-trust-codex",
+            toolID: "preset.remctl.run"
+        ))
+        XCTAssertFalse(store.isAllowed(
+            clientID: "macremote-client-new",
+            clientTrustID: "macremote-trust-other",
+            toolID: "preset.remctl.run"
+        ))
     }
 }

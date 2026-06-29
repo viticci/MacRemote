@@ -12,55 +12,91 @@ final class ClientToolPermissionStore: @unchecked Sendable {
         self.allowedToolIDsByClientID = Self.load(from: userDefaults)
     }
 
-    func isAllowed(clientID: String, toolID: String) -> Bool {
+    func isAllowed(clientID: String, clientTrustID: String? = nil, toolID: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        if let clientTrustID, allowedToolIDsByClientID[clientTrustID]?.contains(toolID) == true {
+            return true
+        }
         return allowedToolIDsByClientID[clientID]?.contains(toolID) == true
     }
 
-    func allowedToolIDs(for clientID: String) -> Set<String> {
+    func allowedToolIDs(for clientID: String, clientTrustID: String? = nil) -> Set<String> {
         lock.lock()
         defer { lock.unlock() }
-        return allowedToolIDsByClientID[clientID] ?? []
+        var toolIDs = allowedToolIDsByClientID[clientID] ?? []
+        if let clientTrustID {
+            toolIDs.formUnion(allowedToolIDsByClientID[clientTrustID] ?? [])
+        }
+        return toolIDs
     }
 
-    func setAllowed(_ isAllowed: Bool, clientID: String, toolID: String) -> [String: Set<String>] {
+    func setAllowed(_ isAllowed: Bool, clientID: String, clientTrustID: String? = nil, toolID: String) -> [String: Set<String>] {
         lock.lock()
         defer { lock.unlock() }
 
-        var tools = allowedToolIDsByClientID[clientID] ?? []
+        let storageID = clientTrustID ?? clientID
+        var tools = allowedToolIDsByClientID[storageID] ?? []
         if isAllowed {
             tools.insert(toolID)
         } else {
             tools.remove(toolID)
+            allowedToolIDsByClientID[clientID]?.remove(toolID)
+            if allowedToolIDsByClientID[clientID]?.isEmpty == true {
+                allowedToolIDsByClientID.removeValue(forKey: clientID)
+            }
         }
 
         if tools.isEmpty {
-            allowedToolIDsByClientID.removeValue(forKey: clientID)
+            allowedToolIDsByClientID.removeValue(forKey: storageID)
         } else {
-            allowedToolIDsByClientID[clientID] = tools
+            allowedToolIDsByClientID[storageID] = tools
         }
         persistLocked()
         return allowedToolIDsByClientID
     }
 
-    func replaceAllowedToolIDs(_ toolIDs: Set<String>, clientID: String) -> [String: Set<String>] {
+    func replaceAllowedToolIDs(_ toolIDs: Set<String>, clientID: String, clientTrustID: String? = nil) -> [String: Set<String>] {
         lock.lock()
         defer { lock.unlock() }
 
+        let storageID = clientTrustID ?? clientID
         if toolIDs.isEmpty {
-            allowedToolIDsByClientID.removeValue(forKey: clientID)
+            allowedToolIDsByClientID.removeValue(forKey: storageID)
         } else {
-            allowedToolIDsByClientID[clientID] = toolIDs
+            allowedToolIDsByClientID[storageID] = toolIDs
+        }
+        if let clientTrustID, clientTrustID != clientID {
+            allowedToolIDsByClientID.removeValue(forKey: clientID)
         }
         persistLocked()
         return allowedToolIDsByClientID
     }
 
-    func removeClient(_ clientID: String) -> [String: Set<String>] {
+    func removeClient(_ clientID: String, clientTrustID: String? = nil) -> [String: Set<String>] {
         lock.lock()
         defer { lock.unlock() }
         allowedToolIDsByClientID.removeValue(forKey: clientID)
+        if let clientTrustID {
+            allowedToolIDsByClientID.removeValue(forKey: clientTrustID)
+        }
+        persistLocked()
+        return allowedToolIDsByClientID
+    }
+
+    func migrateClientAllowances(clientID: String, clientTrustID: String) -> [String: Set<String>] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard clientID != clientTrustID,
+              let legacyToolIDs = allowedToolIDsByClientID.removeValue(forKey: clientID),
+              !legacyToolIDs.isEmpty else {
+            return allowedToolIDsByClientID
+        }
+
+        var trustedToolIDs = allowedToolIDsByClientID[clientTrustID] ?? []
+        trustedToolIDs.formUnion(legacyToolIDs)
+        allowedToolIDsByClientID[clientTrustID] = trustedToolIDs
         persistLocked()
         return allowedToolIDsByClientID
     }

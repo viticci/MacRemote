@@ -44,6 +44,8 @@ final class TunnelServiceTests: XCTestCase {
         model.approvals = [
             ApprovalRequest(
                 id: UUID(),
+                clientID: "client-id",
+                clientTrustID: "trust-id",
                 clientName: "Client",
                 redirectURI: "https://example.com/callback",
                 issuer: "https://quiet-river-123.trycloudflare.com",

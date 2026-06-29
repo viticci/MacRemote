@@ -15,11 +15,12 @@ APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 SOURCE_ICON="$ROOT_DIR/Resources/AppIcon.icns"
+SOURCE_CONNECTOR_ICON="$ROOT_DIR/Resources/MacRemoteConnectorIcon.png"
+SOURCE_FAVICON_ICO="$ROOT_DIR/Resources/Favicon.ico"
+SOURCE_FAVICON_PNG="$ROOT_DIR/Resources/Favicon.png"
 STABLE_ADHOC_REQUIREMENT="=designated => identifier \"$BUNDLE_ID\""
 
 cd "$ROOT_DIR"
-
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
 swift build
 BUILD_BINARY="$(swift build --show-bin-path)/$APP_NAME"
@@ -30,6 +31,15 @@ cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
 if [[ -f "$SOURCE_ICON" ]]; then
   cp "$SOURCE_ICON" "$APP_RESOURCES/AppIcon.icns"
+fi
+if [[ -f "$SOURCE_CONNECTOR_ICON" ]]; then
+  cp "$SOURCE_CONNECTOR_ICON" "$APP_RESOURCES/MacRemoteConnectorIcon.png"
+fi
+if [[ -f "$SOURCE_FAVICON_ICO" ]]; then
+  cp "$SOURCE_FAVICON_ICO" "$APP_RESOURCES/Favicon.ico"
+fi
+if [[ -f "$SOURCE_FAVICON_PNG" ]]; then
+  cp "$SOURCE_FAVICON_PNG" "$APP_RESOURCES/Favicon.png"
 fi
 
 cat >"$INFO_PLIST" <<PLIST
@@ -113,6 +123,7 @@ else
 fi
 
 open_app() {
+  pkill -x "$APP_NAME" >/dev/null 2>&1 || true
   /usr/bin/open -n "$APP_BUNDLE"
 }
 

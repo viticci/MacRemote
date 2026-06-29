@@ -106,6 +106,9 @@ private struct ApprovalDetailGrid: View {
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+            ApprovalDetailRow(title: "Request", value: request.id.uuidString)
+            ApprovalDetailRow(title: "Client ID", value: request.clientID)
+            ApprovalDetailRow(title: "Trust ID", value: request.clientTrustID)
             ApprovalDetailRow(title: "Resource", value: request.resource)
             ApprovalDetailRow(title: "Issuer", value: request.issuer)
             ApprovalDetailRow(title: "Redirect", value: request.redirectURI)
@@ -149,6 +152,14 @@ private struct ToolCallApprovalRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    if let clientID = request.clientID {
+                        Text(clientID)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
                 }
 
                 Spacer()
@@ -174,6 +185,8 @@ private struct ToolCallApprovalRow: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+
+            ToolCallIdentityGrid(request: request)
 
             if request.state == .pending {
                 HStack {
@@ -204,5 +217,22 @@ private struct ToolCallApprovalRow: View {
         case .denied: .red
         case .expired: .secondary
         }
+    }
+}
+
+private struct ToolCallIdentityGrid: View {
+    let request: ToolCallApprovalRequest
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+            ApprovalDetailRow(title: "Request", value: request.id.uuidString)
+            if let clientID = request.clientID {
+                ApprovalDetailRow(title: "Client ID", value: clientID)
+            }
+            if let trustID = request.clientTrustID {
+                ApprovalDetailRow(title: "Trust ID", value: trustID)
+            }
+        }
+        .font(.caption)
     }
 }

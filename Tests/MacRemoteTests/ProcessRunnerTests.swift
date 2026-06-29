@@ -29,6 +29,8 @@ final class ProcessRunnerTests: XCTestCase {
 
         XCTAssertTrue(result.succeeded)
         XCTAssertTrue(result.stdout.contains("MACREMOTE_TEST_ENV=present"))
+        XCTAssertFalse(result.stdout.contains("PATH="))
+        XCTAssertFalse(result.stdout.contains("ANTHROPIC_API_KEY="))
     }
 
     func testRunnerWritesStandardInput() async throws {

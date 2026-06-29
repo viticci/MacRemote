@@ -101,6 +101,8 @@ struct ApprovalRequest: Identifiable, Hashable, Sendable {
     }
 
     let id: UUID
+    let clientID: String
+    let clientTrustID: String
     let clientName: String
     let redirectURI: String
     let issuer: String
@@ -121,6 +123,7 @@ struct ApprovalRequest: Identifiable, Hashable, Sendable {
 
 struct AuthenticatedClientContext: Equatable, Sendable {
     let clientID: String
+    let clientTrustID: String
     let clientName: String
     let issuer: String
     let resource: String
@@ -130,6 +133,7 @@ struct AuthenticatedClientContext: Equatable, Sendable {
 
 struct ConnectedClient: Identifiable, Hashable, Sendable {
     let id: String
+    let trustID: String
     let name: String
     let redirectURIs: [String]
     let issuer: String?
@@ -151,6 +155,7 @@ struct ToolCallApprovalRequest: Identifiable, Hashable, Sendable {
 
     let id: UUID
     let clientID: String?
+    let clientTrustID: String?
     let clientName: String?
     let toolID: String
     let toolName: String
@@ -162,6 +167,7 @@ struct ToolCallApprovalRequest: Identifiable, Hashable, Sendable {
     init(
         id: UUID,
         clientID: String? = nil,
+        clientTrustID: String? = nil,
         clientName: String? = nil,
         toolID: String,
         toolName: String,
@@ -172,6 +178,7 @@ struct ToolCallApprovalRequest: Identifiable, Hashable, Sendable {
     ) {
         self.id = id
         self.clientID = clientID
+        self.clientTrustID = clientTrustID
         self.clientName = clientName
         self.toolID = toolID
         self.toolName = toolName

@@ -28,6 +28,60 @@ final class OAuthCoordinatorTests: XCTestCase {
         }
     }
 
+    func testDynamicRegistrationReusesExistingLogicalClient() throws {
+        let coordinator = OAuthCoordinator()
+        let first = try coordinator.registerClient(from: [
+            "client_name": "Codex CLI",
+            "redirect_uris": ["https://codex.example/oauth/callback"],
+            "scope": "mcp:tools"
+        ])
+        let second = try coordinator.registerClient(from: [
+            "client_name": "Codex CLI",
+            "redirect_uris": ["https://codex.example/oauth/callback"],
+            "scope": "mcp:tools"
+        ])
+
+        XCTAssertEqual(first["client_id"] as? String, second["client_id"] as? String)
+        XCTAssertEqual(coordinator.connectedClientSnapshot().count, 0)
+    }
+
+    func testLoopbackRegistrationReusesLogicalClientAcrossCallbackPorts() throws {
+        let coordinator = OAuthCoordinator()
+        let first = try coordinator.registerClient(from: [
+            "client_name": "Codex CLI",
+            "redirect_uris": ["http://127.0.0.1:49152/callback"],
+            "scope": "mcp:tools"
+        ])
+        let second = try coordinator.registerClient(from: [
+            "client_name": "Codex CLI",
+            "redirect_uris": ["http://127.0.0.1:49153/callback"],
+            "scope": "mcp:tools"
+        ])
+
+        let clientID = try XCTUnwrap(first["client_id"] as? String)
+        XCTAssertEqual(second["client_id"] as? String, clientID)
+        XCTAssertEqual(
+            second["redirect_uris"] as? [String],
+            ["http://127.0.0.1:49152/callback", "http://127.0.0.1:49153/callback"]
+        )
+
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": "http://127.0.0.1:49153/callback",
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: "codex-port-verifier"),
+                "code_challenge_method": "S256"
+            ],
+            issuer: "http://127.0.0.1:1234",
+            resource: "http://127.0.0.1:1234/mcp/test-instance"
+        )
+        let request = try XCTUnwrap(coordinator.approvalSnapshot().first { $0.id == requestID })
+        XCTAssertEqual(request.clientID, clientID)
+        XCTAssertTrue(request.clientTrustID.hasPrefix("macremote-trust-"))
+    }
+
     func testNativeAppRedirectSchemeCanRegisterForDynamicClients() throws {
         let coordinator = OAuthCoordinator()
         let redirectURI = "raycast://extensions/raycast/raycast/mcp-oauth-callback"
@@ -40,6 +94,128 @@ final class OAuthCoordinatorTests: XCTestCase {
 
         XCTAssertNotNil(client["client_id"] as? String)
         XCTAssertEqual(client["redirect_uris"] as? [String], [redirectURI])
+    }
+
+    func testRegisteredClientPersistsAcrossCoordinatorRestart() throws {
+        let defaults = try isolatedOAuthDefaults()
+        let store = OAuthGrantStore(userDefaults: defaults)
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp/test-instance"
+        let redirectURI = "https://www.notion.so/oauth/callback"
+
+        let coordinator = OAuthCoordinator(grantStore: store)
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Notion",
+            "redirect_uris": [redirectURI],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+
+        let reloaded = OAuthCoordinator(grantStore: store)
+        let requestID = try reloaded.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": redirectURI,
+                "scope": "mcp:tools",
+                "state": "notion-state",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: "notion-verifier"),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+
+        let request = try XCTUnwrap(reloaded.approvalSnapshot().first { $0.id == requestID })
+        XCTAssertEqual(request.clientName, "Notion")
+        XCTAssertEqual(request.redirectURI, redirectURI)
+    }
+
+    func testRefreshTokenPersistsAcrossCoordinatorRestart() throws {
+        let defaults = try isolatedOAuthDefaults()
+        let store = OAuthGrantStore(userDefaults: defaults)
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp/test-instance"
+
+        let firstCoordinator = OAuthCoordinator(grantStore: store)
+        let issued = try issueApprovedTokens(
+            coordinator: firstCoordinator,
+            clientName: "Notion",
+            redirectURI: "https://www.notion.so/oauth/callback",
+            issuer: issuer,
+            resource: resource
+        )
+        XCTAssertTrue(firstCoordinator.validateAccessToken(issued.accessToken, issuer: issuer, resource: resource))
+
+        let reloaded = OAuthCoordinator(grantStore: store)
+        XCTAssertEqual(reloaded.connectedClientSnapshot().first?.name, "Notion")
+        let rotated = try reloaded.exchangeToken(form: [
+            "grant_type": "refresh_token",
+            "refresh_token": issued.refreshToken,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+
+        let accessToken = try XCTUnwrap(rotated["access_token"] as? String)
+        XCTAssertTrue(reloaded.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        XCTAssertThrowsError(
+            try reloaded.exchangeToken(form: [
+                "grant_type": "refresh_token",
+                "refresh_token": issued.refreshToken,
+                "resource": resource
+            ], issuer: issuer, resource: resource)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidGrant("Invalid refresh token."))
+        }
+    }
+
+    func testAuthorizeCanRecoverNotionCachedDynamicClientID() throws {
+        let defaults = try isolatedOAuthDefaults()
+        let store = OAuthGrantStore(userDefaults: defaults)
+        let coordinator = OAuthCoordinator(grantStore: store)
+        let issuer = "https://macremote.viticci.net"
+        let resource = "\(issuer)/mcp/b06386fec5a37604c776b341e89f53aa"
+        let redirectURI = "https://app.notion.com/workflows/mcp/oauth/callback"
+        let clientID = "macremote-client-CsRCW9bcxFfllcH6Uqlsog"
+        let verifier = "notion-recovered-verifier"
+
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": redirectURI,
+                "scope": "mcp:tools",
+                "state": "notion-state",
+                "nonce": "notion-nonce",
+                "notion_user_id": "abdd4b07-b867-4f46-a4ec-c6a39e351e3f",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "prompt": "consent",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+
+        let request = try XCTUnwrap(coordinator.approvalSnapshot().first { $0.id == requestID })
+        XCTAssertEqual(request.clientName, "Notion")
+        XCTAssertEqual(request.redirectURI, redirectURI)
+        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "redirect_uri": redirectURI,
+            "code": code,
+            "code_verifier": verifier,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        XCTAssertNotNil(token["access_token"] as? String)
+
+        let reloaded = OAuthCoordinator(grantStore: store)
+        XCTAssertEqual(reloaded.connectedClientSnapshot().first?.id, clientID)
+        XCTAssertEqual(reloaded.connectedClientSnapshot().first?.name, "Notion")
     }
 
     func testUnsafeRedirectSchemesAreRejectedForDynamicClients() throws {
@@ -289,7 +465,11 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "resource": otherResource
             ], issuer: otherIssuer, resource: otherResource)
         ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("Issuer mismatch."))
+            guard case .invalidGrant(let message) = error as? OAuthError else {
+                return XCTFail("Expected invalid_grant issuer mismatch, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Issuer mismatch."))
+            XCTAssertTrue(message.contains("Restart login using one MacRemote URL consistently"))
         }
 
         let token = try coordinator.exchangeToken(form: [
@@ -485,7 +665,11 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "resource": otherResource
             ], issuer: otherIssuer, resource: otherResource)
         ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("Issuer mismatch."))
+            guard case .invalidGrant(let message) = error as? OAuthError else {
+                return XCTFail("Expected invalid_grant issuer mismatch, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Issuer mismatch."))
+            XCTAssertTrue(message.contains("Restart login using one MacRemote URL consistently"))
         }
 
         let rotated = try coordinator.exchangeToken(form: [
@@ -627,4 +811,62 @@ final class OAuthCoordinatorTests: XCTestCase {
             XCTAssertEqual(error as? OAuthError, .invalidRequest("Unknown client_id."))
         }
     }
+}
+
+private func isolatedOAuthDefaults(
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws -> UserDefaults {
+    let suiteName = "MacRemoteOAuthTests-\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+        XCTFail("Could not create isolated UserDefaults suite.", file: file, line: line)
+        throw NSError(domain: "MacRemoteTests", code: 1)
+    }
+    defaults.removePersistentDomain(forName: suiteName)
+    return defaults
+}
+
+private func issueApprovedTokens(
+    coordinator: OAuthCoordinator,
+    clientName: String,
+    redirectURI: String,
+    issuer: String,
+    resource: String
+) throws -> (clientID: String, accessToken: String, refreshToken: String) {
+    let verifier = "verifier-\(UUID().uuidString)"
+    let client = try coordinator.registerClient(from: [
+        "client_name": clientName,
+        "redirect_uris": [redirectURI],
+        "scope": "mcp:tools"
+    ])
+    let clientID = try XCTUnwrap(client["client_id"] as? String)
+    let requestID = try coordinator.beginAuthorization(
+        queryItems: [
+            "response_type": "code",
+            "client_id": clientID,
+            "redirect_uri": redirectURI,
+            "scope": "mcp:tools",
+            "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+            "code_challenge_method": "S256",
+            "resource": resource
+        ],
+        issuer: issuer,
+        resource: resource
+    )
+    XCTAssertTrue(coordinator.approve(requestID: requestID))
+    let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+    let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+    let token = try coordinator.exchangeToken(form: [
+        "grant_type": "authorization_code",
+        "client_id": clientID,
+        "redirect_uri": redirectURI,
+        "code": code,
+        "code_verifier": verifier,
+        "resource": resource
+    ], issuer: issuer, resource: resource)
+    return (
+        clientID,
+        try XCTUnwrap(token["access_token"] as? String),
+        try XCTUnwrap(token["refresh_token"] as? String)
+    )
 }

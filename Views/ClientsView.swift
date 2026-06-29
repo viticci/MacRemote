@@ -126,6 +126,8 @@ private struct ClientMetadataGrid: View {
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+            ClientMetadataRow(title: "Client ID", value: client.id)
+            ClientMetadataRow(title: "Trust ID", value: client.trustID)
             if let issuer = client.issuer {
                 ClientMetadataRow(title: "Issuer", value: issuer)
             }

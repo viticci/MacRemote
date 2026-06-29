@@ -62,6 +62,7 @@ final class AppModel {
     private let userDefaults: UserDefaults
     private let tunnelService = TunnelService()
     private let toolStore: ToolRegistryStore
+    private let oauthGrantStore: OAuthGrantStore
     private let clientToolPermissionStore: ClientToolPermissionStore
     private let toolSurfaceRuntime: ToolSurfaceRuntime
     private let fullDiskAccessService = FullDiskAccessService()
@@ -80,11 +81,13 @@ final class AppModel {
     init(
         userDefaults: UserDefaults = .standard,
         toolStore: ToolRegistryStore = ToolRegistryStore(),
+        oauthGrantStore: OAuthGrantStore? = nil,
         pushoverSender: any PushoverSending = PushoverService(),
         brrrSender: any BrrrSending = BrrrService()
     ) {
         self.userDefaults = userDefaults
         self.toolStore = toolStore
+        self.oauthGrantStore = oauthGrantStore ?? OAuthGrantStore(userDefaults: userDefaults)
         self.clientToolPermissionStore = ClientToolPermissionStore(userDefaults: userDefaults)
         self.toolSurfaceRuntime = ToolSurfaceRuntime(environment: Self.toolEnvironment)
         self.pushoverSender = pushoverSender
@@ -135,12 +138,12 @@ final class AppModel {
         approvalCoordinatorGeneration += 1
         let generation = approvalCoordinatorGeneration
 
-        authCoordinator = OAuthCoordinator { [weak self] approvals in
+        authCoordinator = OAuthCoordinator(changeHandler: { [weak self] approvals in
             Task { @MainActor in
                 guard self?.approvalCoordinatorGeneration == generation else { return }
                 self?.handleAuthorizationApprovalsChanged(approvals)
             }
-        }
+        }, grantStore: oauthGrantStore)
         toolCallApprovalCoordinator = ToolCallApprovalCoordinator { [weak self] approvals in
             Task { @MainActor in
                 guard self?.approvalCoordinatorGeneration == generation else { return }
@@ -152,7 +155,7 @@ final class AppModel {
         }
         approvals = []
         toolCallApprovals = []
-        connectedClients = []
+        setConnectedClients(authCoordinator.connectedClientSnapshot())
     }
 
     func startLocalServer() {
@@ -231,7 +234,7 @@ final class AppModel {
         localServerURL = nil
         approvals = authCoordinator.approvalSnapshot()
         toolCallApprovals = toolCallApprovalCoordinator.approvalSnapshot()
-        connectedClients = authCoordinator.connectedClientSnapshot()
+        setConnectedClients(authCoordinator.connectedClientSnapshot())
         serverStatus = .stopped
         tunnelStatus = tunnelService.status(localServerURL: nil)
         appendLog(level: .info, "Local MCP server stopped.")
@@ -249,6 +252,7 @@ final class AppModel {
 
         instanceID = nextInstanceID
         userDefaults.set(nextInstanceID, forKey: Self.instanceIDKey)
+        _ = authCoordinator.revokeAllGrants()
         installApprovalCoordinators()
         clientToolPermissionSnapshot = clientToolPermissionStore.clear()
         selection = .settings
@@ -262,7 +266,7 @@ final class AppModel {
         let summary = authCoordinator.revokeAllGrants()
         approvals = []
         notifiedAuthorizationRequestIDs.removeAll()
-        connectedClients = []
+        setConnectedClients([])
         clientToolPermissionSnapshot = clientToolPermissionStore.clear()
         appendLog(
             level: .warning,
@@ -611,7 +615,7 @@ final class AppModel {
             return
         }
 
-        setToolAlwaysAllowed(true, toolID: request.toolID, clientID: clientID)
+        setToolAlwaysAllowed(true, toolID: request.toolID, clientID: clientID, clientTrustID: request.clientTrustID)
         if toolCallApprovalCoordinator.approve(requestID: id) {
             appendLog(level: .info, "\(request.toolName) approved forever for \(request.clientName ?? "this client").")
         }
@@ -624,17 +628,27 @@ final class AppModel {
     }
 
     func isToolAlwaysAllowed(toolID: String, clientID: String) -> Bool {
-        clientToolPermissionSnapshot[clientID]?.contains(toolID) == true
+        if let trustID = clientTrustID(for: clientID),
+           clientToolPermissionSnapshot[trustID]?.contains(toolID) == true {
+            return true
+        }
+        return clientToolPermissionSnapshot[clientID]?.contains(toolID) == true
     }
 
     func alwaysAllowedToolIDs(for clientID: String) -> Set<String> {
-        clientToolPermissionSnapshot[clientID] ?? []
+        var toolIDs = clientToolPermissionSnapshot[clientID] ?? []
+        if let trustID = clientTrustID(for: clientID) {
+            toolIDs.formUnion(clientToolPermissionSnapshot[trustID] ?? [])
+        }
+        return toolIDs
     }
 
-    func setToolAlwaysAllowed(_ isAllowed: Bool, toolID: String, clientID: String) {
+    func setToolAlwaysAllowed(_ isAllowed: Bool, toolID: String, clientID: String, clientTrustID: String? = nil) {
+        let trustID = clientTrustID ?? self.clientTrustID(for: clientID)
         clientToolPermissionSnapshot = clientToolPermissionStore.setAllowed(
             isAllowed,
             clientID: clientID,
+            clientTrustID: trustID,
             toolID: toolID
         )
         let toolName = tools.first { $0.id == toolID }?.name ?? toolID
@@ -648,16 +662,34 @@ final class AppModel {
     func allowAllCurrentTools(for clientID: String) {
         clientToolPermissionSnapshot = clientToolPermissionStore.replaceAllowedToolIDs(
             Set(tools.map(\.id)),
-            clientID: clientID
+            clientID: clientID,
+            clientTrustID: clientTrustID(for: clientID)
         )
         let clientName = connectedClients.first { $0.id == clientID }?.name ?? "client"
         appendLog(level: .warning, "Always allow all current tools for \(clientName).")
     }
 
     func clearToolAllowances(for clientID: String) {
-        clientToolPermissionSnapshot = clientToolPermissionStore.removeClient(clientID)
+        clientToolPermissionSnapshot = clientToolPermissionStore.removeClient(
+            clientID,
+            clientTrustID: clientTrustID(for: clientID)
+        )
         let clientName = connectedClients.first { $0.id == clientID }?.name ?? "client"
         appendLog(level: .warning, "Cleared always-allow tools for \(clientName).")
+    }
+
+    private func clientTrustID(for clientID: String) -> String? {
+        connectedClients.first { $0.id == clientID }?.trustID
+    }
+
+    private func setConnectedClients(_ clients: [ConnectedClient]) {
+        connectedClients = clients
+        for client in clients {
+            clientToolPermissionSnapshot = clientToolPermissionStore.migrateClientAllowances(
+                clientID: client.id,
+                clientTrustID: client.trustID
+            )
+        }
     }
 
     func refreshTunnelStatus() {
@@ -1149,7 +1181,7 @@ final class AppModel {
 
     private func handleAuthorizationApprovalsChanged(_ approvals: [ApprovalRequest]) {
         self.approvals = approvals
-        connectedClients = authCoordinator.connectedClientSnapshot()
+        setConnectedClients(authCoordinator.connectedClientSnapshot())
         notifyForNewAuthorizationApprovals(approvals)
         if approvals.contains(where: { $0.state == .pending }) {
             selection = .approvals
@@ -1717,7 +1749,7 @@ final class AppModel {
         case .approvalsChanged(let approvals):
             handleAuthorizationApprovalsChanged(approvals)
         case .clientsChanged(let clients):
-            connectedClients = clients
+            setConnectedClients(clients)
         }
     }
 

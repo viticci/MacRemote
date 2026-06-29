@@ -28,7 +28,7 @@ struct ProcessRunner: Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
-        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+        process.environment = environment
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
