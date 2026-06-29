@@ -869,6 +869,7 @@ final class LocalMCPServerTests: XCTestCase {
         let description = try XCTUnwrap(listedTool["description"] as? String)
         XCTAssertTrue(description.contains("numeric `id` field"))
         XCTAssertTrue(description.contains("do not pass the UUID embedded in `deepLink`"))
+        XCTAssertTrue(description.contains("synced rich URL attachments"))
         XCTAssertTrue(description.contains("Do not use `--private` for normal due dates or EventKit alarms"))
 
         let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
@@ -876,7 +877,8 @@ final class LocalMCPServerTests: XCTestCase {
         let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
         let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
         XCTAssertTrue(argsDescription.contains("Use numeric reminder IDs"))
-        XCTAssertTrue(argsDescription.contains("Do not use `--private`"))
+        XCTAssertTrue(argsDescription.contains("Use `--private --url`"))
+        XCTAssertTrue(argsDescription.contains("do not use `--private`"))
     }
 
     func testPocketCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {

@@ -49,6 +49,7 @@ enum RemCTLArgumentNormalizer {
         "--subtask",
         "--tags",
         "--unassign",
+        "--url",
         "--urgent"
     ]
 

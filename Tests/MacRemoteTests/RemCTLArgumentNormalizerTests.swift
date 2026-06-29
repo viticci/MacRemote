@@ -79,6 +79,24 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
         XCTAssertEqual(normalized, ["edit", "23829", "--private", "--section", "NPC", "--json"])
     }
 
+    func testKeepsPrivateForRichURLAttachmentEdits() async throws {
+        let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["edit", "23829", "--private", "--url", "https://example.com", "--json"]
+        ) { _ in nil }
+
+        XCTAssertEqual(normalized, ["edit", "23829", "--private", "--url", "https://example.com", "--json"])
+    }
+
+    func testKeepsPrivateForRichURLAttachmentAdds() async throws {
+        let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["add", "Research", "-l", "Projects", "--private", "--url=https://example.com", "--json"]
+        ) { _ in nil }
+
+        XCTAssertEqual(normalized, ["add", "Research", "-l", "Projects", "--private", "--url=https://example.com", "--json"])
+    }
+
     func testLeavesOtherGenericCLIsUntouched() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: codexAdapter(),

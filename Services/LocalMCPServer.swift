@@ -789,7 +789,7 @@ final class LocalMCPServer: @unchecked Sendable {
                 parts.append("For Codex, global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`; options after `exec` are parsed by the exec subcommand.")
             case "remctl":
                 parts.append("For RemCTL, pass the numeric `id` field from JSON results to commands such as `edit`, `info`, `done`, `delete`, `flag`, and `unflag`; do not pass the UUID embedded in `deepLink`.")
-                parts.append("Use `--private` only for private Reminders metadata such as sections, tags, subtasks, images, flags, urgency, assignment, or location alarms. Do not use `--private` for normal due dates or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
+                parts.append("Use `--private` only for private Reminders metadata such as synced rich URL attachments, sections, tags, subtasks, images, flags, urgency, assignment, or location alarms. Do not use `--private` for normal due dates or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
             case "pocketctl":
                 parts.append("For PocketCTL, prefer `--json` for reads. Before queue, playlist, bookmark, archive, progress, or played-state writes, use the matching command with `--dry-run --json` unless the user explicitly asked to perform the write.")
             case "habitctl":
@@ -912,7 +912,7 @@ final class LocalMCPServer: @unchecked Sendable {
         case "args", "argv":
             switch URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() {
             case "remctl":
-                return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Do not use `--private` for ordinary `edit ID -d DATE` or `edit ID --alarm DATE` calls."
+                return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Use `--private --url` for synced rich URL attachments, but do not use `--private` for ordinary `edit ID -d DATE` or `edit ID --alarm DATE` calls."
             case "pocketctl":
                 return "Exact PocketCTL argv items. No shell is used. Prefer `--json`; use `--dry-run --json` before queue, playlist, bookmark, archive, progress, or played-state writes unless the user explicitly requested the write."
             case "habitctl":
