@@ -86,6 +86,12 @@ Required endpoints:
 - `POST /token`
 - `POST /mcp/<instance-id>`
 
+Authenticated `POST /mcp` requests may be accepted as a compatibility alias for
+clients that normalize an already-authorized MCP endpoint back to the
+conventional MCP path. Public unauthenticated `/mcp` requests must not disclose
+the instance path; initial discovery and the advertised public URL remain
+`/mcp/<instance-id>`.
+
 `/health` is diagnostic, not discovery. Loopback health may include instance and
 tool-surface details for local verification, but public forwarded health must
 only report generic service readiness and must not disclose the instance id,

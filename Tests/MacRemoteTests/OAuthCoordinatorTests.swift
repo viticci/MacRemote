@@ -543,6 +543,37 @@ final class OAuthCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: otherResource))
     }
 
+    func testAccessTokenCanValidateAgainstExplicitEquivalentResourceSet() throws {
+        let coordinator = OAuthCoordinator()
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp/test-instance"
+        let aliasResource = "\(issuer)/mcp"
+        let otherResource = "\(issuer)/mcp/other-instance"
+        let issued = try issueApprovedTokens(
+            coordinator: coordinator,
+            clientName: "Alias Test",
+            redirectURI: "http://127.0.0.1/callback",
+            issuer: issuer,
+            resource: resource
+        )
+
+        XCTAssertNotNil(coordinator.clientContext(
+            forAccessToken: issued.accessToken,
+            issuer: issuer,
+            acceptedResources: [aliasResource, resource]
+        ))
+        XCTAssertNil(coordinator.clientContext(
+            forAccessToken: issued.accessToken,
+            issuer: issuer,
+            acceptedResources: [aliasResource]
+        ))
+        XCTAssertNil(coordinator.clientContext(
+            forAccessToken: issued.accessToken,
+            issuer: issuer,
+            acceptedResources: [otherResource]
+        ))
+    }
+
     func testUnregisteredRedirectURIIsRejected() throws {
         let coordinator = OAuthCoordinator()
         let client = try coordinator.registerClient(from: [

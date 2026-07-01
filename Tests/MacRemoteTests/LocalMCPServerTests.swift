@@ -475,7 +475,7 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(structuredContent["stdout"] as? String, "echo:legacy")
     }
 
-    func testPublicForwardedRequestsMustUseInstanceMCPPath() async throws {
+    func testPublicForwardedMCPAliasRequiresBearerAndUsesSameGrant() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -504,6 +504,18 @@ final class LocalMCPServerTests: XCTestCase {
             "X-Forwarded-Proto": "https"
         ]
         try await Task.sleep(nanoseconds: 100_000_000)
+
+        let unauthenticatedPublicAlias = try await postJSON(
+            url: base.appendingPathComponent("mcp"),
+            headers: forwardedHeaders,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "legacy-public-unauthenticated",
+                "method": "ping"
+            ]
+        )
+        XCTAssertEqual(unauthenticatedPublicAlias.statusCode, 404)
+
         let accessToken = try await authorizedAccessToken(
             base: base,
             coordinator: coordinator,
@@ -511,17 +523,30 @@ final class LocalMCPServerTests: XCTestCase {
             headers: forwardedHeaders
         )
 
-        let legacyPublicPath = try await postJSON(
+        var lowercaseBearerHeaders = forwardedHeaders
+        lowercaseBearerHeaders["Authorization"] = "bearer \(accessToken)"
+        let lowercaseBearer = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            headers: lowercaseBearerHeaders,
+            body: [
+                "jsonrpc": "2.0",
+                "id": "lowercase-bearer",
+                "method": "ping"
+            ]
+        )
+        XCTAssertEqual(lowercaseBearer.statusCode, 200)
+
+        let authenticatedPublicAlias = try await postJSON(
             url: base.appendingPathComponent("mcp"),
             bearerToken: accessToken,
             headers: forwardedHeaders,
             body: [
                 "jsonrpc": "2.0",
-                "id": "legacy-public",
+                "id": "legacy-public-authenticated",
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(legacyPublicPath.statusCode, 404)
+        XCTAssertEqual(authenticatedPublicAlias.statusCode, 200)
 
         let instancePublicPath = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),

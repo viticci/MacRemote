@@ -398,14 +398,31 @@ final class OAuthCoordinator: @unchecked Sendable {
         resource: String,
         requiredScope: String = "mcp:tools"
     ) -> AuthenticatedClientContext? {
+        clientContext(
+            forAccessToken: token,
+            issuer: issuer,
+            acceptedResources: [resource],
+            requiredScope: requiredScope
+        )
+    }
+
+    func clientContext(
+        forAccessToken token: String,
+        issuer: String,
+        acceptedResources: [String],
+        requiredScope: String = "mcp:tools"
+    ) -> AuthenticatedClientContext? {
         let tokenHash = Self.sha256Hex(token)
         let now = Date()
+        let canonicalAcceptedResources = Set(acceptedResources.compactMap { try? Self.canonicalResourceURI($0) })
+        guard !canonicalAcceptedResources.isEmpty else { return nil }
+
         return lock.withLock {
             pruneExpiredTokens(now: now)
             guard let record = accessTokensByHash[tokenHash] else { return nil }
             guard record.expiresAt > now,
                   record.issuer == issuer,
-                  record.resource == resource,
+                  canonicalAcceptedResources.contains(record.resource),
                   record.scopes.contains(requiredScope) else {
                 return nil
             }

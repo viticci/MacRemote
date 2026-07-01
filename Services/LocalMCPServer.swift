@@ -179,7 +179,11 @@ final class LocalMCPServer: @unchecked Sendable {
             return staticIconResponse(fileName: Self.faviconPNGFileName, contentType: "image/png")
         }
 
-        if isMCPPath(request.path, allowLegacyPath: allowsLegacyMCPPath(base: base, activePort: activePort)) {
+        let allowAuthenticatedMCPAlias = request.bearerToken != nil
+        if isMCPPath(
+            request.path,
+            allowLegacyPath: allowsLegacyMCPPath(base: base, activePort: activePort) || allowAuthenticatedMCPAlias
+        ) {
             switch request.method {
             case "POST":
                 return await mcp(request: request, base: base, isPublicRequest: isPublicRequest)
@@ -225,6 +229,13 @@ final class LocalMCPServer: @unchecked Sendable {
 
     private func mcpResourceURL(base: String) -> String {
         "\(base)\(mcpEndpointPath)"
+    }
+
+    private func mcpResourceAliases(base: String) -> [String] {
+        [
+            mcpResourceURL(base: base),
+            "\(base)/mcp"
+        ]
     }
 
     private func connectorIconURL(base: String) -> String {
@@ -513,6 +524,7 @@ final class LocalMCPServer: @unchecked Sendable {
             eventHandler?(.clientsChanged(authCoordinator.connectedClientSnapshot()))
             return jsonResponse(response)
         } catch {
+            eventHandler?(.log(.warning, "OAuth token exchange rejected: \(singleLine(error.localizedDescription))"))
             return oauthErrorResponse(error)
         }
     }
@@ -531,11 +543,15 @@ final class LocalMCPServer: @unchecked Sendable {
               let client = authCoordinator.clientContext(
                 forAccessToken: bearerToken,
                 issuer: base,
-                resource: mcpResourceURL(base: base)
+                acceptedResources: mcpResourceAliases(base: base)
               ) else {
             if isPublicRequest,
                let response = publicRateLimitResponseIfNeeded(for: .unauthorizedMCP) {
                 return response
+            }
+
+            if request.bearerToken != nil {
+                eventHandler?(.log(.warning, "Rejected MCP bearer token for \(request.path) on \(base)."))
             }
 
             return HTTPResponse(
@@ -977,6 +993,13 @@ final class LocalMCPServer: @unchecked Sendable {
         )
     }
 
+    private func singleLine(_ value: String) -> String {
+        value
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func jsonErrorResponse(
         status: HTTPResponse.Status,
         error: String,
@@ -1309,9 +1332,19 @@ private struct HTTPRequest {
 
     var bearerToken: String? {
         guard let authorization = headers["authorization"] else { return nil }
-        let prefix = "Bearer "
-        guard authorization.hasPrefix(prefix) else { return nil }
-        return String(authorization.dropFirst(prefix.count))
+        let trimmed = authorization.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separatorIndex = trimmed.firstIndex(where: { $0.isWhitespace }) else {
+            return nil
+        }
+
+        let scheme = String(trimmed[..<separatorIndex])
+        guard scheme.caseInsensitiveCompare("Bearer") == .orderedSame else {
+            return nil
+        }
+
+        let tokenStart = trimmed.index(after: separatorIndex)
+        let token = trimmed[tokenStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
     }
 
     var originHeader: String? {
