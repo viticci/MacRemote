@@ -2,9 +2,22 @@ import Foundation
 import Security
 
 struct OAuthClientCredentials: Equatable, Sendable {
+    let label: String
     let clientID: String
     let clientSecret: String
     let createdAt: Date
+
+    init(
+        label: String,
+        clientID: String,
+        clientSecret: String,
+        createdAt: Date
+    ) {
+        self.label = label
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+        self.createdAt = createdAt
+    }
 }
 
 enum OAuthClientCredentialStoreError: LocalizedError, Equatable {
@@ -24,10 +37,17 @@ enum OAuthClientCredentialStoreError: LocalizedError, Equatable {
 struct OAuthClientCredentialStore: @unchecked Sendable {
     private static let clientIDKey = "MacRemote.oauthClientCredentials.clientID"
     private static let createdAtKey = "MacRemote.oauthClientCredentials.createdAt"
+    private static let credentialsMetadataKey = "MacRemote.oauthClientCredentials.items"
+
+    private struct Metadata: Codable, Equatable {
+        var label: String
+        var clientID: String
+        var createdAt: Date
+    }
 
     private let userDefaults: UserDefaults
     private let service: String
-    private let account: String
+    private let legacyAccount: String
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -36,45 +56,130 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     ) {
         self.userDefaults = userDefaults
         self.service = service
-        self.account = account
+        self.legacyAccount = account
     }
 
     func load() -> OAuthClientCredentials? {
+        loadAll().first
+    }
+
+    func loadAll() -> [OAuthClientCredentials] {
+        if let metadata = loadMetadata() {
+            return metadata.compactMap { item in
+                guard !item.clientID.isEmpty,
+                      let clientSecret = try? readSecret(account: item.clientID),
+                      !clientSecret.isEmpty else {
+                    return nil
+                }
+                return OAuthClientCredentials(
+                    label: item.label,
+                    clientID: item.clientID,
+                    clientSecret: clientSecret,
+                    createdAt: item.createdAt
+                )
+            }
+        }
+
+        guard let legacy = loadLegacyCredential() else {
+            return []
+        }
+        return [legacy]
+    }
+
+    private func loadLegacyCredential() -> OAuthClientCredentials? {
         guard let clientID = userDefaults.string(forKey: Self.clientIDKey),
               !clientID.isEmpty,
-              let clientSecret = try? readSecret(),
+              let clientSecret = try? readSecret(account: legacyAccount),
               !clientSecret.isEmpty else {
             return nil
         }
         let createdAtTimestamp = userDefaults.double(forKey: Self.createdAtKey)
         let createdAt = createdAtTimestamp > 0 ? Date(timeIntervalSince1970: createdAtTimestamp) : Date()
-        return OAuthClientCredentials(clientID: clientID, clientSecret: clientSecret, createdAt: createdAt)
+        return OAuthClientCredentials(
+            label: "OAuth Client",
+            clientID: clientID,
+            clientSecret: clientSecret,
+            createdAt: createdAt
+        )
     }
 
-    func generate() throws -> OAuthClientCredentials {
-        let credentials = OAuthClientCredentials(
+    func generate(label: String = "OAuth Client") throws -> OAuthClientCredentials {
+        var allCredentials = loadAll()
+        let credential = OAuthClientCredentials(
+            label: Self.normalizedLabel(label, existingLabels: Set(allCredentials.map(\.label))),
             clientID: "macremote-oauth-\(try Self.randomToken(byteCount: 18))",
             clientSecret: try Self.randomToken(byteCount: 36),
             createdAt: Date()
         )
-        try save(credentials)
-        return credentials
+        allCredentials.append(credential)
+        try saveAll(allCredentials)
+        return credential
     }
 
     func save(_ credentials: OAuthClientCredentials) throws {
-        try writeSecret(credentials.clientSecret)
-        userDefaults.set(credentials.clientID, forKey: Self.clientIDKey)
-        userDefaults.set(credentials.createdAt.timeIntervalSince1970, forKey: Self.createdAtKey)
+        try saveAll([credentials])
+    }
+
+    func rotate(clientID: String) throws -> OAuthClientCredentials? {
+        var credentials = loadAll()
+        guard let index = credentials.firstIndex(where: { $0.clientID == clientID }) else {
+            return nil
+        }
+        let existing = credentials[index]
+        let replacement = OAuthClientCredentials(
+            label: existing.label,
+            clientID: "macremote-oauth-\(try Self.randomToken(byteCount: 18))",
+            clientSecret: try Self.randomToken(byteCount: 36),
+            createdAt: Date()
+        )
+        credentials[index] = replacement
+        try saveAll(credentials)
+        deleteSecret(account: clientID)
+        return replacement
+    }
+
+    func delete(clientID: String) throws {
+        let credentials = loadAll().filter { $0.clientID != clientID }
+        try saveAll(credentials)
+        deleteSecret(account: clientID)
+        if userDefaults.string(forKey: Self.clientIDKey) == clientID {
+            userDefaults.removeObject(forKey: Self.clientIDKey)
+            userDefaults.removeObject(forKey: Self.createdAtKey)
+            deleteSecret(account: legacyAccount)
+        }
+    }
+
+    private func saveAll(_ credentials: [OAuthClientCredentials]) throws {
+        for credential in credentials {
+            try writeSecret(credential.clientSecret, account: credential.clientID)
+        }
+        saveMetadata(
+            credentials.map {
+                Metadata(label: $0.label, clientID: $0.clientID, createdAt: $0.createdAt)
+            }
+        )
+
+        if let first = credentials.first {
+            userDefaults.set(first.clientID, forKey: Self.clientIDKey)
+            userDefaults.set(first.createdAt.timeIntervalSince1970, forKey: Self.createdAtKey)
+        } else {
+            userDefaults.removeObject(forKey: Self.clientIDKey)
+            userDefaults.removeObject(forKey: Self.createdAtKey)
+        }
     }
 
     func clear() {
-        SecItemDelete(baseQuery() as CFDictionary)
+        for credential in loadAll() {
+            deleteSecret(account: credential.clientID)
+        }
+        deleteSecret(account: legacyAccount)
         userDefaults.removeObject(forKey: Self.clientIDKey)
         userDefaults.removeObject(forKey: Self.createdAtKey)
+        userDefaults.removeObject(forKey: Self.credentialsMetadataKey)
     }
 
-    private func readSecret() throws -> String {
-        var query = baseQuery()
+    private func readSecret(account: String) throws -> String {
+        var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -90,9 +195,9 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         return secret
     }
 
-    private func writeSecret(_ secret: String) throws {
+    private func writeSecret(_ secret: String, account: String) throws {
         let data = Data(secret.utf8)
-        let query = baseQuery()
+        let query = baseQuery(account: account)
         let update: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -115,12 +220,47 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         }
     }
 
-    private func baseQuery() -> [String: Any] {
+    private func deleteSecret(account: String) {
+        SecItemDelete(baseQuery(account: account) as CFDictionary)
+    }
+
+    private func baseQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+    }
+
+    private func loadMetadata() -> [Metadata]? {
+        guard let data = userDefaults.data(forKey: Self.credentialsMetadataKey) else {
+            return nil
+        }
+        return try? JSONDecoder().decode([Metadata].self, from: data)
+    }
+
+    private func saveMetadata(_ metadata: [Metadata]) {
+        guard let data = try? JSONEncoder().encode(metadata) else {
+            return
+        }
+        userDefaults.set(data, forKey: Self.credentialsMetadataKey)
+    }
+
+    private static func normalizedLabel(_ label: String, existingLabels: Set<String>) -> String {
+        let base = label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "OAuth Client"
+            : String(label.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard existingLabels.contains(base) else {
+            return base
+        }
+
+        for index in 2...999 {
+            let candidate = "\(base) \(index)"
+            if !existingLabels.contains(candidate) {
+                return candidate
+            }
+        }
+        return "\(base) \(Int(Date().timeIntervalSince1970))"
     }
 
     private static func randomToken(byteCount: Int) throws -> String {

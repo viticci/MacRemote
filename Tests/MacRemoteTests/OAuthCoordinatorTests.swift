@@ -762,6 +762,46 @@ final class OAuthCoordinatorTests: XCTestCase {
         XCTAssertNotNil(rotated["access_token"] as? String)
     }
 
+    func testMultipleConfidentialCredentialsAppearAsSeparateConnectedClients() throws {
+        let claude = OAuthConfidentialClientCredentials(
+            clientID: "macremote-oauth-claude",
+            clientSecret: "claude-secret"
+        )
+        let raycast = OAuthConfidentialClientCredentials(
+            clientID: "macremote-oauth-raycast",
+            clientSecret: "raycast-secret"
+        )
+        let coordinator = OAuthCoordinator(
+            clientAuthentication: .confidentialClientsRequired([claude, raycast])
+        )
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp"
+
+        let claudeToken = try issueApprovedConfidentialToken(
+            coordinator: coordinator,
+            credentials: claude,
+            redirectURI: "https://claude.ai/api/mcp/auth_callback",
+            issuer: issuer,
+            resource: resource
+        )
+        let raycastToken = try issueApprovedConfidentialToken(
+            coordinator: coordinator,
+            credentials: raycast,
+            redirectURI: "raycast://oauth",
+            issuer: issuer,
+            resource: resource
+        )
+
+        XCTAssertTrue(coordinator.validateAccessToken(claudeToken.accessToken, issuer: issuer, resource: resource))
+        XCTAssertTrue(coordinator.validateAccessToken(raycastToken.accessToken, issuer: issuer, resource: resource))
+
+        let clients = coordinator.connectedClientSnapshot()
+        XCTAssertEqual(Set(clients.map(\.id)), [claude.clientID, raycast.clientID])
+        XCTAssertEqual(Set(clients.map(\.name)), ["Claude", "Raycast"])
+        XCTAssertEqual(clients.first { $0.id == claude.clientID }?.redirectURIs, ["https://claude.ai/api/mcp/auth_callback"])
+        XCTAssertEqual(clients.first { $0.id == raycast.clientID }?.redirectURIs, ["raycast://oauth"])
+    }
+
     func testPublicClientRejectsUnexpectedClientSecret() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "public-secret-verifier"
@@ -1204,6 +1244,45 @@ private func issueApprovedTokens(
     ], issuer: issuer, resource: resource)
     return (
         clientID,
+        try XCTUnwrap(token["access_token"] as? String),
+        try XCTUnwrap(token["refresh_token"] as? String)
+    )
+}
+
+private func issueApprovedConfidentialToken(
+    coordinator: OAuthCoordinator,
+    credentials: OAuthConfidentialClientCredentials,
+    redirectURI: String,
+    issuer: String,
+    resource: String
+) throws -> (accessToken: String, refreshToken: String) {
+    let verifier = "confidential-verifier-\(UUID().uuidString)"
+    let requestID = try coordinator.beginAuthorization(
+        queryItems: [
+            "response_type": "code",
+            "client_id": credentials.clientID,
+            "redirect_uri": redirectURI,
+            "scope": "mcp:tools",
+            "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+            "code_challenge_method": "S256",
+            "resource": resource
+        ],
+        issuer: issuer,
+        resource: resource
+    )
+    XCTAssertTrue(coordinator.approve(requestID: requestID))
+    let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+    let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+    let token = try coordinator.exchangeToken(form: [
+        "grant_type": "authorization_code",
+        "client_id": credentials.clientID,
+        "client_secret": credentials.clientSecret,
+        "redirect_uri": redirectURI,
+        "code": code,
+        "code_verifier": verifier,
+        "resource": resource
+    ], issuer: issuer, resource: resource)
+    return (
         try XCTUnwrap(token["access_token"] as? String),
         try XCTUnwrap(token["refresh_token"] as? String)
     )

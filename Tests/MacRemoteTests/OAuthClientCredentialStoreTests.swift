@@ -22,12 +22,17 @@ final class OAuthClientCredentialStoreTests: XCTestCase {
         XCTAssertNil(store.load())
 
         let generated: OAuthClientCredentials
+        let second: OAuthClientCredentials
         do {
-            generated = try store.generate()
+            generated = try store.generate(label: "Claude")
+            second = try store.generate(label: "Raycast")
         } catch OAuthClientCredentialStoreError.keychain(errSecInteractionNotAllowed) {
             throw XCTSkip("Keychain writes are not available to this test runner.")
         }
         XCTAssertTrue(generated.clientID.hasPrefix("macremote-oauth-"))
+        XCTAssertEqual(generated.label, "Claude")
+        XCTAssertEqual(second.label, "Raycast")
+        XCTAssertNotEqual(generated.clientID, second.clientID)
         XCTAssertGreaterThanOrEqual(generated.clientSecret.count, 40)
         XCTAssertFalse(
             defaults.dictionaryRepresentation().values.contains {
@@ -41,6 +46,15 @@ final class OAuthClientCredentialStoreTests: XCTestCase {
             account: account
         )
         XCTAssertEqual(reloadedStore.load(), generated)
+        XCTAssertEqual(reloadedStore.loadAll(), [generated, second])
+
+        let rotated = try XCTUnwrap(try reloadedStore.rotate(clientID: second.clientID))
+        XCTAssertEqual(rotated.label, "Raycast")
+        XCTAssertNotEqual(rotated.clientID, second.clientID)
+        XCTAssertEqual(reloadedStore.loadAll(), [generated, rotated])
+
+        try reloadedStore.delete(clientID: generated.clientID)
+        XCTAssertEqual(reloadedStore.loadAll(), [rotated])
 
         reloadedStore.clear()
         XCTAssertNil(reloadedStore.load())

@@ -29,7 +29,7 @@ final class AppModel {
     var cloudflareDraft: CloudflareCustomDomainDraft
     var cloudflareCustomDomainState: CloudflareCustomDomainState = .idle
     var lastCloudflareDeployment: CloudflareCustomDomainDeployment?
-    var oauthClientCredentials: OAuthClientCredentials?
+    var oauthClientCredentials: [OAuthClientCredentials]
     var connectorProvider: ConnectorProviderProfile = .raycast {
         didSet {
             persistConnectorSettings()
@@ -104,7 +104,7 @@ final class AppModel {
         self.localMCPScanner = localMCPScanner
         self.pushoverSettings = Self.loadPushoverSettings(from: userDefaults)
         self.brrrSettings = Self.loadBrrrSettings(from: userDefaults)
-        self.oauthClientCredentials = self.oauthClientCredentialStore.load()
+        self.oauthClientCredentials = self.oauthClientCredentialStore.loadAll()
         let loadedConnectorProvider = Self.loadConnectorProvider(from: userDefaults)
         self.connectorProvider = loadedConnectorProvider
         self.cloudflareDraft = CloudflareCustomDomainDraft(
@@ -186,10 +186,10 @@ final class AppModel {
             break
         }
 
-        if cloudflareDraft.accessMode.requiresOAuthClientSecret, oauthClientCredentials == nil {
+        if cloudflareDraft.accessMode.requiresOAuthClientSecret, oauthClientCredentials.isEmpty {
             generateOAuthClientCredentials()
         }
-        guard !cloudflareDraft.accessMode.requiresOAuthClientSecret || oauthClientCredentials != nil else {
+        guard !cloudflareDraft.accessMode.requiresOAuthClientSecret || !oauthClientCredentials.isEmpty else {
             serverStatus = .failed("Generate OAuth client credentials before starting the local MCP server.")
             return nil
         }
@@ -294,31 +294,61 @@ final class AppModel {
         )
     }
 
-    func generateOAuthClientCredentials() {
-        replaceOAuthClientCredentials(reason: "Generated OAuth client credentials.")
-    }
-
-    func rotateOAuthClientCredentials() {
-        replaceOAuthClientCredentials(reason: "Rotated OAuth client credentials.")
-    }
-
-    private func replaceOAuthClientCredentials(reason: String) {
+    func generateOAuthClientCredentials(label: String? = nil) {
         do {
-            let credentials = try oauthClientCredentialStore.generate()
-            oauthClientCredentials = credentials
-            let summary = authCoordinator.revokeAllGrants()
-            approvals = []
-            notifiedAuthorizationRequestIDs.removeAll()
-            setConnectedClients([])
-            clientToolPermissionSnapshot = clientToolPermissionStore.clear()
-            authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
-            appendLog(
-                level: .warning,
-                "\(reason) Revoked existing OAuth state: \(summary.clients) clients, \(summary.accessTokens) access tokens, \(summary.refreshTokens) refresh tokens."
+            let credential = try oauthClientCredentialStore.generate(
+                label: label ?? defaultOAuthClientCredentialLabel
             )
+            oauthClientCredentials = oauthClientCredentialStore.loadAll()
+            authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
+            appendLog(level: .info, "Generated OAuth client credentials for \(credential.label).")
         } catch {
             appendLog(level: .error, "Could not generate OAuth client credentials: \(error.localizedDescription)")
         }
+    }
+
+    func rotateOAuthClientCredentials(clientID: String) {
+        do {
+            guard let replacement = try oauthClientCredentialStore.rotate(clientID: clientID) else {
+                appendLog(level: .warning, "OAuth client credentials not found.")
+                return
+            }
+            revokeOAuthStateForCredential(clientID: clientID, action: "Rotated OAuth client credentials for \(replacement.label).")
+            oauthClientCredentials = oauthClientCredentialStore.loadAll()
+            authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
+        } catch {
+            appendLog(level: .error, "Could not rotate OAuth client credentials: \(error.localizedDescription)")
+        }
+    }
+
+    func deleteOAuthClientCredentials(clientID: String) {
+        do {
+            let label = oauthClientCredentials.first { $0.clientID == clientID }?.label ?? "OAuth Client"
+            try oauthClientCredentialStore.delete(clientID: clientID)
+            revokeOAuthStateForCredential(clientID: clientID, action: "Deleted OAuth client credentials for \(label).")
+            oauthClientCredentials = oauthClientCredentialStore.loadAll()
+            authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
+        } catch {
+            appendLog(level: .error, "Could not delete OAuth client credentials: \(error.localizedDescription)")
+        }
+    }
+
+    private func revokeOAuthStateForCredential(clientID: String, action: String) {
+        let connectedClient = connectedClients.first { $0.id == clientID }
+        let summary = authCoordinator.revokeClient(id: clientID)
+        approvals = authCoordinator.approvalSnapshot()
+        notifiedAuthorizationRequestIDs.formIntersection(Set(approvals.map(\.id)))
+        setConnectedClients(authCoordinator.connectedClientSnapshot())
+        if let connectedClient {
+            clientToolPermissionSnapshot = clientToolPermissionStore.removeClient(
+                clientID,
+                clientTrustID: connectedClient.trustID
+            )
+        }
+        appendLog(
+            level: .warning,
+            "\(action) Revoked \(summary?.accessTokens ?? 0) access tokens and \(summary?.refreshTokens ?? 0) refresh tokens."
+        )
     }
 
     func deleteOAuthClient(id clientID: String) -> String? {
@@ -350,7 +380,7 @@ final class AppModel {
     }
 
     func setCloudflareAccessMode(_ mode: CloudflareAccessMode) {
-        if mode.requiresOAuthClientSecret, oauthClientCredentials == nil {
+        if mode.requiresOAuthClientSecret, oauthClientCredentials.isEmpty {
             generateOAuthClientCredentials()
         }
         guard cloudflareDraft.accessMode != mode else {
@@ -1173,8 +1203,7 @@ final class AppModel {
         lastCloudflareDeployment?.accessMode.copyButtonTitle ?? "Copy Access"
     }
 
-    var oauthClientCredentialsJSON: String? {
-        guard let credentials = oauthClientCredentials else { return nil }
+    func oauthClientCredentialsJSON(for credentials: OAuthClientCredentials) -> String? {
         let payload = [
             "OAuth Client ID": credentials.clientID,
             "OAuth Client Secret": credentials.clientSecret
@@ -1185,18 +1214,21 @@ final class AppModel {
         return String(data: data, encoding: .utf8)
     }
 
+    private var defaultOAuthClientCredentialLabel: String {
+        "\(connectorProvider.title) OAuth Client"
+    }
+
     private var currentOAuthClientAuthenticationPolicy: OAuthClientAuthenticationPolicy {
         guard cloudflareDraft.accessMode.requiresOAuthClientSecret else {
             return .dynamicPublicClients
         }
-        guard let oauthClientCredentials else {
-            return .confidentialClientRequired(nil)
-        }
-        return .confidentialClientRequired(
-            OAuthConfidentialClientCredentials(
-                clientID: oauthClientCredentials.clientID,
-                clientSecret: oauthClientCredentials.clientSecret
-            )
+        return .confidentialClientsRequired(
+            oauthClientCredentials.map {
+                OAuthConfidentialClientCredentials(
+                    clientID: $0.clientID,
+                    clientSecret: $0.clientSecret
+                )
+            }
         )
     }
 

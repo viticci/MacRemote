@@ -6,6 +6,9 @@ struct SettingsView: View {
     @State private var isShowingRotateInstanceConfirmation = false
     @State private var isShowingRevokeOAuthConfirmation = false
     @State private var isShowingRotateOAuthCredentialsConfirmation = false
+    @State private var isShowingDeleteOAuthCredentialsConfirmation = false
+    @State private var pendingOAuthCredentialRotationID: String?
+    @State private var pendingOAuthCredentialDeletionID: String?
 
     var body: some View {
         @Bindable var appModel = appModel
@@ -72,63 +75,27 @@ struct SettingsView: View {
                 .buttonStyle(.bordered)
             }
 
-            Section("OAuth Client Credentials") {
-                Text("Use these with clients that support OAuth Client ID and Client Secret. The secret is stored in Keychain; rotating it revokes existing OAuth clients and tokens.")
-                    .foregroundStyle(.secondary)
-
-                if let credentials = appModel.oauthClientCredentials {
-                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
-                        GridRow {
-                            Text("Client ID")
-                                .foregroundStyle(.secondary)
-                            Text(credentials.clientID)
-                                .font(.system(.body, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                        }
-
-                        GridRow {
-                            Text("Client Secret")
-                                .foregroundStyle(.secondary)
-                            Text(String(repeating: "*", count: 28))
-                                .font(.system(.body, design: .monospaced))
-                                .privacySensitive()
-                        }
-
-                        GridRow {
-                            Text("Created")
-                                .foregroundStyle(.secondary)
-                            Text(credentials.createdAt.formatted(date: .abbreviated, time: .shortened))
-                        }
-                    }
-
-                    HStack {
-                        Button("Copy ID", systemImage: "doc.on.doc") {
-                            copyOAuthValue(credentials.clientID, label: "OAuth client ID")
-                        }
-
-                        Button("Copy Secret", systemImage: "key.fill") {
-                            copyOAuthValue(credentials.clientSecret, label: "OAuth client secret")
-                        }
-
-                        if let json = appModel.oauthClientCredentialsJSON {
-                            Button("Copy JSON", systemImage: "curlybraces") {
-                                copyOAuthValue(json, label: "OAuth client credentials JSON")
-                            }
-                        }
-
-                        Button("Rotate Credentials", systemImage: "arrow.triangle.2.circlepath", role: .destructive) {
-                            isShowingRotateOAuthCredentialsConfirmation = true
-                        }
-                    }
-                } else {
-                    Button("Generate Credentials", systemImage: "key.badge.plus") {
-                        appModel.generateOAuthClientCredentials()
-                    }
-                    .buttonStyle(.borderedProminent)
+            OAuthClientCredentialsSection(
+                credentials: appModel.oauthClientCredentials,
+                connectorTitle: appModel.connectorProvider.title,
+                credentialsJSON: { credentials in
+                    appModel.oauthClientCredentialsJSON(for: credentials)
+                },
+                copyAction: { value, label in
+                    copyOAuthValue(value, label: label)
+                },
+                generateAction: {
+                    appModel.generateOAuthClientCredentials()
+                },
+                rotateAction: { clientID in
+                    pendingOAuthCredentialRotationID = clientID
+                    isShowingRotateOAuthCredentialsConfirmation = true
+                },
+                deleteAction: { clientID in
+                    pendingOAuthCredentialDeletionID = clientID
+                    isShowingDeleteOAuthCredentialsConfirmation = true
                 }
-            }
+            )
 
             Section("Pushover") {
                 Toggle("Send Pushover alerts", isOn: $appModel.pushoverSettings.isEnabled)
@@ -390,11 +357,33 @@ struct SettingsView: View {
             titleVisibility: .visible
         ) {
             Button("Rotate Credentials", role: .destructive) {
-                appModel.rotateOAuthClientCredentials()
+                if let clientID = pendingOAuthCredentialRotationID {
+                    appModel.rotateOAuthClientCredentials(clientID: clientID)
+                }
+                pendingOAuthCredentialRotationID = nil
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                pendingOAuthCredentialRotationID = nil
+            }
         } message: {
-            Text("MacRemote will generate a new client ID and secret, invalidate OAuth clients and tokens, and clear always-allow tool settings.")
+            Text("MacRemote will generate a new client ID and secret for this entry, invalidate that OAuth client, and clear its always-allow tool settings.")
+        }
+        .confirmationDialog(
+            "Delete OAuth Credentials?",
+            isPresented: $isShowingDeleteOAuthCredentialsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Credentials", role: .destructive) {
+                if let clientID = pendingOAuthCredentialDeletionID {
+                    appModel.deleteOAuthClientCredentials(clientID: clientID)
+                }
+                pendingOAuthCredentialDeletionID = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingOAuthCredentialDeletionID = nil
+            }
+        } message: {
+            Text("MacRemote will remove this client ID and secret, invalidate that OAuth client, and clear its always-allow tool settings.")
         }
     }
 
@@ -538,5 +527,123 @@ private struct ConnectorProfileSummary: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 2)
+    }
+}
+
+private struct OAuthClientCredentialsSection: View {
+    let credentials: [OAuthClientCredentials]
+    let connectorTitle: String
+    let credentialsJSON: (OAuthClientCredentials) -> String?
+    let copyAction: (String, String) -> Void
+    let generateAction: () -> Void
+    let rotateAction: (String) -> Void
+    let deleteAction: (String) -> Void
+
+    private var generateButtonTitle: String {
+        "Generate \(connectorTitle) Credentials"
+    }
+
+    var body: some View {
+        Section("OAuth Client Credentials") {
+            Text("Use these with clients that support OAuth Client ID and Client Secret. The secret is stored in Keychain; rotating or deleting one entry only revokes that OAuth client.")
+                .foregroundStyle(.secondary)
+
+            if !credentials.isEmpty {
+                ForEach(credentials, id: \.clientID) { credential in
+                    OAuthClientCredentialPanel(
+                        credentials: credential,
+                        credentialsJSON: credentialsJSON(credential),
+                        copyAction: copyAction,
+                        rotateAction: {
+                            rotateAction(credential.clientID)
+                        },
+                        deleteAction: {
+                            deleteAction(credential.clientID)
+                        }
+                    )
+
+                    if credential.clientID != credentials.last?.clientID {
+                        Divider()
+                    }
+                }
+            }
+
+            if credentials.isEmpty {
+                Button(generateButtonTitle, systemImage: "key.badge.plus") {
+                    generateAction()
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Button(generateButtonTitle, systemImage: "key.badge.plus") {
+                    generateAction()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+}
+
+private struct OAuthClientCredentialPanel: View {
+    let credentials: OAuthClientCredentials
+    let credentialsJSON: String?
+    let copyAction: (String, String) -> Void
+    let rotateAction: () -> Void
+    let deleteAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(credentials.label)
+                .font(.subheadline.weight(.semibold))
+
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                GridRow {
+                    Text("Client ID")
+                        .foregroundStyle(.secondary)
+                    Text(credentials.clientID)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+
+                GridRow {
+                    Text("Client Secret")
+                        .foregroundStyle(.secondary)
+                    Text(String(repeating: "*", count: 28))
+                        .font(.system(.body, design: .monospaced))
+                        .privacySensitive()
+                }
+
+                GridRow {
+                    Text("Created")
+                        .foregroundStyle(.secondary)
+                    Text(credentials.createdAt.formatted(date: .abbreviated, time: .shortened))
+                }
+            }
+
+            HStack {
+                Button("Copy ID", systemImage: "doc.on.doc") {
+                    copyAction(credentials.clientID, "OAuth client ID")
+                }
+
+                Button("Copy Secret", systemImage: "key.fill") {
+                    copyAction(credentials.clientSecret, "OAuth client secret")
+                }
+
+                if let credentialsJSON {
+                    Button("Copy JSON", systemImage: "curlybraces") {
+                        copyAction(credentialsJSON, "OAuth client credentials JSON")
+                    }
+                }
+
+                Button("Rotate", systemImage: "arrow.triangle.2.circlepath", role: .destructive) {
+                    rotateAction()
+                }
+
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    deleteAction()
+                }
+            }
+        }
     }
 }

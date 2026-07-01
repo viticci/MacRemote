@@ -240,6 +240,10 @@ For Claude, Notion, or another client with OAuth client ID and secret fields,
 copy the credentials from **Settings -> OAuth Client Credentials**. MacRemote
 stores the secret in Keychain, disables dynamic registration for that mode, and
 requires `client_secret_basic` or `client_secret_post` at the token endpoint.
+Generate one credential entry per remote app. Static OAuth credentials are the
+client identity; if Claude and Raycast reuse the same client ID and secret,
+MacRemote correctly treats them as one client and only one entry appears under
+**Clients**.
 
 If Raycast reports that it cannot fetch MCP OAuth metadata, check the Cloudflare
 Access application domain. It must be scoped to:
@@ -352,6 +356,10 @@ domain, hidden URL, or robots rule is a replacement for those controls.
 - **Raycast gets blocked by Cloudflare Access**: paste both
   `CF-Access-Client-Id` and `CF-Access-Client-Secret` as static headers in the
   Raycast MCP server config.
+- **Raycast connected but does not appear as a separate client**: generate a
+  separate OAuth credential entry for Raycast in **Settings -> OAuth Client
+  Credentials**, then reconnect Raycast with that client ID and secret. Reusing
+  Claude's static OAuth credentials makes both apps the same OAuth client.
 
 ## Tool Model
 

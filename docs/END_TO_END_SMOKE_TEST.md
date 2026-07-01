@@ -46,9 +46,10 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
    https://<subdomain.example.com>/mcp
    ```
 
-   If OAuth Client Secret mode is enabled, copy the generated client ID and
-   secret from **Settings**. If Cloudflare Access is enabled, copy the generated
-   Access headers from **Tunnel**.
+   If OAuth Client Secret mode is enabled, copy a generated client ID and secret
+   from **Settings**. Use a separate credential entry for each remote app you
+   want MacRemote to show and revoke independently. If Cloudflare Access is
+   enabled, copy the generated Access headers from **Tunnel**.
 
 7. In **Tunnel**, run **Check Readiness**. Remote proof requires:
 

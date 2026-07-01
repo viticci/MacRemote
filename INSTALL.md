@@ -111,8 +111,9 @@ Paste the Cloudflare API token into **Custom Domain** before deploying. If you
 enable Cloudflare Access, copy the generated headers into clients that support
 static request headers, such as Raycast. For Claude, Notion, and clients that
 support OAuth client ID and secret fields, generate credentials in **Settings**
-and paste those into the client. Cloudflare Access is an outer gate and does not
-replace MacRemote OAuth.
+and paste those into the client. Generate a separate OAuth credential entry for
+each remote app that should appear separately in **Clients**. Cloudflare Access
+is an outer gate and does not replace MacRemote OAuth.
 
 Revoke the client, revoke OAuth grants, rotate OAuth client credentials, or stop
 the tunnel when access should be invalidated.

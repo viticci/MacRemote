@@ -20,17 +20,21 @@ struct OAuthConfidentialClientCredentials: Equatable, Sendable {
 
 struct OAuthClientAuthenticationPolicy: Equatable, Sendable {
     let requiresConfidentialClient: Bool
-    let confidentialClient: OAuthConfidentialClientCredentials?
+    let confidentialClients: [OAuthConfidentialClientCredentials]
 
     static let dynamicPublicClients = OAuthClientAuthenticationPolicy(
         requiresConfidentialClient: false,
-        confidentialClient: nil
+        confidentialClients: []
     )
 
     static func confidentialClientRequired(_ credentials: OAuthConfidentialClientCredentials?) -> OAuthClientAuthenticationPolicy {
+        confidentialClientsRequired(credentials.map { [$0] } ?? [])
+    }
+
+    static func confidentialClientsRequired(_ credentials: [OAuthConfidentialClientCredentials]) -> OAuthClientAuthenticationPolicy {
         OAuthClientAuthenticationPolicy(
             requiresConfidentialClient: true,
-            confidentialClient: credentials
+            confidentialClients: credentials
         )
     }
 
@@ -288,11 +292,16 @@ final class OAuthCoordinator: @unchecked Sendable {
     func updateClientAuthentication(_ policy: OAuthClientAuthenticationPolicy) {
         try? lock.withLock {
             clientAuthentication = policy
-            if let credentials = policy.confidentialClient,
-               var client = clients[credentials.clientID],
-               client.authenticationMethod == .clientSecret {
-                client = client.updating(secretHash: Self.sha256Hex(credentials.clientSecret))
-                clients[credentials.clientID] = client
+            var changed = false
+            for credentials in policy.confidentialClients {
+                if var client = clients[credentials.clientID],
+                   client.authenticationMethod == .clientSecret {
+                    client = client.updating(secretHash: Self.sha256Hex(credentials.clientSecret))
+                    clients[credentials.clientID] = client
+                    changed = true
+                }
+            }
+            if changed {
                 try persistGrantSnapshotLocked()
             }
         }
@@ -1019,11 +1028,7 @@ final class OAuthCoordinator: @unchecked Sendable {
     }
 
     private func configuredConfidentialCredentialsLocked(clientID: String) -> OAuthConfidentialClientCredentials? {
-        guard let credentials = clientAuthentication.confidentialClient,
-              credentials.clientID == clientID else {
-            return nil
-        }
-        return credentials
+        clientAuthentication.confidentialClients.first { $0.clientID == clientID }
     }
 
     private func recoverDynamicClient(
@@ -1090,14 +1095,16 @@ final class OAuthCoordinator: @unchecked Sendable {
             return name
         }
 
-        let host = URLComponents(string: redirectURI)?.host?.lowercased()
+        let components = URLComponents(string: redirectURI)
+        let host = components?.host?.lowercased()
+        let scheme = components?.scheme?.lowercased()
         if host?.contains("notion") == true || queryItems["notion_user_id"] != nil {
             return "Notion"
         }
         if host?.contains("claude") == true {
             return "Claude"
         }
-        if host?.contains("raycast") == true {
+        if host?.contains("raycast") == true || scheme?.contains("raycast") == true {
             return "Raycast"
         }
         return host ?? "Remote MCP Client"

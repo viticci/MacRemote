@@ -293,9 +293,10 @@ Security requirements:
   profile.
 - Dynamic OAuth client registration is capped in memory; it is disabled when
   OAuth client-secret mode is selected.
-- Generated OAuth client secrets are stored in Keychain and rotation revokes
-  registered clients, authorizations, access tokens, refresh tokens, and
-  persistent tool policies.
+- Generated OAuth client secrets are stored in Keychain. Static OAuth
+  credentials are per-client identities, and rotating or deleting one credential
+  revokes that registered client, its authorizations, tokens, and persistent
+  tool policies without invalidating unrelated clients.
 - Pending host authorization requests are capped, and resolved authorization
   history is pruned, so a leaked URL cannot create unbounded approval spam or
   memory growth.
