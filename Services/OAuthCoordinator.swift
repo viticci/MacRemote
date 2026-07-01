@@ -473,22 +473,16 @@ final class OAuthCoordinator: @unchecked Sendable {
         return summary
     }
 
-    private func exchangeAuthorizationCode(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {
+    private func exchangeAuthorizationCode(form: [String: String], issuer: String, resource _: String) throws -> [String: Any] {
         guard let code = form["code"], !code.isEmpty else {
             throw OAuthError.invalidRequest("Missing code.")
-        }
-        guard let clientID = form["client_id"], !clientID.isEmpty else {
-            throw OAuthError.invalidRequest("Missing client_id.")
-        }
-        guard let redirectURI = form["redirect_uri"], !redirectURI.isEmpty else {
-            throw OAuthError.invalidRequest("Missing redirect_uri.")
         }
         guard let codeVerifier = form["code_verifier"], !codeVerifier.isEmpty else {
             throw OAuthError.invalidRequest("Missing code_verifier.")
         }
 
         let now = Date()
-        let authorizationID: UUID = try lock.withLock {
+        let tokenSubject: (clientID: String, resource: String, scopes: Set<String>) = try lock.withLock {
             expirePendingAuthorizations(now: now)
             let codeHash = Self.sha256Hex(code)
             guard let match = authorizations.first(where: { _, value in
@@ -504,13 +498,19 @@ final class OAuthCoordinator: @unchecked Sendable {
             guard authorization.codeUsedAt == nil else {
                 throw OAuthError.invalidGrant("Authorization code was already used.")
             }
-            guard authorization.clientID == clientID, authorization.redirectURI == redirectURI else {
+
+            if let clientID = Self.nonEmptyFormValue(form["client_id"]),
+               authorization.clientID != clientID {
+                throw OAuthError.invalidGrant("Client or redirect URI mismatch.")
+            }
+            if let redirectURI = Self.nonEmptyFormValue(form["redirect_uri"]),
+               authorization.redirectURI != redirectURI {
                 throw OAuthError.invalidGrant("Client or redirect URI mismatch.")
             }
             guard authorization.issuer == issuer else {
                 throw OAuthError.invalidGrant(Self.issuerMismatchDescription(expected: authorization.issuer, actual: issuer))
             }
-            let requestedResource = try resolveRequestedResource(form["resource"], expectedResource: resource)
+            let requestedResource = try requestedResource(form["resource"], defaultResource: authorization.resource)
             guard authorization.resource == requestedResource else {
                 throw OAuthError.invalidGrant("Resource mismatch.")
             }
@@ -524,16 +524,19 @@ final class OAuthCoordinator: @unchecked Sendable {
             authorization.codeUsedAt = now
             authorization.issuedCode = nil
             authorizations[match.key] = authorization
-            return match.key
+            return (authorization.clientID, authorization.resource, authorization.scopes)
         }
 
-        let scopes = lock.withLock {
-            authorizations[authorizationID]?.scopes ?? ["mcp:tools"]
-        }
-        return try issueTokenResponse(clientID: clientID, issuer: issuer, resource: resource, scopes: scopes, now: now)
+        return try issueTokenResponse(
+            clientID: tokenSubject.clientID,
+            issuer: issuer,
+            resource: tokenSubject.resource,
+            scopes: tokenSubject.scopes,
+            now: now
+        )
     }
 
-    private func exchangeRefreshToken(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {
+    private func exchangeRefreshToken(form: [String: String], issuer: String, resource _: String) throws -> [String: Any] {
         guard let refreshToken = form["refresh_token"], !refreshToken.isEmpty else {
             throw OAuthError.invalidRequest("Missing refresh_token.")
         }
@@ -551,7 +554,7 @@ final class OAuthCoordinator: @unchecked Sendable {
             guard record.issuer == issuer else {
                 throw OAuthError.invalidGrant(Self.issuerMismatchDescription(expected: record.issuer, actual: issuer))
             }
-            let requestedResource = try resolveRequestedResource(form["resource"], expectedResource: resource)
+            let requestedResource = try requestedResource(form["resource"], defaultResource: record.resource)
             guard record.resource == requestedResource else {
                 throw OAuthError.invalidGrant("Resource mismatch.")
             }
@@ -559,7 +562,13 @@ final class OAuthCoordinator: @unchecked Sendable {
             return record
         }
 
-        return try issueTokenResponse(clientID: record.clientID, issuer: issuer, resource: resource, scopes: record.scopes, now: now)
+        return try issueTokenResponse(
+            clientID: record.clientID,
+            issuer: issuer,
+            resource: record.resource,
+            scopes: record.scopes,
+            now: now
+        )
     }
 
     private func issueTokenResponse(clientID: String, issuer: String, resource: String, scopes: Set<String>, now: Date) throws -> [String: Any] {
@@ -603,15 +612,20 @@ final class OAuthCoordinator: @unchecked Sendable {
 
     private func resolveRequestedResource(_ rawResource: String?, expectedResource: String) throws -> String {
         let expected = try Self.canonicalResourceURI(expectedResource)
-        guard let rawResource, !rawResource.isEmpty else {
-            return expected
-        }
-
-        let requested = try Self.canonicalResourceURI(rawResource)
+        let requested = try requestedResource(rawResource, defaultResource: expected)
         guard requested == expected else {
             throw OAuthError.invalidRequest("Unsupported resource.")
         }
         return requested
+    }
+
+    private func requestedResource(_ rawResource: String?, defaultResource: String) throws -> String {
+        let fallback = try Self.canonicalResourceURI(defaultResource)
+        guard let rawResource = Self.nonEmptyFormValue(rawResource) else {
+            return fallback
+        }
+
+        return try Self.canonicalResourceURI(rawResource)
     }
 
     private static func canonicalResourceURI(_ rawValue: String) throws -> String {
@@ -635,11 +649,28 @@ final class OAuthCoordinator: @unchecked Sendable {
         canonical.scheme = scheme
         canonical.host = rawHost.lowercased()
         canonical.port = components.port
-        canonical.path = components.path
+        canonical.path = Self.normalizedResourcePath(components.path)
         guard let string = canonical.string else {
             throw OAuthError.invalidRequest("Invalid resource.")
         }
         return string
+    }
+
+    private static func normalizedResourcePath(_ rawPath: String) -> String {
+        guard rawPath.count > 1 else { return rawPath }
+        var path = rawPath
+        while path.count > 1, path.last == "/" {
+            path.removeLast()
+        }
+        return path
+    }
+
+    private static func nonEmptyFormValue(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func clientTrustID(name: String, redirectURIs: [String], scopes: Set<String>) -> String {

@@ -506,6 +506,13 @@ def command_cloudflare_deploy(args: argparse.Namespace) -> int:
         die(f"Cloudflare zone not found: {args.zone}")
     hostname = cloudflare_hostname(args.subdomain, zone["name"])
     tunnel_name = cloudflare_tunnel_name(hostname)
+    access_app = cloudflare_existing_access_app(zone["id"], hostname)
+    if access_app and not str(access_app.get("name") or "").startswith("MacRemote "):
+        die(f"A non-MacRemote Cloudflare Access application already exists for {hostname}.")
+    if access_app and not args.protect_access:
+        cloudflare_delete_access_app(zone["id"], access_app["id"])
+        access_app = None
+
     tunnel = cloudflare_existing_tunnel(zone["account_id"], tunnel_name)
     if not tunnel:
         tunnel = cloudflare_create_tunnel(zone["account_id"], tunnel_name)
@@ -513,12 +520,8 @@ def command_cloudflare_deploy(args: argparse.Namespace) -> int:
     cloudflare_ensure_dns_record(zone["id"], hostname, tunnel["id"])
 
     access_headers = None
-    access_app = None
     if args.protect_access:
-        access_app = cloudflare_existing_access_app(zone["id"], hostname)
         if access_app:
-            if not str(access_app.get("name") or "").startswith("MacRemote "):
-                die(f"A non-MacRemote Cloudflare Access application already exists for {hostname}.")
             if access_app.get("domain") != cloudflare_access_application_domain(hostname):
                 access_app = cloudflare_update_access_app(zone["id"], access_app["id"], hostname)
         else:
@@ -2152,6 +2155,13 @@ def cloudflare_update_access_app(zone_id: str, app_id: str, hostname: str) -> di
         "PUT",
         f"/zones/{zone_id}/access/apps/{app_id}",
         body=cloudflare_access_application_body(hostname),
+    )
+
+
+def cloudflare_delete_access_app(zone_id: str, app_id: str) -> dict[str, Any] | None:
+    return cloudflare_request(
+        "DELETE",
+        f"/zones/{zone_id}/access/apps/{app_id}",
     )
 
 

@@ -189,6 +189,18 @@ struct CloudflareService: Sendable {
         )
 
         let tunnelName = Self.tunnelName(hostname: hostname)
+        let existingAccessApp = try await existingAccessApplication(hostname: hostname, zoneID: zone.id, apiToken: apiToken)
+        if !accessMode.requiresCloudflareAccess, let existingAccessApp {
+            guard Self.isMacRemoteAccessApplication(existingAccessApp) else {
+                throw CloudflareServiceError.existingAccessApplication(hostname)
+            }
+            try await deleteAccessApplication(
+                appID: existingAccessApp.id,
+                zoneID: zone.id,
+                apiToken: apiToken
+            )
+        }
+
         let tunnel: CloudflareTunnelDTO
         if let existing = try await existingTunnel(named: tunnelName, accountID: zone.accountID, apiToken: apiToken) {
             tunnel = existing
@@ -208,8 +220,8 @@ struct CloudflareService: Sendable {
         let accessCredentials: CloudflareAccessCredentials?
         if accessMode.requiresCloudflareAccess {
             let app: CloudflareAccessApplicationDTO
-            if let existing = try await existingAccessApplication(hostname: hostname, zoneID: zone.id, apiToken: apiToken) {
-                guard existing.name?.hasPrefix("MacRemote ") == true else {
+            if let existing = existingAccessApp {
+                guard Self.isMacRemoteAccessApplication(existing) else {
                     throw CloudflareServiceError.existingAccessApplication(hostname)
                 }
                 app = try await updateAccessApplication(
@@ -343,7 +355,6 @@ struct CloudflareService: Sendable {
                 URLQueryItem(name: "name", value: hostname)
             ]
         )
-        guard accessMode.requiresCloudflareAccess else { return }
         let _: CloudflareAPIResponse<[CloudflareAccessApplicationDTO]> = try await request(
             method: "GET",
             path: "/zones/\(zone.id)/access/apps",
@@ -353,6 +364,7 @@ struct CloudflareService: Sendable {
                 URLQueryItem(name: "per_page", value: "1")
             ]
         )
+        guard accessMode.requiresCloudflareAccess else { return }
         let _: CloudflareAPIResponse<[CloudflareServiceTokenListDTO]> = try await request(
             method: "GET",
             path: "/zones/\(zone.id)/access/service_tokens",
@@ -496,6 +508,10 @@ struct CloudflareService: Sendable {
             apps.first { $0.domain == Self.accessApplicationDomain(hostname: hostname) }
     }
 
+    private static func isMacRemoteAccessApplication(_ app: CloudflareAccessApplicationDTO) -> Bool {
+        app.name?.hasPrefix("MacRemote ") == true
+    }
+
     private func createAccessApplication(
         hostname: String,
         accessMode: CloudflareAccessMode,
@@ -527,6 +543,19 @@ struct CloudflareService: Sendable {
             body: accessApplicationBody(hostname: hostname, accessMode: accessMode)
         )
         return try response.requiredResult()
+    }
+
+    private func deleteAccessApplication(
+        appID: String,
+        zoneID: String,
+        apiToken: String?
+    ) async throws {
+        let _: CloudflareAPIResponse<EmptyResult> = try await request(
+            method: "DELETE",
+            path: "/zones/\(zoneID)/access/apps/\(appID)",
+            apiToken: apiToken,
+            operation: "delete Cloudflare Access application"
+        )
     }
 
     private func accessApplicationBody(hostname: String, accessMode: CloudflareAccessMode) -> [String: Any] {

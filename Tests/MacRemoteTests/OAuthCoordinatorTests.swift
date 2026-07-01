@@ -543,6 +543,102 @@ final class OAuthCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: otherResource))
     }
 
+    func testAuthorizationCodeExchangeAcceptsPublicClientOmittingRepeatedFields() throws {
+        let coordinator = OAuthCoordinator()
+        let verifier = "public-client-verifier"
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp/test-instance"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Public PKCE Client",
+            "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "resource": "\(resource)/"
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+
+        let pendingApproval = try XCTUnwrap(coordinator.approvalSnapshot().first)
+        XCTAssertEqual(pendingApproval.resource, resource)
+        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "code": code,
+            "code_verifier": verifier,
+            "resource": "\(resource)/"
+        ], issuer: issuer, resource: resource)
+
+        let accessToken = try XCTUnwrap(token["access_token"] as? String)
+        XCTAssertEqual(token["resource"] as? String, resource)
+        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: "\(resource)/"))
+    }
+
+    func testAuthorizationCodeExchangeRejectsMismatchedRepeatedClientMetadata() throws {
+        let coordinator = OAuthCoordinator()
+        let verifier = "metadata-mismatch-verifier"
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp/test-instance"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Mismatch Test",
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": "http://127.0.0.1/callback",
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+
+        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+        XCTAssertThrowsError(
+            try coordinator.exchangeToken(form: [
+                "grant_type": "authorization_code",
+                "client_id": "macremote-client-wrong",
+                "redirect_uri": "http://127.0.0.1/callback",
+                "code": code,
+                "code_verifier": verifier,
+                "resource": resource
+            ], issuer: issuer, resource: resource)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidGrant("Client or redirect URI mismatch."))
+        }
+
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "code": code,
+            "code_verifier": verifier,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        XCTAssertNotNil(token["access_token"] as? String)
+    }
+
     func testAccessTokenCanValidateAgainstExplicitEquivalentResourceSet() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "https://macremote.example"
@@ -639,9 +735,10 @@ final class OAuthCoordinatorTests: XCTestCase {
         let rotated = try coordinator.exchangeToken(form: [
             "grant_type": "refresh_token",
             "refresh_token": refreshToken,
-            "resource": resource
+            "resource": "\(resource)/"
         ], issuer: issuer, resource: resource)
         XCTAssertNotNil(rotated["access_token"] as? String)
+        XCTAssertEqual(rotated["resource"] as? String, resource)
         XCTAssertThrowsError(
             try coordinator.exchangeToken(form: [
                 "grant_type": "refresh_token",

@@ -417,6 +417,94 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(legacyMCPPath.statusCode, 200)
     }
 
+    func testTokenEndpointAcceptsPublicClientCodeExchangeWithoutRepeatedRedirectURI() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let resource = "\(base.absoluteString)/mcp/test-instance"
+        let verifier = "server-public-client-verifier"
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let registered = try await postJSON(
+            url: base.appendingPathComponent("register"),
+            body: [
+                "client_name": "Public HTTP Test",
+                "redirect_uris": ["http://127.0.0.1/callback"],
+                "scope": "mcp:tools"
+            ]
+        )
+        XCTAssertEqual(registered.statusCode, 201)
+        let clientID = try XCTUnwrap(registered.json["client_id"] as? String)
+
+        var authorize = URLComponents(url: base.appendingPathComponent("authorize"), resolvingAgainstBaseURL: false)!
+        authorize.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "redirect_uri", value: "http://127.0.0.1/callback"),
+            URLQueryItem(name: "scope", value: "mcp:tools"),
+            URLQueryItem(name: "code_challenge", value: OAuthCoordinator.pkceChallenge(for: verifier)),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "resource", value: "\(resource)/")
+        ]
+        let authorizationPage = try await get(url: try XCTUnwrap(authorize.url))
+        XCTAssertEqual(authorizationPage.statusCode, 200)
+
+        let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
+        XCTAssertTrue(server.approveAuthorizationRequest(id: requestID))
+
+        var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
+        statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
+        let status = try await getJSON(url: try XCTUnwrap(statusURL.url))
+        let redirectURI = try XCTUnwrap(status.json["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+        let token = try await postForm(
+            url: base.appendingPathComponent("token"),
+            headers: ["Authorization": basicAuthorizationHeader(username: clientID)],
+            form: [
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": verifier,
+                "resource": "\(resource)/"
+            ]
+        )
+        XCTAssertEqual(token.statusCode, 200)
+        XCTAssertEqual(token.json["resource"] as? String, resource)
+
+        let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
+        let toolsList = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "tools",
+                "method": "tools/list"
+            ]
+        )
+        XCTAssertEqual(toolsList.statusCode, 200)
+    }
+
     func testDottedToolNamesRemainCallableForExistingClients() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
@@ -1587,6 +1675,11 @@ private func decodeJSON(_ data: Data) throws -> [String: Any] {
 
 private func percentEncode(_ value: String) -> String {
     value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+}
+
+private func basicAuthorizationHeader(username: String, password: String = "") -> String {
+    let credentials = "\(username):\(password)"
+    return "Basic \(Data(credentials.utf8).base64EncodedString())"
 }
 
 private func headerValue(_ headers: [AnyHashable: Any], named name: String) -> String? {

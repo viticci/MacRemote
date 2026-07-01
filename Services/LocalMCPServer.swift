@@ -516,7 +516,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private func token(_ request: HTTPRequest, issuer: String, resource: String) -> Data {
         do {
             let response = try authCoordinator.exchangeToken(
-                form: request.formURLEncodedBody(),
+                form: request.tokenFormURLEncodedBody(),
                 issuer: issuer,
                 resource: resource
             )
@@ -1347,6 +1347,36 @@ private struct HTTPRequest {
         return token.isEmpty ? nil : token
     }
 
+    var basicAuthorizationClientID: String? {
+        guard let authorization = headers["authorization"] else { return nil }
+        let trimmed = authorization.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separatorIndex = trimmed.firstIndex(where: { $0.isWhitespace }) else {
+            return nil
+        }
+
+        let scheme = String(trimmed[..<separatorIndex])
+        guard scheme.caseInsensitiveCompare("Basic") == .orderedSame else {
+            return nil
+        }
+
+        let credentialsStart = trimmed.index(after: separatorIndex)
+        let encodedCredentials = trimmed[credentialsStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64Encoded: encodedCredentials),
+              let credentials = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        let username: String
+        if let separator = credentials.firstIndex(of: ":") {
+            username = String(credentials[..<separator])
+        } else {
+            username = credentials
+        }
+
+        let clientID = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        return clientID.isEmpty ? nil : clientID
+    }
+
     var originHeader: String? {
         guard let origin = headers["origin"]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !origin.isEmpty else {
@@ -1401,6 +1431,21 @@ private struct HTTPRequest {
     func formURLEncodedBody() -> [String: String] {
         let text = String(decoding: body, as: UTF8.self)
         return Self.parseQueryItems(text)
+    }
+
+    func tokenFormURLEncodedBody() throws -> [String: String] {
+        var form = formURLEncodedBody()
+        guard let basicClientID = basicAuthorizationClientID else {
+            return form
+        }
+
+        let formClientID = form["client_id"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let formClientID, !formClientID.isEmpty, formClientID != basicClientID {
+            throw OAuthError.invalidRequest("Conflicting client_id credentials.")
+        }
+
+        form["client_id"] = basicClientID
+        return form
     }
 
     private static func parsePath(_ rawPath: String) -> (path: String, queryItems: [String: String]) {
