@@ -78,19 +78,17 @@ Required endpoints:
 
 - `GET /health`
 - `GET /.well-known/oauth-protected-resource`
-- `GET /.well-known/oauth-protected-resource/mcp/<instance-id>`
+- `GET /.well-known/oauth-protected-resource/mcp`
 - `GET /.well-known/oauth-authorization-server`
 - `POST /register`
 - `GET /authorize`
-- `POST /authorize/decision`
+- `GET /authorize/status`
 - `POST /token`
-- `POST /mcp/<instance-id>`
+- `POST /mcp`
 
-Authenticated `POST /mcp` requests may be accepted as a compatibility alias for
-clients that normalize an already-authorized MCP endpoint back to the
-conventional MCP path. Public unauthenticated `/mcp` requests must not disclose
-the instance path; initial discovery and the advertised public URL remain
-`/mcp/<instance-id>`.
+Legacy local `POST /mcp/<instance-id>` requests may be accepted as a loopback
+compatibility path. Public forwarded requests advertise and use `/mcp`; the
+private instance id is not a public URL secret.
 
 `/health` is diagnostic, not discovery. Loopback health may include instance and
 tool-surface details for local verification, but public forwarded health must
@@ -251,16 +249,15 @@ The app starts the local server first, verifies `/health`, then starts or
 configures Cloudflare Tunnel to forward a single public hostname to the local
 server port.
 
-The public URL should include an instance-specific high-entropy component:
+The public URL should be stable and conventional:
 
-- current quick-tunnel shape: `https://<trycloudflare-host>/mcp/<instance-id>`;
-- future named-domain shape: `https://<random-instance>.<configured-domain>/mcp`.
+- quick-tunnel shape: `https://<trycloudflare-host>/mcp`;
+- named-domain shape: `https://<subdomain.example.com>/mcp`.
 
-The random instance id must be generated with at least 128 bits of entropy.
-Public forwarded requests must use `/mcp/<instance-id>`; the legacy `/mcp`
-compatibility route is accepted only on loopback. The URL is not a secret by
-itself; it is a routing hardening layer. OAuth and host-side approval remain
-mandatory.
+The private instance id remains a high-entropy local identifier for rotation
+and legacy loopback paths, but public forwarded requests must use `/mcp`. The
+URL is not a secret by itself. OAuth, client authentication where configured,
+and host-side approval remain mandatory.
 
 ## Authorization Design
 
@@ -268,19 +265,22 @@ MacRemote acts as both MCP resource server and OAuth authorization server.
 
 Flow:
 
-1. Remote client calls `/mcp/<instance-id>` without a token.
+1. Remote client calls `/mcp` without a token.
 2. Server returns `401` with `WWW-Authenticate` pointing to protected resource
    metadata.
 3. Client discovers authorization metadata.
-4. Client uses dynamic client registration or an allowed redirect URI.
+4. Client either uses dynamic client registration or a configured confidential
+   OAuth client ID and secret.
 5. Client opens `/authorize` with PKCE and the MCP `resource` parameter.
 6. MacRemote creates a pending authorization request and shows it in the Mac app.
 7. The browser page waits. It cannot approve itself.
 8. User approves or denies on the host Mac.
 9. On approval, the server issues a short-lived authorization code.
 10. Client exchanges code plus PKCE verifier plus the MCP `resource` parameter
-    for access and refresh tokens.
-11. Tool calls require a valid bearer token scoped to the instance and tool set.
+    for access and refresh tokens. In confidential-client mode, the token
+    endpoint also requires `client_secret_basic` or `client_secret_post`.
+11. Tool calls require a valid bearer token scoped to the approved resource and
+    tool set.
 
 Security requirements:
 
@@ -289,10 +289,13 @@ Security requirements:
 - Access tokens expire quickly, target 15 minutes.
 - Refresh tokens rotate on every use.
 - Stored tokens are hashed or encrypted.
-- Tokens are bound to client id, redirect URI, resource URI, instance id, and
-  approved tool profile.
-- Dynamic OAuth client registration is capped in memory; the host can revoke
-  grants when the cap is reached.
+- Tokens are bound to client id, redirect URI, resource URI, and approved tool
+  profile.
+- Dynamic OAuth client registration is capped in memory; it is disabled when
+  OAuth client-secret mode is selected.
+- Generated OAuth client secrets are stored in Keychain and rotation revokes
+  registered clients, authorizations, access tokens, refresh tokens, and
+  persistent tool policies.
 - Pending host authorization requests are capped, and resolved authorization
   history is pruned, so a leaked URL cannot create unbounded approval spam or
   memory growth.
@@ -328,6 +331,7 @@ The app provides:
 - disable tunnel;
 - stop server;
 - revoke clients and OAuth grants;
+- rotate OAuth client credentials;
 - rotate instance id;
 
 Future controls should add:

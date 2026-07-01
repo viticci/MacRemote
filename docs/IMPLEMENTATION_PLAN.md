@@ -15,7 +15,7 @@ security docs.
 - OAuth + PKCE with host approval before token issuance.
 - Per-call approval for write/destructive tools.
 - Persistent per-client tool policies for approved clients.
-- Cloudflare Tunnel public MCP URL with instance-specific path.
+- Cloudflare Tunnel public MCP URL with a stable `/mcp` path.
 - Full Disk Access and macOS privacy readiness checks driven by per-tool
   `permissionRequirements`.
 - Remote MCP smoke test script.

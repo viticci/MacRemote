@@ -55,6 +55,21 @@ def main() -> int:
         help="Existing MacRemote OAuth access token. If omitted, the script performs the host-approved OAuth flow.",
     )
     parser.add_argument(
+        "--oauth-client-id",
+        default=os.environ.get("MACREMOTE_OAUTH_CLIENT_ID"),
+        help="MacRemote OAuth client ID for confidential-client mode.",
+    )
+    parser.add_argument(
+        "--oauth-client-secret",
+        default=os.environ.get("MACREMOTE_OAUTH_CLIENT_SECRET"),
+        help="MacRemote OAuth client secret for confidential-client mode.",
+    )
+    parser.add_argument(
+        "--access-headers-json",
+        default=os.environ.get("MACREMOTE_ACCESS_HEADERS_JSON"),
+        help="Optional JSON object of static Cloudflare Access headers for direct MCP preflight.",
+    )
+    parser.add_argument(
         "--anthropic-api-key",
         default=os.environ.get("ANTHROPIC_API_KEY"),
         help="Anthropic API key. Can also be provided via ANTHROPIC_API_KEY.",
@@ -91,10 +106,22 @@ def main() -> int:
         fail("Missing --anthropic-api-key or ANTHROPIC_API_KEY.")
     if not args.mcp_url.startswith("https://"):
         fail("MacRemote smoke tests require an HTTPS MCP URL.")
+    if bool(args.oauth_client_id) != bool(args.oauth_client_secret):
+        fail("Provide both OAuth client ID and OAuth client secret, or neither.")
+
+    access_headers = parse_static_headers_json(args.access_headers_json)
+    if access_headers and not args.mcp_preflight_only:
+        fail("Anthropic Messages API smoke cannot forward Cloudflare Access headers. Use --mcp-preflight-only for Access-protected URLs.")
 
     access_token = args.access_token
     if not access_token:
-        access_token = obtain_macremote_access_token(args.mcp_url, timeout_seconds=args.oauth_timeout)
+        access_token = obtain_macremote_access_token(
+            args.mcp_url,
+            timeout_seconds=args.oauth_timeout,
+            oauth_client_id=args.oauth_client_id,
+            oauth_client_secret=args.oauth_client_secret,
+            access_headers=access_headers,
+        )
 
     if not args.skip_mcp_preflight:
         preflight_macremote_mcp(
@@ -102,6 +129,7 @@ def main() -> int:
             access_token=access_token,
             expected_tool=args.tool,
             protocol_version=args.protocol_version,
+            access_headers=access_headers,
         )
 
     if args.mcp_preflight_only:
@@ -164,7 +192,13 @@ def main() -> int:
     return 0
 
 
-def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
+def obtain_macremote_access_token(
+    mcp_url: str,
+    timeout_seconds: int,
+    oauth_client_id: str | None,
+    oauth_client_secret: str | None,
+    access_headers: dict[str, str],
+) -> str:
     base_url = macremote_base_url(mcp_url)
     resource = canonical_mcp_resource_url(mcp_url)
     verifier = secrets.token_urlsafe(48)
@@ -172,18 +206,32 @@ def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
     redirect_uri = "http://127.0.0.1/callback"
     state = secrets.token_urlsafe(24)
 
-    register_response = http_json(
-        "POST",
-        f"{base_url}/register",
-        {
-            "client_name": "MacRemote Anthropic Smoke Test",
-            "redirect_uris": [redirect_uri],
-            "scope": "mcp:tools",
-        },
+    authorization_server_metadata = http_json(
+        "GET",
+        f"{base_url}/.well-known/oauth-authorization-server",
+        headers=access_headers,
     )
-    client_id = register_response.get("client_id")
-    if not isinstance(client_id, str) or not client_id:
-        fail("MacRemote did not return a client_id during OAuth registration.")
+
+    if oauth_client_id:
+        client_id = oauth_client_id
+        print("oauth_client_auth=client_secret_post")
+    else:
+        if not authorization_server_metadata.get("registration_endpoint"):
+            fail("MacRemote requires OAuth client credentials. Set MACREMOTE_OAUTH_CLIENT_ID and MACREMOTE_OAUTH_CLIENT_SECRET.")
+        register_response = http_json(
+            "POST",
+            f"{base_url}/register",
+            {
+                "client_name": "MacRemote Anthropic Smoke Test",
+                "redirect_uris": [redirect_uri],
+                "scope": "mcp:tools",
+            },
+            headers=access_headers,
+        )
+        client_id = register_response.get("client_id")
+        if not isinstance(client_id, str) or not client_id:
+            fail("MacRemote did not return a client_id during OAuth registration.")
+        print("oauth_client_auth=dynamic_public")
 
     authorize_query = urllib.parse.urlencode(
         {
@@ -197,7 +245,7 @@ def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
             "resource": resource,
         }
     )
-    authorize_result = http_request("GET", f"{base_url}/authorize?{authorize_query}")
+    authorize_result = http_request("GET", f"{base_url}/authorize?{authorize_query}", headers=access_headers)
     request_id = extract_request_id(authorize_result.text())
     if not request_id:
         fail("Could not find MacRemote OAuth request id in authorization page.")
@@ -207,7 +255,11 @@ def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
     deadline = time.monotonic() + timeout_seconds
     code = None
     while time.monotonic() < deadline:
-        status = http_json("GET", f"{base_url}/authorize/status?request_id={urllib.parse.quote(request_id)}")
+        status = http_json(
+            "GET",
+            f"{base_url}/authorize/status?request_id={urllib.parse.quote(request_id)}",
+            headers=access_headers,
+        )
         status_value = status.get("status")
         if status_value == "approved":
             redirect = status.get("redirect_uri")
@@ -222,18 +274,18 @@ def obtain_macremote_access_token(mcp_url: str, timeout_seconds: int) -> str:
     if not code:
         fail("Timed out waiting for MacRemote OAuth host approval.")
 
-    token = http_form(
-        "POST",
-        f"{base_url}/token",
-        {
-            "grant_type": "authorization_code",
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "code": code,
-            "code_verifier": verifier,
-            "resource": resource,
-        },
-    )
+    token_body = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "code": code,
+        "code_verifier": verifier,
+        "resource": resource,
+    }
+    if oauth_client_secret:
+        token_body["client_secret"] = oauth_client_secret
+
+    token = http_form("POST", f"{base_url}/token", token_body, headers=access_headers)
     access_token = token.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         fail("MacRemote token endpoint did not return an access_token.")
@@ -248,14 +300,15 @@ def preflight_macremote_mcp(
     access_token: str,
     expected_tool: str,
     protocol_version: str,
+    access_headers: dict[str, str],
 ) -> None:
     base_url = macremote_base_url(mcp_url)
     resource = canonical_mcp_resource_url(mcp_url)
     metadata_path = path_protected_resource_metadata_url(mcp_url)
 
-    root_resource_metadata = http_json("GET", f"{base_url}/.well-known/oauth-protected-resource")
-    path_resource_metadata = http_json("GET", metadata_path)
-    authorization_server_metadata = http_json("GET", f"{base_url}/.well-known/oauth-authorization-server")
+    root_resource_metadata = http_json("GET", f"{base_url}/.well-known/oauth-protected-resource", headers=access_headers)
+    path_resource_metadata = http_json("GET", metadata_path, headers=access_headers)
+    authorization_server_metadata = http_json("GET", f"{base_url}/.well-known/oauth-authorization-server", headers=access_headers)
 
     assert_equal(root_resource_metadata.get("resource"), resource, "root protected-resource metadata resource")
     assert_equal(path_resource_metadata.get("resource"), resource, "path protected-resource metadata resource")
@@ -283,6 +336,7 @@ def preflight_macremote_mcp(
                 },
             },
         },
+        access_headers=access_headers,
     )
     initialize_result = json_rpc_result(initialize, "initialize")
     negotiated = initialize_result.get("protocolVersion")
@@ -298,7 +352,7 @@ def preflight_macremote_mcp(
                 "method": "notifications/initialized",
             }
         ).encode("utf-8"),
-        headers=mcp_headers(access_token, negotiated),
+        headers=mcp_headers(access_token, negotiated, access_headers),
     )
     if initialized.status not in {200, 202}:
         fail(f"MacRemote initialized notification returned HTTP {initialized.status}.")
@@ -312,6 +366,7 @@ def preflight_macremote_mcp(
             "id": "tools/list",
             "method": "tools/list",
         },
+        access_headers=access_headers,
     )
     tools_result = json_rpc_result(tools_list, "tools/list")
     tools = tools_result.get("tools")
@@ -423,21 +478,24 @@ def mcp_json_rpc(
     access_token: str,
     protocol_version: str,
     body: dict[str, Any],
+    access_headers: dict[str, str],
 ) -> dict[str, Any]:
     return http_json(
         "POST",
         mcp_url,
         body,
-        headers=mcp_headers(access_token, protocol_version),
+        headers=mcp_headers(access_token, protocol_version, access_headers),
     )
 
 
-def mcp_headers(access_token: str, protocol_version: str) -> dict[str, str]:
-    return {
+def mcp_headers(access_token: str, protocol_version: str, access_headers: dict[str, str]) -> dict[str, str]:
+    if has_header(access_headers, "authorization"):
+        fail("Cloudflare Access single-header mode cannot use Authorization because MCP bearer tokens also use Authorization.")
+    return merged_headers(access_headers, {
         "authorization": f"Bearer {access_token}",
         "accept": "application/json, text/event-stream",
         "mcp-protocol-version": protocol_version,
-    }
+    })
 
 
 def json_rpc_result(response: dict[str, Any], label: str) -> dict[str, Any]:
@@ -494,9 +552,7 @@ def first(query: dict[str, list[str]], key: str) -> str | None:
 
 
 def http_json(method: str, url: str, body: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
-    request_headers = {"content-type": "application/json"}
-    if headers:
-        request_headers.update(headers)
+    request_headers = merged_headers(headers or {}, {"content-type": "application/json"})
     data = None if body is None else json.dumps(body).encode("utf-8")
     result = http_request(method, url, data=data, headers=request_headers)
     try:
@@ -505,13 +561,13 @@ def http_json(method: str, url: str, body: dict[str, Any] | None = None, headers
         fail(f"Expected JSON from {url}, got invalid response: {error}")
 
 
-def http_form(method: str, url: str, body: dict[str, str]) -> dict[str, Any]:
+def http_form(method: str, url: str, body: dict[str, str], headers: dict[str, str] | None = None) -> dict[str, Any]:
     data = urllib.parse.urlencode(body).encode("utf-8")
     result = http_request(
         method,
         url,
         data=data,
-        headers={"content-type": "application/x-www-form-urlencoded"},
+        headers=merged_headers(headers or {}, {"content-type": "application/x-www-form-urlencoded"}),
     )
     try:
         return result.json()
@@ -533,6 +589,37 @@ def http_request(method: str, url: str, data: bytes | None = None, headers: dict
         fail(f"HTTP {error.code} from {url}: {body.decode('utf-8', errors='replace')}")
     except urllib.error.URLError as error:
         fail(f"Could not reach {url}: {error.reason}")
+
+
+def parse_static_headers_json(raw: str | None) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as error:
+        fail(f"Invalid access headers JSON: {error}")
+    if not isinstance(decoded, dict):
+        fail("Access headers JSON must be an object.")
+    headers: dict[str, str] = {}
+    for name, value in decoded.items():
+        if not isinstance(name, str) or not name.strip():
+            fail("Access header names must be non-empty strings.")
+        if not isinstance(value, str):
+            fail(f"Access header {name!r} must have a string value.")
+        headers[name] = value
+    return headers
+
+
+def merged_headers(*header_maps: dict[str, str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for header_map in header_maps:
+        result.update(header_map)
+    return result
+
+
+def has_header(headers: dict[str, str], name: str) -> bool:
+    normalized = name.lower()
+    return any(key.lower() == normalized for key in headers)
 
 
 def redacted_url(url: str) -> str:

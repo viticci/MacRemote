@@ -639,6 +639,173 @@ final class OAuthCoordinatorTests: XCTestCase {
         XCTAssertNotNil(token["access_token"] as? String)
     }
 
+    func testConfidentialClientModeDisablesDynamicRegistration() throws {
+        let credentials = OAuthConfidentialClientCredentials(
+            clientID: "macremote-oauth-confidential",
+            clientSecret: "client-secret"
+        )
+        let coordinator = OAuthCoordinator(
+            clientAuthentication: .confidentialClientRequired(credentials)
+        )
+
+        XCTAssertFalse(coordinator.supportsDynamicClientRegistration())
+        XCTAssertEqual(
+            coordinator.tokenEndpointAuthMethodsSupported(),
+            ["client_secret_basic", "client_secret_post"]
+        )
+        XCTAssertThrowsError(
+            try coordinator.registerClient(from: [
+                "client_name": "Dynamic Client",
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "scope": "mcp:tools"
+            ])
+        ) { error in
+            XCTAssertEqual(
+                error as? OAuthError,
+                .invalidRequest("Dynamic client registration is disabled while OAuth client credentials are required.")
+            )
+        }
+    }
+
+    func testConfidentialAuthorizationCodeAndRefreshRequireClientSecretPost() throws {
+        let credentials = OAuthConfidentialClientCredentials(
+            clientID: "macremote-oauth-confidential",
+            clientSecret: "correct-secret"
+        )
+        let coordinator = OAuthCoordinator(
+            clientAuthentication: .confidentialClientRequired(credentials)
+        )
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp"
+        let redirectURI = "https://claude.ai/api/mcp/auth_callback"
+        let verifier = "confidential-verifier"
+
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": credentials.clientID,
+                "redirect_uri": redirectURI,
+                "scope": "mcp:tools",
+                "state": "state",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+        let pending = try XCTUnwrap(coordinator.approvalSnapshot().first { $0.id == requestID })
+        XCTAssertEqual(pending.clientID, credentials.clientID)
+        XCTAssertTrue(pending.clientTrustID.hasPrefix("macremote-confidential-"))
+        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+        XCTAssertThrowsError(
+            try coordinator.exchangeToken(form: [
+                "grant_type": "authorization_code",
+                "client_id": credentials.clientID,
+                "redirect_uri": redirectURI,
+                "code": code,
+                "code_verifier": verifier,
+                "resource": resource
+            ], issuer: issuer, resource: resource)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidClient("Client authentication required."))
+        }
+
+        XCTAssertThrowsError(
+            try coordinator.exchangeToken(form: [
+                "grant_type": "authorization_code",
+                "client_id": credentials.clientID,
+                "client_secret": "wrong-secret",
+                "redirect_uri": redirectURI,
+                "code": code,
+                "code_verifier": verifier,
+                "resource": resource
+            ], issuer: issuer, resource: resource)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidClient("Client authentication failed."))
+        }
+
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": credentials.clientID,
+            "client_secret": credentials.clientSecret,
+            "redirect_uri": redirectURI,
+            "code": code,
+            "code_verifier": verifier,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        let accessToken = try XCTUnwrap(token["access_token"] as? String)
+        let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
+        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        XCTAssertEqual(coordinator.connectedClientSnapshot().first?.redirectURIs, [redirectURI])
+
+        XCTAssertThrowsError(
+            try coordinator.exchangeToken(form: [
+                "grant_type": "refresh_token",
+                "refresh_token": refreshToken,
+                "resource": resource
+            ], issuer: issuer, resource: resource)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidClient("Client authentication failed."))
+        }
+
+        let rotated = try coordinator.exchangeToken(form: [
+            "grant_type": "refresh_token",
+            "client_id": credentials.clientID,
+            "client_secret": credentials.clientSecret,
+            "refresh_token": refreshToken,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        XCTAssertNotNil(rotated["access_token"] as? String)
+    }
+
+    func testPublicClientRejectsUnexpectedClientSecret() throws {
+        let coordinator = OAuthCoordinator()
+        let verifier = "public-secret-verifier"
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp"
+        let redirectURI = "https://claude.ai/api/mcp/auth_callback"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Public Client",
+            "redirect_uris": [redirectURI],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": redirectURI,
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+        XCTAssertThrowsError(
+            try coordinator.exchangeToken(form: [
+                "grant_type": "authorization_code",
+                "client_id": clientID,
+                "client_secret": "unexpected",
+                "redirect_uri": redirectURI,
+                "code": code,
+                "code_verifier": verifier,
+                "resource": resource
+            ], issuer: issuer, resource: resource)
+        ) { error in
+            XCTAssertEqual(error as? OAuthError, .invalidRequest("Public clients must not send client_secret."))
+        }
+    }
+
     func testAccessTokenCanValidateAgainstExplicitEquivalentResourceSet() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "https://macremote.example"

@@ -98,21 +98,24 @@ In the app:
 The URL shape is:
 
 ```text
-https://<trycloudflare-host>/mcp/<instance-id>
+https://<trycloudflare-host>/mcp
 ```
 
 Custom domains use the same path:
 
 ```text
-https://<subdomain.example.com>/mcp/<instance-id>
+https://<subdomain.example.com>/mcp
 ```
 
 Paste the Cloudflare API token into **Custom Domain** before deploying. If you
 enable Cloudflare Access, copy the generated headers into clients that support
-static request headers, such as Raycast. Keep OAuth Type set to Dynamic;
-Cloudflare Access is an outer gate and does not replace MacRemote OAuth.
+static request headers, such as Raycast. For Claude, Notion, and clients that
+support OAuth client ID and secret fields, generate credentials in **Settings**
+and paste those into the client. Cloudflare Access is an outer gate and does not
+replace MacRemote OAuth.
 
-Rotate the instance ID from **Settings** when the URL should be invalidated.
+Revoke the client, revoke OAuth grants, rotate OAuth client credentials, or stop
+the tunnel when access should be invalidated.
 
 ## 7. Verify
 
@@ -125,7 +128,7 @@ script/build_and_run.sh --verify
 Run the remote MCP preflight after a tunnel exists:
 
 ```bash
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py --mcp-preflight-only
 ```
 

@@ -2122,14 +2122,23 @@ def cloudflare_existing_access_app(zone_id: str, hostname: str) -> dict[str, Any
         f"/zones/{zone_id}/access/apps",
         query={"per_page": "100"},
     )
-    return next((app for app in apps if app.get("domain") == hostname), None) or next(
-        (app for app in apps if app.get("domain") == cloudflare_access_application_domain(hostname)),
-        None,
-    )
+    for domain in cloudflare_access_application_domains(hostname):
+        app = next((app for app in apps if app.get("domain") == domain), None)
+        if app:
+            return app
+    return None
 
 
 def cloudflare_access_application_domain(hostname: str) -> str:
-    return f"{hostname}/mcp/*"
+    return f"{hostname}/mcp*"
+
+
+def cloudflare_access_application_domains(hostname: str) -> list[str]:
+    return [
+        cloudflare_access_application_domain(hostname),
+        hostname,
+        f"{hostname}/mcp/*",
+    ]
 
 
 def cloudflare_access_application_body(hostname: str) -> dict[str, Any]:

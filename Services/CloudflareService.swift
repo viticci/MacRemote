@@ -10,6 +10,7 @@ struct CloudflareZone: Identifiable, Hashable, Sendable {
 struct CloudflareAccessCredentials: Equatable, Sendable {
     let clientID: String
     let clientSecret: String
+    static let singleHeaderName = "CF-Access-Service-Token"
 
     var standardHeadersJSON: String {
         let payload = [
@@ -19,7 +20,7 @@ struct CloudflareAccessCredentials: Equatable, Sendable {
         return Self.prettyJSONString(payload)
     }
 
-    var authorizationHeaderValue: String {
+    var singleHeaderValue: String {
         let payload = [
             "cf-access-client-id": clientID,
             "cf-access-client-secret": clientSecret
@@ -31,18 +32,18 @@ struct CloudflareAccessCredentials: Equatable, Sendable {
         return text
     }
 
-    var authorizationHeaderJSON: String {
-        Self.prettyJSONString(["Authorization": authorizationHeaderValue])
+    var singleHeaderJSON: String {
+        Self.prettyJSONString([Self.singleHeaderName: singleHeaderValue])
     }
 
     func headersJSON(for mode: CloudflareAccessMode) -> String? {
         switch mode {
-        case .macRemoteOAuthOnly:
+        case .oauthClientSecret, .macRemoteOAuthOnly:
             nil
         case .serviceTokenHeaders:
             standardHeadersJSON
         case .serviceTokenAuthorizationHeader:
-            authorizationHeaderJSON
+            singleHeaderJSON
         }
     }
 
@@ -304,7 +305,14 @@ struct CloudflareService: Sendable {
     }
 
     static func accessApplicationDomain(hostname: String) -> String {
-        "\(hostname)/mcp/*"
+        "\(hostname)/mcp*"
+    }
+
+    private static func legacyAccessApplicationDomains(hostname: String) -> [String] {
+        [
+            hostname,
+            "\(hostname)/mcp/*"
+        ]
     }
 
     private static func hasToken(_ value: String?) -> Bool {
@@ -504,8 +512,13 @@ struct CloudflareService: Sendable {
             ]
         )
         let apps = try response.requiredResult()
-        return apps.first { $0.domain == hostname } ??
-            apps.first { $0.domain == Self.accessApplicationDomain(hostname: hostname) }
+        let currentDomain = Self.accessApplicationDomain(hostname: hostname)
+        let legacyDomains = Self.legacyAccessApplicationDomains(hostname: hostname)
+        return apps.first { $0.domain == currentDomain } ??
+            apps.first { app in
+                guard let domain = app.domain else { return false }
+                return legacyDomains.contains(domain)
+            }
     }
 
     private static func isMacRemoteAccessApplication(_ app: CloudflareAccessApplicationDTO) -> Bool {

@@ -36,19 +36,19 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
    quick tunnel it should look like:
 
    ```text
-   https://<host>.trycloudflare.com/mcp/<instance-id>
+   https://<host>.trycloudflare.com/mcp
    ```
 
    For a custom Cloudflare domain deployed from the same view, it should look
    like:
 
    ```text
-   https://<subdomain.example.com>/mcp/<instance-id>
+   https://<subdomain.example.com>/mcp
    ```
 
-   If Cloudflare Access was enabled, configure the generated
-   `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers in the remote
-   client before running the smoke test.
+   If OAuth Client Secret mode is enabled, copy the generated client ID and
+   secret from **Settings**. If Cloudflare Access is enabled, copy the generated
+   Access headers from **Tunnel**.
 
 7. In **Tunnel**, run **Check Readiness**. Remote proof requires:
 
@@ -64,9 +64,30 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
 Run the script from the repository root:
 
 ```bash
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py --mcp-preflight-only
 ```
+
+For OAuth Client Secret mode:
+
+```bash
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
+MACREMOTE_OAUTH_CLIENT_ID="<client-id>" \
+MACREMOTE_OAUTH_CLIENT_SECRET="<client-secret>" \
+./script/anthropic_mcp_smoke.py --mcp-preflight-only
+```
+
+For Cloudflare Access-protected MCP requests, pass the copied header JSON:
+
+```bash
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
+MACREMOTE_ACCESS_HEADERS_JSON='{"CF-Access-Client-Id":"<id>","CF-Access-Client-Secret":"<secret>"}' \
+./script/anthropic_mcp_smoke.py --mcp-preflight-only
+```
+
+Single Header mode uses a custom `CF-Access-Service-Token` header so the MCP
+`Authorization: Bearer ...` header remains available for MacRemote OAuth. Paste
+the exact JSON copied by MacRemote into `MACREMOTE_ACCESS_HEADERS_JSON`.
 
 Expected successful output includes:
 
@@ -90,9 +111,12 @@ The preflight checks:
 
 ```bash
 ANTHROPIC_API_KEY="<key>" \
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py
 ```
+
+The full Anthropic API smoke cannot forward Cloudflare Access headers; use the
+direct preflight for Access-protected URLs.
 
 The script selects the first exposed read-only tool by default. Override it with
 `--tool` when you want a specific tool.
@@ -118,7 +142,7 @@ tool call in **Approvals**, or pre-approve that tool for the client in
 
 ```bash
 ANTHROPIC_API_KEY="<key>" \
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py \
   --tool custom.tool-id \
   --prompt 'Use the selected MacRemote MCP tool exactly once with harmless read-only arguments. Summarize only whether the call succeeded.'

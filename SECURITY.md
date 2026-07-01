@@ -12,8 +12,10 @@ public issues with secrets, tunnel URLs, OAuth tokens, or local command output.
 ## Security Model
 
 - The local MCP server binds to `127.0.0.1`.
-- Public access goes through a Cloudflare Tunnel URL containing an instance path;
-  the hostname can be temporary or a user-owned Cloudflare custom domain.
+- Public access goes through a Cloudflare Tunnel URL ending in `/mcp`; the
+  hostname can be temporary or a user-owned Cloudflare custom domain.
+- OAuth client-secret mode disables dynamic client registration and requires
+  `client_secret_basic` or `client_secret_post` before token issuance.
 - Cloudflare Access service-token headers can be added as an outer transport
   gate for clients that support static headers.
 - A leaked URL alone must not authorize tool calls.

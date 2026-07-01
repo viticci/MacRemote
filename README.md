@@ -84,8 +84,10 @@ https://<subdomain.example.com>/mcp
 ```
 
 Share that URL only with the remote MCP client you are testing. If Cloudflare
-Access protection is enabled, copy the generated Raycast headers into the
-client as static request headers. MacRemote OAuth still remains required.
+Access protection is enabled, copy the generated headers into clients that can
+send static request headers. For clients that support OAuth client ID and secret
+fields, use MacRemote's generated OAuth credentials instead. MacRemote OAuth
+still remains required in every mode.
 
 For persistent custom domains, follow the full setup below.
 
@@ -170,13 +172,15 @@ When you deploy a custom domain, MacRemote:
 5. Creates or updates a proxied DNS CNAME for the hostname, pointing to
    `<tunnel-id>.cfargotunnel.com`.
 6. If Cloudflare Access protection is enabled, creates or reuses a self-hosted
-   Access application scoped to `hostname/mcp/*`.
+   Access application scoped to `hostname/mcp*`.
 7. If Access is enabled, creates a Cloudflare Access service token and creates
    or updates the MacRemote Service Auth policy for that token.
 8. Fetches the tunnel run token and starts the named tunnel locally.
 
-Access is deliberately scoped to `/mcp/*`, not the entire hostname or exact
-`/mcp` endpoint. Dynamic MCP clients need to fetch `/.well-known/oauth-protected-resource`,
+Access is deliberately scoped to `/mcp*`, not the entire hostname. This covers
+the exact `/mcp` endpoint and legacy `/mcp/...` paths while leaving OAuth
+bootstrap routes outside the Access gate. Dynamic MCP clients need to fetch
+`/.well-known/oauth-protected-resource`,
 `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and
 `/token` before they have a MacRemote bearer token. Some clients do not attach
 custom static headers to those OAuth bootstrap requests. If Cloudflare Access
@@ -195,8 +199,14 @@ resources manually if you want MacRemote to take over that hostname.
 4. Select the Cloudflare domain.
 5. Enter a subdomain, for example `macremote` or `macremote-home`.
 6. Paste the Cloudflare API token.
-7. Leave **Protect with Cloudflare Access service-token headers** enabled unless
-   every client that will use this URL cannot set request headers.
+7. Choose the privacy mode:
+   - **OAuth Client Secret** for Claude, Notion, and clients with OAuth client
+     ID/secret fields.
+   - **Access Headers** for clients that can send both Cloudflare Access service
+     token headers, such as Raycast.
+   - **Single Header** only when a client can send one custom static header in
+     addition to the OAuth bearer token.
+   - **Dynamic OAuth** only as a compatibility fallback.
 8. Click **Deploy Custom Domain**.
 9. Copy the public MCP URL from **Tunnel**. It has this shape:
 
@@ -214,20 +224,33 @@ Cloudflare Access headers and paste them into the client:
 }
 ```
 
-Keep the client OAuth type set to Dynamic. Cloudflare Access is only an outer
+Single Header mode copies one custom header instead:
+
+```json
+{
+  "CF-Access-Service-Token": "{\"cf-access-client-id\":\"<client-id>\",\"cf-access-client-secret\":\"<client-secret>\"}"
+}
+```
+
+Keep Raycast's OAuth type set to Dynamic. Cloudflare Access is only an outer
 transport gate; MacRemote's OAuth, host approval, and tool permissions still
 control actual MCP access.
+
+For Claude, Notion, or another client with OAuth client ID and secret fields,
+copy the credentials from **Settings -> OAuth Client Credentials**. MacRemote
+stores the secret in Keychain, disables dynamic registration for that mode, and
+requires `client_secret_basic` or `client_secret_post` at the token endpoint.
 
 If Raycast reports that it cannot fetch MCP OAuth metadata, check the Cloudflare
 Access application domain. It must be scoped to:
 
 ```text
-<subdomain.example.com>/mcp/*
+<subdomain.example.com>/mcp*
 ```
 
 It must not cover the entire hostname. Re-running **Deploy Custom Domain** with
 a current MacRemote build migrates older MacRemote-created whole-host Access
-applications to the path-scoped form.
+applications and older `/mcp/*` applications to the path-scoped form.
 
 ### Deploy from the CLI
 
@@ -280,8 +303,8 @@ For the lowest chance of the URL appearing in search results:
 - Do not link to the MacRemote hostname from public pages, docs, social posts,
   or issue trackers.
 - Do not paste the full MCP URL into public logs or screenshots.
-- Revoke OAuth grants, delete the specific client from **Clients**, or rotate
-  the MacRemote instance ID from **Settings** if access was shared with the
+- Revoke OAuth grants, delete the specific client from **Clients**, rotate the
+  OAuth client credentials, or stop the tunnel if access was shared with the
   wrong client.
 - Revoke and recreate Cloudflare Access service tokens if their headers were
   exposed.
@@ -311,12 +334,11 @@ domain, hidden URL, or robots rule is a replacement for those controls.
   present, and otherwise creates a new policy at the first free precedence.
 - **Could not fetch MCP OAuth metadata**: Cloudflare Access is probably
   protecting the whole hostname. Edit the Access application domain to
-  `<hostname>/mcp/*`, or redeploy the custom domain from MacRemote so it can
+  `<hostname>/mcp*`, or redeploy the custom domain from MacRemote so it can
   migrate the older whole-host Access app.
 - **DOCTYPE HTML response from an MCP client**: the client received a Cloudflare
   Access HTML page instead of MCP/OAuth JSON. Use the copied `https://<host>/mcp`
-  URL. If the client intentionally uses the legacy `/mcp/<instance-id>` path,
-  confirm it sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers
+  URL. If Access is enabled, confirm the client sends the copied Access headers
   on every MCP request.
 - **A non-MacRemote DNS record already exists**: the hostname already has a DNS
   record that MacRemote will not overwrite. Pick a different subdomain or remove

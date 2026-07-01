@@ -4,11 +4,19 @@ import XCTest
 final class ConnectorProfileTests: XCTestCase {
     func testProviderRecommendationsMatchClientCapabilities() {
         XCTAssertEqual(ConnectorProviderProfile.raycast.recommendedAccessMode, .serviceTokenHeaders)
-        XCTAssertEqual(ConnectorProviderProfile.claude.recommendedAccessMode, .macRemoteOAuthOnly)
-        XCTAssertEqual(ConnectorProviderProfile.notion.recommendedAccessMode, .macRemoteOAuthOnly)
+        XCTAssertEqual(ConnectorProviderProfile.claude.recommendedAccessMode, .oauthClientSecret)
+        XCTAssertEqual(ConnectorProviderProfile.notion.recommendedAccessMode, .oauthClientSecret)
     }
 
     func testCompatibilityFlagsBlockedHeaderlessProviders() {
+        XCTAssertEqual(
+            ConnectorProviderProfile.claude.status(for: .oauthClientSecret),
+            .recommended
+        )
+        XCTAssertEqual(
+            ConnectorProviderProfile.notion.status(for: .oauthClientSecret),
+            .recommended
+        )
         XCTAssertEqual(
             ConnectorProviderProfile.claude.status(for: .serviceTokenHeaders),
             .blocked

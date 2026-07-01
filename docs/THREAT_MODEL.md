@@ -82,9 +82,11 @@ write-capable presets such as image conversion must be labeled as write tools.
 Tunnel setup is high risk. A bug that binds the local server to `0.0.0.0` or
 forwards a broad local service would expose more than the intended MCP process.
 Mitigations include loopback-only listeners, health checks before tunnel start,
-single-origin tunnel routing, high-entropy instance identifiers, and explicit
-stop and instance rotation controls in the UI. Rotation stops the local server
-and tunnel, clears in-memory OAuth grants, and changes the public MCP URL path.
+single-origin tunnel routing, path-scoped Cloudflare Access when configured, and
+explicit stop, revoke, OAuth credential rotation, and instance rotation controls
+in the UI. OAuth credential rotation invalidates connected clients and tokens.
+Instance rotation remains a private local compatibility control, not the public
+URL authority.
 
 Logs and diagnostics can leak secrets. Audit logs must redact tokens,
 authorization codes, refresh tokens, Cloudflare credentials, request headers,

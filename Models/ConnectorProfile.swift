@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 
 enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
+    case oauthClientSecret
     case macRemoteOAuthOnly
     case serviceTokenHeaders
     case serviceTokenAuthorizationHeader
@@ -10,7 +11,8 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .macRemoteOAuthOnly: "MacRemote OAuth"
+        case .oauthClientSecret: "OAuth Client Secret"
+        case .macRemoteOAuthOnly: "Dynamic OAuth"
         case .serviceTokenHeaders: "Access Headers"
         case .serviceTokenAuthorizationHeader: "Single Header"
         }
@@ -18,7 +20,8 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
 
     var shortTitle: String {
         switch self {
-        case .macRemoteOAuthOnly: "OAuth"
+        case .oauthClientSecret: "Secret"
+        case .macRemoteOAuthOnly: "Dynamic"
         case .serviceTokenHeaders: "Headers"
         case .serviceTokenAuthorizationHeader: "Single"
         }
@@ -26,6 +29,7 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
 
     var systemImage: String {
         switch self {
+        case .oauthClientSecret: "lock.badge.clock"
         case .macRemoteOAuthOnly: "person.badge.key"
         case .serviceTokenHeaders: "key.horizontal"
         case .serviceTokenAuthorizationHeader: "key.viewfinder"
@@ -33,42 +37,57 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
     }
 
     var requiresCloudflareAccess: Bool {
-        self != .macRemoteOAuthOnly
+        switch self {
+        case .serviceTokenHeaders, .serviceTokenAuthorizationHeader:
+            true
+        case .oauthClientSecret, .macRemoteOAuthOnly:
+            false
+        }
+    }
+
+    var requiresOAuthClientSecret: Bool {
+        self == .oauthClientSecret
     }
 
     var readServiceTokensFromHeader: String? {
         switch self {
-        case .serviceTokenAuthorizationHeader: "Authorization"
-        case .macRemoteOAuthOnly, .serviceTokenHeaders: nil
+        case .serviceTokenAuthorizationHeader: "CF-Access-Service-Token"
+        case .oauthClientSecret, .macRemoteOAuthOnly, .serviceTokenHeaders: nil
         }
     }
 
     var detail: String {
         switch self {
+        case .oauthClientSecret:
+            "MacRemote OAuth requires the generated client ID and secret, plus PKCE and host approval."
         case .macRemoteOAuthOnly:
-            "MacRemote OAuth only. Use for Claude and Notion OAuth."
+            "Compatibility mode for public dynamic OAuth clients. Use only when a client cannot send OAuth client credentials."
         case .serviceTokenHeaders:
             "Cloudflare Access service-token headers plus MacRemote OAuth."
         case .serviceTokenAuthorizationHeader:
-            "One Authorization header plus MacRemote OAuth."
+            "One Cloudflare Access header plus MacRemote OAuth."
         }
     }
 
     var deployDetail: String {
         switch self {
+        case .oauthClientSecret:
+            "No Cloudflare Access app is created."
         case .macRemoteOAuthOnly:
             "No Cloudflare Access app is created."
         case .serviceTokenHeaders:
             "Creates Cloudflare Access credentials for two HTTP headers."
         case .serviceTokenAuthorizationHeader:
-            "Creates Cloudflare Access credentials for one Authorization header."
+            "Creates Cloudflare Access credentials for one custom HTTP header."
         }
     }
 
     var protectionTitle: String {
         switch self {
+        case .oauthClientSecret:
+            "OAuth client secret"
         case .macRemoteOAuthOnly:
-            "MacRemote OAuth only"
+            "Dynamic OAuth only"
         case .serviceTokenHeaders:
             "Access headers + MacRemote OAuth"
         case .serviceTokenAuthorizationHeader:
@@ -78,12 +97,14 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
 
     var copyButtonTitle: String {
         switch self {
+        case .oauthClientSecret:
+            "Copy OAuth Credentials"
         case .macRemoteOAuthOnly:
             "Copy OAuth URL"
         case .serviceTokenHeaders:
             "Copy Headers"
         case .serviceTokenAuthorizationHeader:
-            "Copy Authorization"
+            "Copy Header"
         }
     }
 }
@@ -117,8 +138,8 @@ enum ConnectorProviderProfile: String, CaseIterable, Identifiable, Sendable {
     var authLabel: String {
         switch self {
         case .raycast: "Dynamic OAuth"
-        case .claude: "OAuth"
-        case .notion: "OAuth / tokens"
+        case .claude: "OAuth client secret"
+        case .notion: "OAuth client secret"
         case .generic: "Client-defined"
         }
     }
@@ -126,8 +147,8 @@ enum ConnectorProviderProfile: String, CaseIterable, Identifiable, Sendable {
     var headerLabel: String {
         switch self {
         case .raycast: "Custom headers"
-        case .claude: "No headers"
-        case .notion: "Auth modes"
+        case .claude: "OAuth fields"
+        case .notion: "OAuth fields"
         case .generic: "Varies"
         }
     }
@@ -135,19 +156,23 @@ enum ConnectorProviderProfile: String, CaseIterable, Identifiable, Sendable {
     var recommendedAccessMode: CloudflareAccessMode {
         switch self {
         case .raycast: .serviceTokenHeaders
-        case .claude, .notion, .generic: .macRemoteOAuthOnly
+        case .claude, .notion, .generic: .oauthClientSecret
         }
     }
 
     func status(for mode: CloudflareAccessMode) -> ConnectorCompatibility {
         switch (self, mode) {
         case (.raycast, .serviceTokenHeaders),
+             (.claude, .oauthClientSecret),
+             (.notion, .oauthClientSecret),
+             (.generic, .oauthClientSecret):
+            .recommended
+        case (.raycast, .oauthClientSecret),
+             (.raycast, .macRemoteOAuthOnly),
+             (.raycast, .serviceTokenAuthorizationHeader),
              (.claude, .macRemoteOAuthOnly),
              (.notion, .macRemoteOAuthOnly),
-             (.generic, .macRemoteOAuthOnly):
-            .recommended
-        case (.raycast, .macRemoteOAuthOnly),
-             (.raycast, .serviceTokenAuthorizationHeader),
+             (.generic, .macRemoteOAuthOnly),
              (.generic, .serviceTokenHeaders),
              (.generic, .serviceTokenAuthorizationHeader):
             .works
@@ -167,11 +192,11 @@ enum ConnectorProviderProfile: String, CaseIterable, Identifiable, Sendable {
             case .raycast:
                 "Use Dynamic OAuth and copied Access headers."
             case .claude:
-                "Use OAuth only. Claude web does not expose request headers."
+                "Paste MacRemote's OAuth client ID and secret into Claude."
             case .notion:
-                "Choose OAuth for MacRemote. Token modes are for static-auth servers."
+                "Paste MacRemote's OAuth client ID and secret into Notion."
             case .generic:
-                "Start with OAuth; add Access only if the client sends headers."
+                "Start with confidential OAuth; add Access only if the client sends headers."
             }
         case .works:
             "This works if the client sends the selected Access credential."

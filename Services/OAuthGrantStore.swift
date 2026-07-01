@@ -15,6 +15,28 @@ struct OAuthStoredClient: Codable, Equatable, Sendable {
     let redirectURIs: [String]
     let scopes: [String]
     let createdAt: Date
+    let authenticationMethod: String?
+    let secretHash: String?
+
+    init(
+        id: String,
+        trustID: String?,
+        name: String,
+        redirectURIs: [String],
+        scopes: [String],
+        createdAt: Date,
+        authenticationMethod: String? = nil,
+        secretHash: String? = nil
+    ) {
+        self.id = id
+        self.trustID = trustID
+        self.name = name
+        self.redirectURIs = redirectURIs
+        self.scopes = scopes
+        self.createdAt = createdAt
+        self.authenticationMethod = authenticationMethod
+        self.secretHash = secretHash
+    }
 }
 
 struct OAuthStoredToken: Codable, Equatable, Sendable {

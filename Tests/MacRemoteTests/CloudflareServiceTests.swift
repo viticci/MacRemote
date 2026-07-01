@@ -28,7 +28,7 @@ final class CloudflareServiceTests: XCTestCase {
     func testAccessApplicationDomainProtectsOnlyMCPPath() {
         XCTAssertEqual(
             CloudflareService.accessApplicationDomain(hostname: "macremote.viticci.net"),
-            "macremote.viticci.net/mcp/*"
+            "macremote.viticci.net/mcp*"
         )
     }
 
@@ -45,20 +45,21 @@ final class CloudflareServiceTests: XCTestCase {
         XCTAssertNil(decoded["Authorization"])
     }
 
-    func testAuthorizationHeaderJSONUsesCloudflareSingleHeaderPayload() throws {
+    func testSingleHeaderJSONUsesCloudflareSingleHeaderPayload() throws {
         let credentials = CloudflareAccessCredentials(
             clientID: "client-id",
             clientSecret: "client-secret"
         )
-        let data = try XCTUnwrap(credentials.authorizationHeaderJSON.data(using: .utf8))
+        let data = try XCTUnwrap(credentials.singleHeaderJSON.data(using: .utf8))
         let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
-        let authorizationValue = try XCTUnwrap(decoded["Authorization"])
-        let authorizationData = try XCTUnwrap(authorizationValue.data(using: .utf8))
-        let authorizationPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: authorizationData) as? [String: String])
+        let headerValue = try XCTUnwrap(decoded["CF-Access-Service-Token"])
+        let headerData = try XCTUnwrap(headerValue.data(using: .utf8))
+        let headerPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: headerData) as? [String: String])
 
-        XCTAssertEqual(authorizationPayload["cf-access-client-id"], "client-id")
-        XCTAssertEqual(authorizationPayload["cf-access-client-secret"], "client-secret")
+        XCTAssertEqual(headerPayload["cf-access-client-id"], "client-id")
+        XCTAssertEqual(headerPayload["cf-access-client-secret"], "client-secret")
         XCTAssertNil(decoded["CF-Access-Client-Id"])
+        XCTAssertNil(decoded["Authorization"])
     }
 
     func testDeployCustomDomainUsesZoneScopedAccessEndpoints() async throws {
@@ -130,7 +131,7 @@ final class CloudflareServiceTests: XCTestCase {
         XCTAssertFalse(requests.contains { $0.contains("/accounts/account-id/access") })
     }
 
-    func testDeployCustomDomainCanConfigureSingleAuthorizationHeaderAccess() async throws {
+    func testDeployCustomDomainCanConfigureSingleCloudflareAccessHeader() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -188,9 +189,9 @@ final class CloudflareServiceTests: XCTestCase {
         )
 
         let appBody = try XCTUnwrap(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/access/apps"])
-        XCTAssertEqual(appBody["read_service_tokens_from_header"] as? String, "Authorization")
+        XCTAssertEqual(appBody["read_service_tokens_from_header"] as? String, "CF-Access-Service-Token")
         XCTAssertEqual(deployment.accessMode, .serviceTokenAuthorizationHeader)
-        XCTAssertTrue(deployment.accessCredentials?.authorizationHeaderJSON.contains("\"Authorization\"") == true)
+        XCTAssertTrue(deployment.accessCredentials?.singleHeaderJSON.contains("\"CF-Access-Service-Token\"") == true)
     }
 
     func testDeployCustomDomainUsesNextFreePolicyPrecedence() async throws {
@@ -406,6 +407,88 @@ final class CloudflareServiceTests: XCTestCase {
 
         XCTAssertTrue(
             CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id")
+        )
+    }
+
+    func testDeployCustomDomainMigratesLegacyMCPWildcardAccessApplication() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CloudflareURLProtocolMock.self]
+        let session = URLSession(configuration: config)
+        let hostname = "macremote.viticci.net"
+        let tunnelName = CloudflareService.tunnelName(hostname: hostname)
+        let accessDomain = CloudflareService.accessApplicationDomain(hostname: hostname)
+
+        CloudflareURLProtocolMock.install([
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
+            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
+            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
+            .success(method: "GET", path: "/zones/zone-id/access/service_tokens", result: []),
+            .success(method: "GET", path: "/zones/zone-id/access/apps", result: [
+                [
+                    "id": "legacy-app-id",
+                    "name": "MacRemote \(hostname)",
+                    "domain": "\(hostname)/mcp/*"
+                ]
+            ]),
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: [
+                [
+                    "id": "tunnel-id",
+                    "name": tunnelName,
+                    "deleted_at": NSNull()
+                ]
+            ]),
+            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
+            .success(method: "GET", path: "/zones/zone-id/dns_records", result: [
+                [
+                    "id": "dns-id",
+                    "name": hostname,
+                    "content": "tunnel-id.cfargotunnel.com",
+                    "comment": "MacRemote Cloudflare Tunnel"
+                ]
+            ]),
+            .success(method: "PATCH", path: "/zones/zone-id/dns_records/dns-id", result: [
+                "id": "dns-id",
+                "name": hostname,
+                "content": "tunnel-id.cfargotunnel.com",
+                "comment": "MacRemote Cloudflare Tunnel"
+            ]),
+            .success(method: "PUT", path: "/zones/zone-id/access/apps/legacy-app-id", result: [
+                "id": "legacy-app-id",
+                "name": "MacRemote \(hostname)",
+                "domain": accessDomain
+            ]),
+            .success(method: "POST", path: "/zones/zone-id/access/service_tokens", result: [
+                "id": "service-token-id",
+                "client_id": "client-id",
+                "client_secret": "client-secret"
+            ]),
+            .success(method: "GET", path: "/zones/zone-id/access/apps/legacy-app-id/policies", result: []),
+            .success(method: "POST", path: "/zones/zone-id/access/apps/legacy-app-id/policies", result: [:]),
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
+        ])
+
+        let service = CloudflareService(
+            session: session,
+            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
+        )
+        _ = try await service.deployCustomDomain(
+            zone: CloudflareZone(
+                id: "zone-id",
+                name: "viticci.net",
+                accountID: "account-id",
+                accountName: "Viticci"
+            ),
+            subdomain: "macremote",
+            localServerURL: URL(string: "http://127.0.0.1:8765")!,
+            accessMode: .serviceTokenHeaders,
+            apiToken: "test-token"
+        )
+
+        XCTAssertTrue(
+            CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id")
+        )
+        XCTAssertFalse(
+            CloudflareURLProtocolMock.requestedPaths().contains("POST /zones/zone-id/access/apps")
         )
     }
 

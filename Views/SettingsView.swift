@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var isShowingRotateInstanceConfirmation = false
     @State private var isShowingRevokeOAuthConfirmation = false
+    @State private var isShowingRotateOAuthCredentialsConfirmation = false
 
     var body: some View {
         @Bindable var appModel = appModel
@@ -69,6 +70,64 @@ struct SettingsView: View {
                     isShowingRevokeOAuthConfirmation = true
                 }
                 .buttonStyle(.bordered)
+            }
+
+            Section("OAuth Client Credentials") {
+                Text("Use these with clients that support OAuth Client ID and Client Secret. The secret is stored in Keychain; rotating it revokes existing OAuth clients and tokens.")
+                    .foregroundStyle(.secondary)
+
+                if let credentials = appModel.oauthClientCredentials {
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                        GridRow {
+                            Text("Client ID")
+                                .foregroundStyle(.secondary)
+                            Text(credentials.clientID)
+                                .font(.system(.body, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                        }
+
+                        GridRow {
+                            Text("Client Secret")
+                                .foregroundStyle(.secondary)
+                            Text(String(repeating: "*", count: 28))
+                                .font(.system(.body, design: .monospaced))
+                                .privacySensitive()
+                        }
+
+                        GridRow {
+                            Text("Created")
+                                .foregroundStyle(.secondary)
+                            Text(credentials.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        }
+                    }
+
+                    HStack {
+                        Button("Copy ID", systemImage: "doc.on.doc") {
+                            copyOAuthValue(credentials.clientID, label: "OAuth client ID")
+                        }
+
+                        Button("Copy Secret", systemImage: "key.fill") {
+                            copyOAuthValue(credentials.clientSecret, label: "OAuth client secret")
+                        }
+
+                        if let json = appModel.oauthClientCredentialsJSON {
+                            Button("Copy JSON", systemImage: "curlybraces") {
+                                copyOAuthValue(json, label: "OAuth client credentials JSON")
+                            }
+                        }
+
+                        Button("Rotate Credentials", systemImage: "arrow.triangle.2.circlepath", role: .destructive) {
+                            isShowingRotateOAuthCredentialsConfirmation = true
+                        }
+                    }
+                } else {
+                    Button("Generate Credentials", systemImage: "key.badge.plus") {
+                        appModel.generateOAuthClientCredentials()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
 
             Section("Pushover") {
@@ -325,6 +384,18 @@ struct SettingsView: View {
         } message: {
             Text("MacRemote will invalidate all registered clients and OAuth tokens. The public MCP URL will stay unchanged, and clients must request host approval again.")
         }
+        .confirmationDialog(
+            "Rotate OAuth Credentials?",
+            isPresented: $isShowingRotateOAuthCredentialsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Rotate Credentials", role: .destructive) {
+                appModel.rotateOAuthClientCredentials()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("MacRemote will generate a new client ID and secret, invalidate OAuth clients and tokens, and clear always-allow tool settings.")
+        }
     }
 
     private func copyPath(_ path: String) {
@@ -338,6 +409,12 @@ struct SettingsView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(targets.map(\.path).joined(separator: "\n"), forType: .string)
+    }
+
+    private func copyOAuthValue(_ value: String, label: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        appModel.appendLog(level: .info, "Copied \(label).")
     }
 
     private func openPrivacySettings(anchor: String) {

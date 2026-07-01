@@ -29,6 +29,7 @@ final class AppModel {
     var cloudflareDraft: CloudflareCustomDomainDraft
     var cloudflareCustomDomainState: CloudflareCustomDomainState = .idle
     var lastCloudflareDeployment: CloudflareCustomDomainDeployment?
+    var oauthClientCredentials: OAuthClientCredentials?
     var connectorProvider: ConnectorProviderProfile = .raycast {
         didSet {
             persistConnectorSettings()
@@ -66,6 +67,7 @@ final class AppModel {
     private let tunnelService = TunnelService()
     private let toolStore: ToolRegistryStore
     private let oauthGrantStore: OAuthGrantStore
+    private let oauthClientCredentialStore: OAuthClientCredentialStore
     private let clientToolPermissionStore: ClientToolPermissionStore
     private let toolSurfaceRuntime: ToolSurfaceRuntime
     private let fullDiskAccessService = FullDiskAccessService()
@@ -86,6 +88,7 @@ final class AppModel {
         userDefaults: UserDefaults = .standard,
         toolStore: ToolRegistryStore = ToolRegistryStore(),
         oauthGrantStore: OAuthGrantStore? = nil,
+        oauthClientCredentialStore: OAuthClientCredentialStore? = nil,
         pushoverSender: any PushoverSending = PushoverService(),
         brrrSender: any BrrrSending = BrrrService(),
         localMCPScanner: LocalMCPScanner = LocalMCPScanner()
@@ -93,6 +96,7 @@ final class AppModel {
         self.userDefaults = userDefaults
         self.toolStore = toolStore
         self.oauthGrantStore = oauthGrantStore ?? OAuthGrantStore(userDefaults: userDefaults)
+        self.oauthClientCredentialStore = oauthClientCredentialStore ?? OAuthClientCredentialStore(userDefaults: userDefaults)
         self.clientToolPermissionStore = ClientToolPermissionStore(userDefaults: userDefaults)
         self.toolSurfaceRuntime = ToolSurfaceRuntime(environment: Self.toolEnvironment)
         self.pushoverSender = pushoverSender
@@ -100,6 +104,7 @@ final class AppModel {
         self.localMCPScanner = localMCPScanner
         self.pushoverSettings = Self.loadPushoverSettings(from: userDefaults)
         self.brrrSettings = Self.loadBrrrSettings(from: userDefaults)
+        self.oauthClientCredentials = self.oauthClientCredentialStore.load()
         let loadedConnectorProvider = Self.loadConnectorProvider(from: userDefaults)
         self.connectorProvider = loadedConnectorProvider
         self.cloudflareDraft = CloudflareCustomDomainDraft(
@@ -150,6 +155,7 @@ final class AppModel {
                 self?.handleAuthorizationApprovalsChanged(approvals)
             }
         }, grantStore: oauthGrantStore)
+        authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
         toolCallApprovalCoordinator = ToolCallApprovalCoordinator { [weak self] approvals in
             Task { @MainActor in
                 guard self?.approvalCoordinatorGeneration == generation else { return }
@@ -178,6 +184,14 @@ final class AppModel {
             return nil
         case .stopped, .failed:
             break
+        }
+
+        if cloudflareDraft.accessMode.requiresOAuthClientSecret, oauthClientCredentials == nil {
+            generateOAuthClientCredentials()
+        }
+        guard !cloudflareDraft.accessMode.requiresOAuthClientSecret || oauthClientCredentials != nil else {
+            serverStatus = .failed("Generate OAuth client credentials before starting the local MCP server.")
+            return nil
         }
 
         serverStatus = .starting
@@ -280,6 +294,33 @@ final class AppModel {
         )
     }
 
+    func generateOAuthClientCredentials() {
+        replaceOAuthClientCredentials(reason: "Generated OAuth client credentials.")
+    }
+
+    func rotateOAuthClientCredentials() {
+        replaceOAuthClientCredentials(reason: "Rotated OAuth client credentials.")
+    }
+
+    private func replaceOAuthClientCredentials(reason: String) {
+        do {
+            let credentials = try oauthClientCredentialStore.generate()
+            oauthClientCredentials = credentials
+            let summary = authCoordinator.revokeAllGrants()
+            approvals = []
+            notifiedAuthorizationRequestIDs.removeAll()
+            setConnectedClients([])
+            clientToolPermissionSnapshot = clientToolPermissionStore.clear()
+            authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
+            appendLog(
+                level: .warning,
+                "\(reason) Revoked existing OAuth state: \(summary.clients) clients, \(summary.accessTokens) access tokens, \(summary.refreshTokens) refresh tokens."
+            )
+        } catch {
+            appendLog(level: .error, "Could not generate OAuth client credentials: \(error.localizedDescription)")
+        }
+    }
+
     func deleteOAuthClient(id clientID: String) -> String? {
         guard let client = connectedClients.first(where: { $0.id == clientID }) else {
             return "Client not found."
@@ -309,12 +350,17 @@ final class AppModel {
     }
 
     func setCloudflareAccessMode(_ mode: CloudflareAccessMode) {
+        if mode.requiresOAuthClientSecret, oauthClientCredentials == nil {
+            generateOAuthClientCredentials()
+        }
         guard cloudflareDraft.accessMode != mode else {
             persistConnectorSettings()
+            authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
             return
         }
         cloudflareDraft.accessMode = mode
         persistConnectorSettings()
+        authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
     }
 
     func runRemCTLTodayTest() {
@@ -894,7 +940,7 @@ final class AppModel {
 
         cloudflareCustomDomainState = localServerURL == nil ? .preparingLocalServer : .deploying
 
-        Task {
+        Task { [self] in
             do {
                 guard let localServerURL = await ensureLocalServerRunning() else {
                     let message: String
@@ -1125,6 +1171,33 @@ final class AppModel {
 
     var cloudflareAccessCopyButtonTitle: String {
         lastCloudflareDeployment?.accessMode.copyButtonTitle ?? "Copy Access"
+    }
+
+    var oauthClientCredentialsJSON: String? {
+        guard let credentials = oauthClientCredentials else { return nil }
+        let payload = [
+            "OAuth Client ID": credentials.clientID,
+            "OAuth Client Secret": credentials.clientSecret
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private var currentOAuthClientAuthenticationPolicy: OAuthClientAuthenticationPolicy {
+        guard cloudflareDraft.accessMode.requiresOAuthClientSecret else {
+            return .dynamicPublicClients
+        }
+        guard let oauthClientCredentials else {
+            return .confidentialClientRequired(nil)
+        }
+        return .confidentialClientRequired(
+            OAuthConfidentialClientCredentials(
+                clientID: oauthClientCredentials.clientID,
+                clientSecret: oauthClientCredentials.clientSecret
+            )
+        )
     }
 
     var toolExposureSummary: ToolExposureSummary {

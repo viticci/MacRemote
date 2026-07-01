@@ -13,12 +13,47 @@ struct OAuthRevocationSummary: Equatable, Sendable {
     }
 }
 
+struct OAuthConfidentialClientCredentials: Equatable, Sendable {
+    let clientID: String
+    let clientSecret: String
+}
+
+struct OAuthClientAuthenticationPolicy: Equatable, Sendable {
+    let requiresConfidentialClient: Bool
+    let confidentialClient: OAuthConfidentialClientCredentials?
+
+    static let dynamicPublicClients = OAuthClientAuthenticationPolicy(
+        requiresConfidentialClient: false,
+        confidentialClient: nil
+    )
+
+    static func confidentialClientRequired(_ credentials: OAuthConfidentialClientCredentials?) -> OAuthClientAuthenticationPolicy {
+        OAuthClientAuthenticationPolicy(
+            requiresConfidentialClient: true,
+            confidentialClient: credentials
+        )
+    }
+
+    var supportsDynamicClientRegistration: Bool {
+        !requiresConfidentialClient
+    }
+
+    var tokenEndpointAuthMethodsSupported: [String] {
+        requiresConfidentialClient ? ["client_secret_basic", "client_secret_post"] : ["none"]
+    }
+}
+
 final class OAuthCoordinator: @unchecked Sendable {
     typealias ChangeHandler = @Sendable ([ApprovalRequest]) -> Void
 
     static let maxRegisteredClients = 64
     static let maxPendingAuthorizations = 16
     static let maxStoredAuthorizations = 64
+
+    private enum ClientAuthenticationMethod: String, Sendable {
+        case none
+        case clientSecret
+    }
 
     private struct Client {
         let id: String
@@ -27,14 +62,27 @@ final class OAuthCoordinator: @unchecked Sendable {
         let redirectURIs: [String]
         let scopes: Set<String>
         let createdAt: Date
+        let authenticationMethod: ClientAuthenticationMethod
+        let secretHash: String?
 
-        init(id: String, trustID: String, name: String, redirectURIs: [String], scopes: Set<String>, createdAt: Date) {
+        init(
+            id: String,
+            trustID: String,
+            name: String,
+            redirectURIs: [String],
+            scopes: Set<String>,
+            createdAt: Date,
+            authenticationMethod: ClientAuthenticationMethod = .none,
+            secretHash: String? = nil
+        ) {
             self.id = id
             self.trustID = trustID
             self.name = name
             self.redirectURIs = redirectURIs
             self.scopes = scopes
             self.createdAt = createdAt
+            self.authenticationMethod = authenticationMethod
+            self.secretHash = secretHash
         }
 
         init(stored: OAuthStoredClient) {
@@ -43,6 +91,8 @@ final class OAuthCoordinator: @unchecked Sendable {
             self.redirectURIs = stored.redirectURIs
             self.scopes = Set(stored.scopes)
             self.createdAt = stored.createdAt
+            self.authenticationMethod = ClientAuthenticationMethod(rawValue: stored.authenticationMethod ?? "") ?? .none
+            self.secretHash = stored.secretHash
             self.trustID = stored.trustID ?? OAuthCoordinator.clientTrustID(
                 name: stored.name,
                 redirectURIs: stored.redirectURIs,
@@ -57,7 +107,9 @@ final class OAuthCoordinator: @unchecked Sendable {
                 name: name,
                 redirectURIs: redirectURIs,
                 scopes: scopes.sorted(),
-                createdAt: createdAt
+                createdAt: createdAt,
+                authenticationMethod: authenticationMethod == .none ? nil : authenticationMethod.rawValue,
+                secretHash: secretHash
             )
         }
 
@@ -68,7 +120,35 @@ final class OAuthCoordinator: @unchecked Sendable {
                 name: self.name.isEmpty ? name : self.name,
                 redirectURIs: Array(Set(self.redirectURIs + redirectURIs)).sorted(),
                 scopes: self.scopes.union(scopes),
-                createdAt: createdAt
+                createdAt: createdAt,
+                authenticationMethod: authenticationMethod,
+                secretHash: secretHash
+            )
+        }
+
+        func updating(secretHash: String?) -> Client {
+            Client(
+                id: id,
+                trustID: trustID,
+                name: name,
+                redirectURIs: redirectURIs,
+                scopes: scopes,
+                createdAt: createdAt,
+                authenticationMethod: authenticationMethod,
+                secretHash: secretHash
+            )
+        }
+
+        func binding(redirectURI: String, scopes newScopes: Set<String>) -> Client {
+            Client(
+                id: id,
+                trustID: trustID,
+                name: name,
+                redirectURIs: Array(Set(redirectURIs + [redirectURI])).sorted(),
+                scopes: scopes.union(newScopes),
+                createdAt: createdAt,
+                authenticationMethod: authenticationMethod,
+                secretHash: secretHash
             )
         }
     }
@@ -188,18 +268,53 @@ final class OAuthCoordinator: @unchecked Sendable {
     private let lock = NSLock()
     private let changeHandler: ChangeHandler?
     private let grantStore: OAuthGrantStore?
+    private var clientAuthentication: OAuthClientAuthenticationPolicy
     private var clients: [String: Client] = [:]
     private var authorizations: [UUID: PendingAuthorization] = [:]
     private var accessTokensByHash: [String: AccessTokenRecord] = [:]
     private var refreshTokensByHash: [String: RefreshTokenRecord] = [:]
 
-    init(changeHandler: ChangeHandler? = nil, grantStore: OAuthGrantStore? = nil) {
+    init(
+        clientAuthentication: OAuthClientAuthenticationPolicy = .dynamicPublicClients,
+        changeHandler: ChangeHandler? = nil,
+        grantStore: OAuthGrantStore? = nil
+    ) {
+        self.clientAuthentication = clientAuthentication
         self.changeHandler = changeHandler
         self.grantStore = grantStore
         loadPersistedGrants()
     }
 
+    func updateClientAuthentication(_ policy: OAuthClientAuthenticationPolicy) {
+        try? lock.withLock {
+            clientAuthentication = policy
+            if let credentials = policy.confidentialClient,
+               var client = clients[credentials.clientID],
+               client.authenticationMethod == .clientSecret {
+                client = client.updating(secretHash: Self.sha256Hex(credentials.clientSecret))
+                clients[credentials.clientID] = client
+                try persistGrantSnapshotLocked()
+            }
+        }
+    }
+
+    func tokenEndpointAuthMethodsSupported() -> [String] {
+        lock.withLock {
+            clientAuthentication.tokenEndpointAuthMethodsSupported
+        }
+    }
+
+    func supportsDynamicClientRegistration() -> Bool {
+        lock.withLock {
+            clientAuthentication.supportsDynamicClientRegistration
+        }
+    }
+
     func registerClient(from jsonObject: Any) throws -> [String: Any] {
+        guard supportsDynamicClientRegistration() else {
+            throw OAuthError.invalidRequest("Dynamic client registration is disabled while OAuth client credentials are required.")
+        }
+
         guard let object = jsonObject as? [String: Any] else {
             throw OAuthError.invalidRequest("Expected JSON object.")
         }
@@ -541,10 +656,7 @@ final class OAuthCoordinator: @unchecked Sendable {
                 throw OAuthError.invalidGrant("Authorization code was already used.")
             }
 
-            if let clientID = Self.nonEmptyFormValue(form["client_id"]),
-               authorization.clientID != clientID {
-                throw OAuthError.invalidGrant("Client or redirect URI mismatch.")
-            }
+            try validateTokenClientAuthenticationLocked(form: form, expectedClientID: authorization.clientID)
             if let redirectURI = Self.nonEmptyFormValue(form["redirect_uri"]),
                authorization.redirectURI != redirectURI {
                 throw OAuthError.invalidGrant("Client or redirect URI mismatch.")
@@ -563,6 +675,14 @@ final class OAuthCoordinator: @unchecked Sendable {
                 throw OAuthError.invalidGrant("PKCE verification failed.")
             }
 
+            if let client = clients[authorization.clientID],
+               client.authenticationMethod == .clientSecret,
+               !client.redirectURIs.contains(authorization.redirectURI) {
+                clients[client.id] = client.binding(
+                    redirectURI: authorization.redirectURI,
+                    scopes: authorization.scopes
+                )
+            }
             authorization.codeUsedAt = now
             authorization.issuedCode = nil
             authorizations[match.key] = authorization
@@ -596,6 +716,7 @@ final class OAuthCoordinator: @unchecked Sendable {
             guard record.issuer == issuer else {
                 throw OAuthError.invalidGrant(Self.issuerMismatchDescription(expected: record.issuer, actual: issuer))
             }
+            try validateTokenClientAuthenticationLocked(form: form, expectedClientID: record.clientID)
             let requestedResource = try requestedResource(form["resource"], defaultResource: record.resource)
             guard record.resource == requestedResource else {
                 throw OAuthError.invalidGrant("Resource mismatch.")
@@ -732,6 +853,52 @@ final class OAuthCoordinator: @unchecked Sendable {
         return "macremote-trust-\(sha256Hex(material).prefix(24))"
     }
 
+    private static func confidentialClientTrustID(clientID: String) -> String {
+        "macremote-confidential-\(sha256Hex(clientID).prefix(24))"
+    }
+
+    private func validateTokenClientAuthenticationLocked(form: [String: String], expectedClientID: String) throws {
+        guard let client = clients[expectedClientID] else {
+            throw OAuthError.invalidGrant("Unknown client_id.")
+        }
+
+        let clientID = Self.nonEmptyFormValue(form["client_id"])
+        let clientSecret = Self.nonEmptyFormValue(form["client_secret"])
+
+        switch client.authenticationMethod {
+        case .none:
+            if let clientID, clientID != expectedClientID {
+                throw OAuthError.invalidGrant("Client or redirect URI mismatch.")
+            }
+            if clientSecret != nil {
+                throw OAuthError.invalidRequest("Public clients must not send client_secret.")
+            }
+        case .clientSecret:
+            guard clientID == expectedClientID else {
+                throw OAuthError.invalidClient("Client authentication failed.")
+            }
+            guard let clientSecret else {
+                throw OAuthError.invalidClient("Client authentication required.")
+            }
+            guard let secretHash = client.secretHash,
+                  Self.constantTimeEqual(Self.sha256Hex(clientSecret), secretHash) else {
+                throw OAuthError.invalidClient("Client authentication failed.")
+            }
+        }
+    }
+
+    private static func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsBytes = Array(lhs.utf8)
+        let rhsBytes = Array(rhs.utf8)
+        var difference = lhsBytes.count ^ rhsBytes.count
+        for index in 0..<max(lhsBytes.count, rhsBytes.count) {
+            let lhsByte = index < lhsBytes.count ? lhsBytes[index] : 0
+            let rhsByte = index < rhsBytes.count ? rhsBytes[index] : 0
+            difference |= Int(lhsByte ^ rhsByte)
+        }
+        return difference == 0
+    }
+
     private static func normalizedClientName(_ name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let scalars = trimmed.unicodeScalars.map { scalar -> Character in
@@ -785,6 +952,16 @@ final class OAuthCoordinator: @unchecked Sendable {
     ) throws -> Client {
         try lock.withLock {
             guard let client = clients[clientID] else {
+                if let client = try configuredConfidentialClientLocked(
+                    clientID: clientID,
+                    clientName: recoveryName,
+                    requestedScopes: requestedScopes
+                ) {
+                    return client
+                }
+                guard clientAuthentication.supportsDynamicClientRegistration else {
+                    throw OAuthError.invalidRequest("Unknown client_id.")
+                }
                 return try recoverDynamicClient(
                     clientID: clientID,
                     clientName: recoveryName,
@@ -792,7 +969,10 @@ final class OAuthCoordinator: @unchecked Sendable {
                     requestedScopes: requestedScopes
                 )
             }
-            guard client.redirectURIs.contains(redirectURI) else {
+
+            let allowsUnboundConfidentialRedirect = client.authenticationMethod == .clientSecret &&
+                configuredConfidentialCredentialsLocked(clientID: client.id) != nil
+            guard client.redirectURIs.contains(redirectURI) || allowsUnboundConfidentialRedirect else {
                 throw OAuthError.invalidRequest("Unregistered redirect_uri.")
             }
             guard !requestedScopes.isEmpty, requestedScopes.isSubset(of: client.scopes) else {
@@ -802,12 +982,59 @@ final class OAuthCoordinator: @unchecked Sendable {
         }
     }
 
+    private func configuredConfidentialClientLocked(
+        clientID: String,
+        clientName: String,
+        requestedScopes: Set<String>
+    ) throws -> Client? {
+        guard let credentials = configuredConfidentialCredentialsLocked(clientID: clientID) else {
+            return nil
+        }
+        guard !requestedScopes.isEmpty else {
+            throw OAuthError.invalidRequest("Unsupported scope.")
+        }
+        guard clients.count < Self.maxRegisteredClients else {
+            throw OAuthError.invalidRequest("Too many registered OAuth clients. Revoke grants and try again.")
+        }
+
+        let sanitizedName = sanitizeClientName(clientName)
+        let client = Client(
+            id: credentials.clientID,
+            trustID: Self.confidentialClientTrustID(clientID: credentials.clientID),
+            name: sanitizedName,
+            redirectURIs: [],
+            scopes: requestedScopes,
+            createdAt: Date(),
+            authenticationMethod: .clientSecret,
+            secretHash: Self.sha256Hex(credentials.clientSecret)
+        )
+        clients[client.id] = client
+        do {
+            try persistGrantSnapshotLocked()
+        } catch {
+            clients.removeValue(forKey: client.id)
+            throw error
+        }
+        return client
+    }
+
+    private func configuredConfidentialCredentialsLocked(clientID: String) -> OAuthConfidentialClientCredentials? {
+        guard let credentials = clientAuthentication.confidentialClient,
+              credentials.clientID == clientID else {
+            return nil
+        }
+        return credentials
+    }
+
     private func recoverDynamicClient(
         clientID: String,
         clientName: String,
         redirectURI: String,
         requestedScopes: Set<String>
     ) throws -> Client {
+        guard clientAuthentication.supportsDynamicClientRegistration else {
+            throw OAuthError.invalidRequest("Unknown client_id.")
+        }
         let redirectURIs = try parseRedirectURIs([redirectURI])
         guard Self.isRecoverableDynamicClientID(clientID, redirectURI: redirectURI) else {
             throw OAuthError.invalidRequest("Unknown client_id.")
@@ -1103,11 +1330,13 @@ final class OAuthCoordinator: @unchecked Sendable {
 enum OAuthError: LocalizedError, Equatable, Sendable {
     case invalidRequest(String)
     case invalidGrant(String)
+    case invalidClient(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidRequest(let message): message
         case .invalidGrant(let message): message
+        case .invalidClient(let message): message
         }
     }
 
@@ -1115,6 +1344,7 @@ enum OAuthError: LocalizedError, Equatable, Sendable {
         switch self {
         case .invalidRequest: "invalid_request"
         case .invalidGrant: "invalid_grant"
+        case .invalidClient: "invalid_client"
         }
     }
 }

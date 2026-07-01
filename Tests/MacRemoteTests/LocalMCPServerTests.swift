@@ -204,6 +204,49 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(authorizationServer.json["issuer"] as? String, "https://macremote-test.trycloudflare.com")
         XCTAssertEqual(authorizationServer.json["registration_endpoint"] as? String, "https://macremote-test.trycloudflare.com/register")
         XCTAssertEqual(authorizationServer.json["resource_indicators_supported"] as? Bool, true)
+        XCTAssertEqual(authorizationServer.json["token_endpoint_auth_methods_supported"] as? [String], ["none"])
+    }
+
+    func testConfidentialOAuthMetadataOmitsDynamicRegistration() async throws {
+        let coordinator = OAuthCoordinator(
+            clientAuthentication: .confidentialClientRequired(
+                OAuthConfidentialClientCredentials(
+                    clientID: "macremote-oauth-confidential",
+                    clientSecret: "client-secret"
+                )
+            )
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+
+        let authorizationServer = try await getJSON(
+            url: base.appendingPathComponent(".well-known/oauth-authorization-server")
+        )
+        XCTAssertNil(authorizationServer.json["registration_endpoint"])
+        XCTAssertEqual(
+            authorizationServer.json["token_endpoint_auth_methods_supported"] as? [String],
+            ["client_secret_basic", "client_secret_post"]
+        )
+
+        let registration = try await postJSON(
+            url: base.appendingPathComponent("register"),
+            body: [
+                "client_name": "Dynamic Client",
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "scope": "mcp:tools"
+            ]
+        )
+        XCTAssertEqual(registration.statusCode, 400)
+        XCTAssertEqual(registration.json["error"] as? String, "invalid_request")
     }
 
     func testOAuthProtectedMCPToolFlowOverHTTP() async throws {
@@ -499,6 +542,123 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertEqual(token.json["resource"] as? String, resource)
 
         let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
+        let toolsList = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "tools",
+                "method": "tools/list"
+            ]
+        )
+        XCTAssertEqual(toolsList.statusCode, 200)
+    }
+
+    func testConfidentialOAuthFlowAcceptsClientSecretBasic() async throws {
+        let credentials = OAuthConfidentialClientCredentials(
+            clientID: "macremote-oauth-confidential",
+            clientSecret: "correct-secret"
+        )
+        let coordinator = OAuthCoordinator(
+            clientAuthentication: .confidentialClientRequired(credentials)
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let resource = "\(base.absoluteString)/mcp/test-instance"
+        let redirectURI = "https://claude.ai/api/mcp/auth_callback"
+        let verifier = "server-confidential-verifier"
+        try await waitForServerReady(base: base)
+
+        var authorize = URLComponents(url: base.appendingPathComponent("authorize"), resolvingAgainstBaseURL: false)!
+        authorize.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: credentials.clientID),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "scope", value: "mcp:tools"),
+            URLQueryItem(name: "state", value: "state-token"),
+            URLQueryItem(name: "code_challenge", value: OAuthCoordinator.pkceChallenge(for: verifier)),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "resource", value: resource)
+        ]
+        let authorizationPage = try await get(url: try XCTUnwrap(authorize.url))
+        XCTAssertEqual(authorizationPage.statusCode, 200)
+
+        let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
+        XCTAssertTrue(server.approveAuthorizationRequest(id: requestID))
+
+        var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
+        statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
+        let status = try await getJSON(url: try XCTUnwrap(statusURL.url))
+        let redirect = try XCTUnwrap(status.json["redirect_uri"] as? String)
+        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+
+        let missingSecret = try await postForm(
+            url: base.appendingPathComponent("token"),
+            form: [
+                "grant_type": "authorization_code",
+                "client_id": credentials.clientID,
+                "redirect_uri": redirectURI,
+                "code": code,
+                "code_verifier": verifier,
+                "resource": resource
+            ]
+        )
+        XCTAssertEqual(missingSecret.statusCode, 401)
+        XCTAssertEqual(missingSecret.json["error"] as? String, "invalid_client")
+
+        let token = try await postForm(
+            url: base.appendingPathComponent("token"),
+            headers: [
+                "Authorization": basicAuthorizationHeader(
+                    username: credentials.clientID,
+                    password: credentials.clientSecret
+                )
+            ],
+            form: [
+                "grant_type": "authorization_code",
+                "redirect_uri": redirectURI,
+                "code": code,
+                "code_verifier": verifier,
+                "resource": resource
+            ]
+        )
+        XCTAssertEqual(token.statusCode, 200)
+        let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
+        let refreshToken = try XCTUnwrap(token.json["refresh_token"] as? String)
+        XCTAssertEqual(coordinator.connectedClientSnapshot().first?.redirectURIs, [redirectURI])
+
+        let refreshWithoutSecret = try await postForm(
+            url: base.appendingPathComponent("token"),
+            form: [
+                "grant_type": "refresh_token",
+                "refresh_token": refreshToken,
+                "resource": resource
+            ]
+        )
+        XCTAssertEqual(refreshWithoutSecret.statusCode, 401)
+        XCTAssertEqual(refreshWithoutSecret.json["error"] as? String, "invalid_client")
+
         let toolsList = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
             bearerToken: accessToken,

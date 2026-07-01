@@ -198,18 +198,21 @@ final class LocalMCPServer: @unchecked Sendable {
         case ("GET", "/health"):
             return jsonResponse(healthPayload(base: base, activePort: activePort))
         case ("GET", "/.well-known/oauth-authorization-server"):
-            return jsonResponse([
+            var metadata: [String: Any] = [
                 "issuer": base,
                 "authorization_endpoint": "\(base)/authorize",
                 "token_endpoint": "\(base)/token",
-                "registration_endpoint": "\(base)/register",
                 "response_types_supported": ["code"],
                 "grant_types_supported": ["authorization_code", "refresh_token"],
                 "code_challenge_methods_supported": ["S256"],
-                "token_endpoint_auth_methods_supported": ["none"],
+                "token_endpoint_auth_methods_supported": authCoordinator.tokenEndpointAuthMethodsSupported(),
                 "scopes_supported": ["mcp:tools"],
                 "resource_indicators_supported": true
-            ])
+            ]
+            if authCoordinator.supportsDynamicClientRegistration() {
+                metadata["registration_endpoint"] = "\(base)/register"
+            }
+            return jsonResponse(metadata)
         case ("POST", "/register"):
             return registerClient(request)
         case ("GET", "/authorize"):
@@ -980,8 +983,9 @@ final class LocalMCPServer: @unchecked Sendable {
 
     private func oauthErrorResponse(_ error: Error) -> Data {
         if let oauthError = error as? OAuthError {
+            let status: HTTPResponse.Status = oauthError.errorCode == "invalid_client" ? .unauthorized : .badRequest
             return jsonErrorResponse(
-                status: .badRequest,
+                status: status,
                 error: oauthError.errorCode,
                 description: oauthError.localizedDescription
             )
@@ -1348,7 +1352,7 @@ private struct HTTPRequest {
         return token.isEmpty ? nil : token
     }
 
-    var basicAuthorizationClientID: String? {
+    var basicAuthorizationCredentials: (clientID: String, clientSecret: String)? {
         guard let authorization = headers["authorization"] else { return nil }
         let trimmed = authorization.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let separatorIndex = trimmed.firstIndex(where: { $0.isWhitespace }) else {
@@ -1368,14 +1372,17 @@ private struct HTTPRequest {
         }
 
         let username: String
+        let password: String
         if let separator = credentials.firstIndex(of: ":") {
             username = String(credentials[..<separator])
+            password = String(credentials[credentials.index(after: separator)...])
         } else {
             username = credentials
+            password = ""
         }
 
         let clientID = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        return clientID.isEmpty ? nil : clientID
+        return clientID.isEmpty ? nil : (clientID, password)
     }
 
     var originHeader: String? {
@@ -1436,16 +1443,21 @@ private struct HTTPRequest {
 
     func tokenFormURLEncodedBody() throws -> [String: String] {
         var form = formURLEncodedBody()
-        guard let basicClientID = basicAuthorizationClientID else {
+        guard let basicCredentials = basicAuthorizationCredentials else {
             return form
         }
 
         let formClientID = form["client_id"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let formClientID, !formClientID.isEmpty, formClientID != basicClientID {
+        if let formClientID, !formClientID.isEmpty, formClientID != basicCredentials.clientID {
             throw OAuthError.invalidRequest("Conflicting client_id credentials.")
         }
+        let formClientSecret = form["client_secret"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let formClientSecret, !formClientSecret.isEmpty, formClientSecret != basicCredentials.clientSecret {
+            throw OAuthError.invalidRequest("Conflicting client_secret credentials.")
+        }
 
-        form["client_id"] = basicClientID
+        form["client_id"] = basicCredentials.clientID
+        form["client_secret"] = basicCredentials.clientSecret
         return form
     }
 
