@@ -28,15 +28,25 @@ struct ConfiguredToolExecutor: ToolExecuting {
     let toolsByID: [String: ToolDefinition]
     let environment: [String: String]
     private let runner = ProcessRunner()
+    private let mcpBridgeClient = MCPHTTPBridgeClient()
+    private let mcpStdioBridgeClient: MCPStdioBridgeClient
 
     init(tools: [ToolDefinition], environment: [String: String]) {
         toolsByID = Dictionary(uniqueKeysWithValues: tools.map { ($0.id, $0) })
         self.environment = environment
+        self.mcpStdioBridgeClient = MCPStdioBridgeClient(environment: environment)
     }
 
     func execute(toolID: String, parameters: [String: ToolArgumentValue] = [:]) async throws -> ToolExecutionOutcome {
         guard let tool = toolsByID[toolID] else {
             throw ToolValidationError.unknownTool(toolID)
+        }
+
+        if tool.backend == .mcpHTTPBridge {
+            return try await mcpBridgeClient.call(tool: tool, parameters: parameters)
+        }
+        if tool.backend == .mcpStdioBridge {
+            return try await mcpStdioBridgeClient.call(tool: tool, parameters: parameters)
         }
 
         var arguments = try ToolArgumentResolver.arguments(for: tool, parameters: parameters)

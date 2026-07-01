@@ -352,6 +352,10 @@ final class LocalMCPServer: @unchecked Sendable {
             return "pocketctl-cli"
         }
 
+        if tools.allSatisfy(\.isMCPBridge) {
+            return "mcp-bridge"
+        }
+
         if customCount == tools.count {
             return "custom-cli"
         }
@@ -619,34 +623,7 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         let rawArguments = params["arguments"] as? [String: Any] ?? [:]
-        let arguments = rawArguments.compactMapValues { value -> ToolArgumentValue? in
-            switch value {
-            case let string as String:
-                return .string(string)
-            case let int as Int:
-                return .string(String(int))
-            case let double as Double where double.rounded() == double:
-                return .string(String(Int(double)))
-            case let strings as [String]:
-                return .stringArray(strings)
-            case let array as [Any]:
-                let values = array.compactMap { item -> String? in
-                    switch item {
-                    case let string as String:
-                        return string
-                    case let int as Int:
-                        return String(int)
-                    case let double as Double where double.rounded() == double:
-                        return String(Int(double))
-                    default:
-                        return nil
-                    }
-                }
-                return values.count == array.count ? .stringArray(values) : nil
-            default:
-                return nil
-            }
-        }
+        let arguments = rawArguments.compactMapValues(ToolArgumentValue.fromJSONObject)
 
         do {
             let tools = toolProvider()
@@ -764,20 +741,18 @@ final class LocalMCPServer: @unchecked Sendable {
             "description": toolDescription(for: tool),
             "inputSchema": inputSchema(for: tool),
             "outputSchema": outputSchema(),
-            "annotations": [
-                "title": tool.name,
-                "readOnlyHint": tool.capability == .readOnly,
-                "destructiveHint": tool.capability == .destructive,
-                "idempotentHint": tool.capability == .readOnly && !tool.isGenericCLIAdapter,
-                "openWorldHint": tool.isGenericCLIAdapter || tool.capability != .readOnly
-            ]
+            "annotations": annotations(for: tool)
         ]
     }
 
     private func toolDescription(for tool: ToolDefinition) -> String {
         var parts = [tool.summary]
 
-        if tool.isGenericCLIAdapter {
+        if let bridge = tool.mcpBridge {
+            parts.append("Bridged from MCP server `\(bridge.serverName)` at \(bridge.serverURL). MacRemote initializes the upstream streamable HTTP session and forwards exact JSON arguments to upstream tool `\(bridge.toolName)`. No shell or executable is used.")
+        } else if let bridge = tool.mcpStdioBridge {
+            parts.append("Bridged from MCP server `\(bridge.serverName)` by launching `\(bridge.command)` directly with its configured argv and speaking JSON-RPC over stdio. MacRemote forwards exact JSON arguments to upstream tool `\(bridge.toolName)`; no shell is used.")
+        } else if tool.isGenericCLIAdapter {
             parts.append("Pass exact argv items as the `args` array; optional `stdin` is sent to standard input.")
             parts.append("MacRemote launches the executable directly without a shell: do not use `~`, `$HOME`, pipes, redirection, globs, command substitution, or environment assignments. Use absolute paths and separate every flag/value into its own argv item.")
 
@@ -789,7 +764,7 @@ final class LocalMCPServer: @unchecked Sendable {
                 parts.append("For Codex, global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`; options after `exec` are parsed by the exec subcommand.")
             case "remctl":
                 parts.append("For RemCTL, pass the numeric `id` field from JSON results to commands such as `edit`, `info`, `done`, `delete`, `flag`, and `unflag`; do not pass the UUID embedded in `deepLink`.")
-                parts.append("Use `--private` only for private Reminders metadata such as synced rich URL attachments, sections, tags, subtasks, images, flags, urgency, assignment, or location alarms. Do not use `--private` for normal due dates or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
+                parts.append("Use `--private` only for private Reminders metadata and private Reminders management surfaces: synced rich URL attachments, tag add/replace/remove, sections, shared-list assignment, subtasks, images, real flags, urgency, Early Reminders, location alarms, Groceries metadata, list appearance and pinning, list groups, smart lists, and templates. Do not use `--private` for normal due dates, recurrence, or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
             case "pocketctl":
                 parts.append("For PocketCTL, prefer `--json` for reads. Before queue, playlist, bookmark, archive, progress, or played-state writes, use the matching command with `--dry-run --json` unless the user explicitly asked to perform the write.")
             case "habitctl":
@@ -856,6 +831,10 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     private func inputSchema(for tool: ToolDefinition) -> [String: Any] {
+        if let schema = tool.mcpBridgeInputSchema?.anyValue as? [String: Any] {
+            return schema
+        }
+
         var properties = [String: Any]()
         var required = [String]()
 
@@ -912,7 +891,7 @@ final class LocalMCPServer: @unchecked Sendable {
         case "args", "argv":
             switch URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() {
             case "remctl":
-                return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Use `--private --url` for synced rich URL attachments and `add --private -f` or `add --private --flag` for real private flag writes, but do not use `--private` for ordinary `edit ID -d DATE` or `edit ID --alarm DATE` calls."
+                return "Exact RemCTL argv items. No shell is used. Use numeric reminder IDs from the `id` JSON field, not UUIDs from `deepLink`. Use `--private --url` for synced rich URL attachments, `edit --private --set-tags` / `--clear-tags` / `--remove-tag` for tag replacement or removal, and `add --private -f` or `add --private --flag` for real private flag writes. Private section, list, group, smart-list, and template commands also require `--private`; ordinary due dates, recurrence, and EventKit alarms do not."
             case "pocketctl":
                 return "Exact PocketCTL argv items. No shell is used. Prefer `--json`; use `--dry-run --json` before queue, playlist, bookmark, archive, progress, or played-state writes unless the user explicitly requested the write."
             case "habitctl":
@@ -925,6 +904,20 @@ final class LocalMCPServer: @unchecked Sendable {
         default:
             return parameter.title
         }
+    }
+
+    private func annotations(for tool: ToolDefinition) -> [String: Any] {
+        var annotations = tool.mcpBridgeAnnotations?.anyValue as? [String: Any] ?? [:]
+        annotations["title"] = tool.name
+        annotations["readOnlyHint"] = tool.capability == .readOnly
+        annotations["destructiveHint"] = tool.capability == .destructive
+        if annotations["idempotentHint"] == nil {
+            annotations["idempotentHint"] = tool.capability == .readOnly && !tool.isGenericCLIAdapter
+        }
+        if annotations["openWorldHint"] == nil {
+            annotations["openWorldHint"] = tool.isGenericCLIAdapter || tool.capability != .readOnly || tool.isMCPBridge
+        }
+        return annotations
     }
 
     private func jsonRPCResult(id: Any?, result: [String: Any], status: HTTPResponse.Status = .ok) -> Data {

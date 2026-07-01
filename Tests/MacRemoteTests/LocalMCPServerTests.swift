@@ -870,7 +870,9 @@ final class LocalMCPServerTests: XCTestCase {
         XCTAssertTrue(description.contains("numeric `id` field"))
         XCTAssertTrue(description.contains("do not pass the UUID embedded in `deepLink`"))
         XCTAssertTrue(description.contains("synced rich URL attachments"))
-        XCTAssertTrue(description.contains("Do not use `--private` for normal due dates or EventKit alarms"))
+        XCTAssertTrue(description.contains("tag add/replace/remove"))
+        XCTAssertTrue(description.contains("list groups, smart lists, and templates"))
+        XCTAssertTrue(description.contains("Do not use `--private` for normal due dates, recurrence, or EventKit alarms"))
 
         let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
         let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
@@ -878,8 +880,10 @@ final class LocalMCPServerTests: XCTestCase {
         let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
         XCTAssertTrue(argsDescription.contains("Use numeric reminder IDs"))
         XCTAssertTrue(argsDescription.contains("Use `--private --url`"))
+        XCTAssertTrue(argsDescription.contains("edit --private --set-tags"))
         XCTAssertTrue(argsDescription.contains("add --private -f"))
-        XCTAssertTrue(argsDescription.contains("do not use `--private`"))
+        XCTAssertTrue(argsDescription.contains("section, list, group, smart-list, and template commands"))
+        XCTAssertTrue(argsDescription.contains("ordinary due dates, recurrence, and EventKit alarms do not"))
     }
 
     func testPocketCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {
@@ -1256,15 +1260,130 @@ final class LocalMCPServerTests: XCTestCase {
             XCTAssertNotNil(name.range(of: #"^[a-zA-Z0-9_-]{1,64}$"#, options: .regularExpression))
         }
     }
+
+    func testMCPBridgeToolExposesUpstreamSchemaAndForwardsJSONArguments() async throws {
+        let bridgeTool = ToolDefinition(
+            id: "mcp.paste.search",
+            name: "Paste Search",
+            summary: "Search Paste through its local MCP server.",
+            executablePath: "",
+            argumentPattern: [],
+            parameters: [],
+            capability: .readOnly,
+            timeoutSeconds: 5,
+            outputByteLimit: 1024 * 1024,
+            origin: .userDefined,
+            category: .developer,
+            permissionRequirements: [.localNetwork],
+            backend: .mcpHTTPBridge,
+            mcpBridge: MCPBridgeConfiguration(
+                serverName: "paste",
+                serverURL: "http://127.0.0.1:39725/mcp",
+                toolName: "search",
+                toolTitle: "Search",
+                toolDescription: "Search clipboard history.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "payload": .object([
+                            "type": .string("object"),
+                            "properties": .object([
+                                "query": .object(["type": .string("string")]),
+                                "count": .object(["type": .string("integer")])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("payload")])
+                ]),
+                annotations: .object([
+                    "readOnlyHint": .bool(true),
+                    "openWorldHint": .bool(false)
+                ])
+            )
+        )
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [bridgeTool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let health = try await getJSON(url: base.appendingPathComponent("health"))
+        XCTAssertEqual(health.json["tool_profile"] as? String, "mcp-bridge")
+
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+        let listedTools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try XCTUnwrap(listedTools.first)
+        let toolName = try XCTUnwrap(listedTool["name"] as? String)
+        XCTAssertEqual(listedTool["title"] as? String, "Paste Search")
+
+        let schema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
+        XCTAssertEqual(schema["type"] as? String, "object")
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        XCTAssertNotNil(properties["payload"] as? [String: Any])
+
+        let annotations = try XCTUnwrap(listedTool["annotations"] as? [String: Any])
+        XCTAssertEqual(annotations["title"] as? String, "Paste Search")
+        XCTAssertEqual(annotations["readOnlyHint"] as? Bool, true)
+        XCTAssertEqual(annotations["destructiveHint"] as? Bool, false)
+        XCTAssertEqual(annotations["openWorldHint"] as? Bool, false)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "call",
+                "method": "tools/call",
+                "params": [
+                    "name": toolName,
+                    "arguments": [
+                        "payload": [
+                            "query": "clip",
+                            "count": 2,
+                            "nested": ["enabled": true]
+                        ]
+                    ]
+                ]
+            ]
+        )
+        XCTAssertEqual(toolCall.statusCode, 200)
+        let result = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try XCTUnwrap(result["structuredContent"] as? [String: Any])
+        let stdout = try XCTUnwrap(structuredContent["stdout"] as? String)
+        let echoedPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
+
+        XCTAssertEqual(echoedPayload["query"] as? String, "clip")
+        XCTAssertEqual(echoedPayload["count"] as? Int, 2)
+        XCTAssertEqual((echoedPayload["nested"] as? [String: Any])?["enabled"] as? Bool, true)
+    }
 }
 
 private struct FakeToolExecutor: ToolExecuting {
     func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
-        ToolExecutionOutcome(
+        let stdout: String
+        if let payload = parameters["payload"] {
+            let data = try? JSONSerialization.data(
+                withJSONObject: payload.jsonValue.anyValue,
+                options: [.sortedKeys]
+            )
+            stdout = data.map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        } else {
+            stdout = "echo:\(parameters["value"]?.stringValue ?? "")"
+        }
+
+        return ToolExecutionOutcome(
             toolID: toolID,
             toolName: "Echo",
             exitCode: 0,
-            stdout: "echo:\(parameters["value"]?.stringValue ?? "")",
+            stdout: stdout,
             stderr: "",
             duration: 0.01,
             timedOut: false,

@@ -136,6 +136,39 @@ MacRemote supports two CLI exposure modes:
   placeholders such as `{query}` become typed MCP parameters. This is the
   safer mode for CLIs where only one subcommand or workflow should be exposed.
 
+MacRemote also supports local MCP bridge backends for MCP servers running on
+the Mac. A bridge tool is persisted as ordinary user tool data, but its backend
+is `mcpHTTPBridge` or `mcpStdioBridge` instead of `process`. HTTP bridge tools
+contain the upstream MCP endpoint URL, upstream server and tool names, optional
+call-time header sources, upstream JSON input schema, and upstream annotations.
+Stdio bridge tools contain the resolved executable path, exact argv array,
+call-time environment value sources, upstream server and tool names, upstream
+JSON input schema, and upstream annotations. Bridge tools must not be converted
+into shell invocations.
+
+The bridge client behaves like a normal MCP client on the host Mac: it sends
+`initialize`, sends `notifications/initialized`, and then forwards remote
+`tools/call` arguments to the selected upstream tool. HTTP bridges also store
+any returned `Mcp-Session-Id` and accept JSON or SSE responses. Stdio bridges
+launch the configured executable directly with its argv array, speak JSON-RPC
+over stdin/stdout, capture stderr for diagnostics, and terminate the upstream
+process after the probe or call. The remote client never receives direct access
+to the upstream local MCP endpoint, executable command surface, or bearer
+tokens; it sees only the MacRemote OAuth-protected tool surface and approval
+gates.
+
+`script/macremotectl scan-mcp` discovers MCP definitions from common local
+agent configs and extension manifests, including Codex, Claude Desktop, Claude
+Code, Claude extension bundles, Cursor, LM Studio, Xcode Coding Assistant,
+Grok, and OpenCode. The app GUI and repo-local CLI can probe and import
+bridgeable HTTP and stdio servers. Literal headers that look like secrets are
+not imported. Header and stdio environment sources should point to environment
+variables, config TOML key paths, or manifest JSON key paths so secrets are
+resolved at call time and not copied into the tool registry. If a local client
+splits one hosted service into multiple MCP auth profiles, MacRemote preserves
+those as separate bridged servers and relies on each wrapper's exposed tool
+list rather than hardcoding service-specific routing.
+
 Tool serialization follows the current MCP tool schema shape:
 
 - `name`: stable programmatic id;
@@ -170,8 +203,10 @@ queries:
   directories;
 - full adapter tool: `remctl.run`, which passes validated argv arrays directly
   to RemCTL;
-- read helper tools: `today`, `upcoming`, `overdue`, `lists`, `sections`,
-  `stats`, `search`, `show`, and `info`;
+- read helper tools: `today`, `upcoming`, `overdue`, `flagged`, `urgent`,
+  `lists`, `groups`, `smart-lists`, `templates`, `sections`, `tags`,
+  `list-symbols`, `stats`, `search`, `show`, `group-info`, `template-info`,
+  `sharees`, `subtasks`, and `info`;
 - helper tools force machine-readable output with global `--format json`;
 - `remctl.run` is annotated as destructive because the full RemCTL CLI includes
   write and delete operations.

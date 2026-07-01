@@ -155,6 +155,95 @@ final class ToolRegistryTests: XCTestCase {
         XCTAssertEqual(tool.origin, .userDefined)
         XCTAssertEqual(tool.category, .utilities)
         XCTAssertEqual(tool.permissionRequirements, [])
+        XCTAssertEqual(tool.backend, .process)
+        XCTAssertNil(tool.mcpBridge)
+    }
+
+    func testMCPBridgeToolValidationDoesNotRequireExecutable() throws {
+        let tool = ToolDefinition(
+            id: "mcp.paste.search",
+            name: "Paste Search",
+            summary: "Search Paste through its local MCP server.",
+            executablePath: "",
+            argumentPattern: [],
+            parameters: [],
+            capability: .readOnly,
+            timeoutSeconds: 10,
+            outputByteLimit: 1024 * 1024,
+            origin: .userDefined,
+            category: .developer,
+            permissionRequirements: [.localNetwork],
+            backend: .mcpHTTPBridge,
+            mcpBridge: MCPBridgeConfiguration(
+                serverName: "paste",
+                serverURL: "http://127.0.0.1:39725/mcp",
+                toolName: "search",
+                toolTitle: "Search",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "query": .object(["type": .string("string")])
+                    ])
+                ]),
+                annotations: .object(["readOnlyHint": .bool(true)])
+            )
+        )
+
+        XCTAssertNoThrow(try ToolArgumentResolver.validate(tool))
+        XCTAssertEqual(tool.preview, "http://127.0.0.1:39725/mcp → search")
+        XCTAssertTrue(tool.isMCPBridge)
+    }
+
+    func testStorePersistsMCPBridgeTools() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ToolRegistryStore(fileURL: temporaryDirectory.appendingPathComponent("tools.json"))
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let tool = ToolDefinition(
+            id: "mcp.local.search",
+            name: "Local Search",
+            summary: "Search a local MCP server.",
+            executablePath: "",
+            argumentPattern: [],
+            parameters: [],
+            capability: .readOnly,
+            timeoutSeconds: 10,
+            outputByteLimit: 1024 * 1024,
+            origin: .userDefined,
+            category: .developer,
+            backend: .mcpHTTPBridge,
+            mcpBridge: MCPBridgeConfiguration(
+                serverName: "local",
+                serverURL: "http://127.0.0.1:4999/mcp",
+                toolName: "search",
+                inputSchema: .object(["type": .string("object")]),
+                headers: [
+                    MCPBridgeHeader(
+                        name: "Authorization",
+                        valueSource: MCPBridgeHeaderValueSource(
+                            kind: .environment,
+                            environmentKey: "LOCAL_MCP_TOKEN",
+                            prefix: "Bearer "
+                        )
+                    )
+                ]
+            )
+        )
+
+        try store.saveUserDefinedTools([tool])
+        XCTAssertEqual(try store.loadUserDefinedTools(), [tool])
+    }
+
+    func testToolArgumentValuePreservesJSONNumbersForBridgeArguments() throws {
+        let value = try XCTUnwrap(ToolArgumentValue.fromJSONObject([
+            "count": 2,
+            "nested": ["enabled": true]
+        ]))
+        let object = try XCTUnwrap(value.jsonValue.objectValue)
+
+        XCTAssertEqual(object["count"], .number(2))
+        XCTAssertEqual(object["nested"], .object(["enabled": .bool(true)]))
     }
 
     func testDefaultPresetsCreateValidUserDefinedTools() throws {

@@ -13,12 +13,12 @@ final class RemCTLToolCatalogTests: XCTestCase {
     }
 
     func testDefaultProfileUsesDirectFullFidelityReadCommands() {
-        XCTAssertEqual(RemCTLToolCatalog.readOnlyTools.count, 9)
+        XCTAssertEqual(RemCTLToolCatalog.readOnlyTools.count, 20)
         XCTAssertFalse(RemCTLToolCatalog.readOnlyTools.contains { $0.argumentPattern.contains("--via-eventkit") })
     }
 
     func testBuiltInProfileIncludesFullRemCTLCLIAdapter() throws {
-        XCTAssertEqual(RemCTLToolCatalog.builtInTools.count, 10)
+        XCTAssertEqual(RemCTLToolCatalog.builtInTools.count, 21)
 
         let tool = try XCTUnwrap(RemCTLToolCatalog.tool(id: "remctl.run"))
         XCTAssertEqual(tool.executablePath, RemCTLToolCatalog.executablePath)
@@ -39,17 +39,17 @@ final class RemCTLToolCatalogTests: XCTestCase {
     func testToolExposureSummaryForDefaultRemCTLProfile() {
         let summary = ToolExposureSummary(tools: RemCTLToolCatalog.builtInTools)
 
-        XCTAssertEqual(summary.total, 10)
-        XCTAssertEqual(summary.readOnly, 9)
+        XCTAssertEqual(summary.total, 21)
+        XCTAssertEqual(summary.readOnly, 20)
         XCTAssertEqual(summary.write, 0)
         XCTAssertEqual(summary.destructive, 1)
         XCTAssertEqual(summary.gatedToolCount, 1)
-        XCTAssertEqual(summary.builtIn, 10)
+        XCTAssertEqual(summary.builtIn, 21)
         XCTAssertEqual(summary.custom, 0)
         XCTAssertEqual(summary.genericAdapters, 1)
         XCTAssertEqual(summary.nonReadOnlyToolNames, ["Run RemCTL"])
         XCTAssertEqual(summary.customDescription, "No custom tools")
-        XCTAssertEqual(summary.capabilityDescription, "9 read-only, 1 host-gated")
+        XCTAssertEqual(summary.capabilityDescription, "20 read-only, 1 host-gated")
     }
 
     func testToolExposureSummaryCountsCustomTools() {
@@ -69,7 +69,7 @@ final class RemCTLToolCatalogTests: XCTestCase {
 
         let summary = ToolExposureSummary(tools: RemCTLToolCatalog.builtInTools + [customTool])
 
-        XCTAssertEqual(summary.total, 11)
+        XCTAssertEqual(summary.total, 22)
         XCTAssertEqual(summary.write, 1)
         XCTAssertEqual(summary.destructive, 1)
         XCTAssertEqual(summary.gatedToolCount, 2)
@@ -106,9 +106,49 @@ final class RemCTLToolCatalogTests: XCTestCase {
         XCTAssertEqual(arguments, ["--format", "json", "stats"])
     }
 
+    func testRemCTL13ReadHelpersUseGlobalJSONFormat() throws {
+        let expected: [String: [String]] = [
+            "remctl.flagged": ["--format", "json", "flagged"],
+            "remctl.urgent": ["--format", "json", "urgent"],
+            "remctl.groups": ["--format", "json", "groups"],
+            "remctl.smart_lists": ["--format", "json", "smart-lists"],
+            "remctl.templates": ["--format", "json", "templates"],
+            "remctl.tags": ["--format", "json", "tags"],
+            "remctl.list_symbols": ["--format", "json", "list-symbols"]
+        ]
+
+        for (toolID, arguments) in expected {
+            XCTAssertEqual(try RemCTLToolCatalog.arguments(for: toolID), arguments)
+        }
+    }
+
+    func testRemCTL13ParameterizedReadHelpersUseGlobalJSONFormat() throws {
+        XCTAssertEqual(
+            try RemCTLToolCatalog.arguments(for: "remctl.group_info", parameters: ["group": "Writing"]),
+            ["--format", "json", "group-info", "Writing"]
+        )
+        XCTAssertEqual(
+            try RemCTLToolCatalog.arguments(for: "remctl.template_info", parameters: ["template": "Packing"]),
+            ["--format", "json", "template-info", "Packing"]
+        )
+        XCTAssertEqual(
+            try RemCTLToolCatalog.arguments(for: "remctl.sharees", parameters: ["list": "Shopping"]),
+            ["--format", "json", "sharees", "Shopping"]
+        )
+        XCTAssertEqual(
+            try RemCTLToolCatalog.arguments(for: "remctl.subtasks", parameters: ["id": "23880"]),
+            ["--format", "json", "subtasks", "23880"]
+        )
+    }
+
+    func testUpcomingAcceptsRemCTL13MaximumDays() throws {
+        let arguments = try RemCTLToolCatalog.arguments(for: "remctl.upcoming", parameters: ["days": "3650"])
+        XCTAssertEqual(arguments, ["--format", "json", "upcoming", "3650"])
+    }
+
     func testUpcomingRejectsOutOfRangeDays() {
         XCTAssertThrowsError(
-            try RemCTLToolCatalog.arguments(for: "remctl.upcoming", parameters: ["days": "45"])
+            try RemCTLToolCatalog.arguments(for: "remctl.upcoming", parameters: ["days": "3651"])
         ) { error in
             XCTAssertEqual(error as? ToolValidationError, .integerOutOfRange("days"))
         }

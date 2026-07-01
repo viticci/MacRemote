@@ -151,6 +151,8 @@ final class ToolCallApprovalCoordinator: @unchecked Sendable {
                 return "\(key)=\(value)"
             case .stringArray(let values):
                 return "\(key)=\(values.joined(separator: " "))"
+            case .json(let value):
+                return "\(key)=\(serializedJSON(value))"
             case nil:
                 return "\(key)=<missing>"
             }
@@ -158,5 +160,31 @@ final class ToolCallApprovalCoordinator: @unchecked Sendable {
 
         let preview = parts.isEmpty ? "No arguments" : parts.joined(separator: " ")
         return String(preview.prefix(700))
+    }
+
+    private static func serializedJSON(_ value: JSONValue) -> String {
+        let wrapper = ["value": value.anyValue]
+        guard JSONSerialization.isValidJSONObject(wrapper),
+              let data = try? JSONSerialization.data(withJSONObject: wrapper, options: [.sortedKeys]),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let wrappedValue = object["value"] else {
+            return "<json>"
+        }
+        if JSONSerialization.isValidJSONObject(wrappedValue),
+           let valueData = try? JSONSerialization.data(withJSONObject: wrappedValue, options: [.sortedKeys]) {
+            return String(decoding: valueData, as: UTF8.self)
+        }
+        switch wrappedValue {
+        case let string as String:
+            return "\"\(string)\""
+        case let bool as Bool:
+            return bool ? "true" : "false"
+        case let number as NSNumber:
+            return number.stringValue
+        case _ as NSNull:
+            return "null"
+        default:
+            return "<json>"
+        }
     }
 }

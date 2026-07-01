@@ -123,6 +123,9 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
             ["add", "Unassigned", "--private", "--unassign", "--json"],
             ["edit", "23829", "--private", "--flagged", "--json"],
             ["edit", "23829", "--private", "--no-flagged", "--json"],
+            ["edit", "23829", "--private", "--set-tags", "work,home", "--json"],
+            ["edit", "23829", "--private", "--clear-tags", "--json"],
+            ["edit", "23829", "--private", "--remove-tag=stale", "--json"],
             ["edit", "23829", "--private", "--location-title", "Apple Park", "--json"],
             ["edit", "23829", "--private", "--latitude", "37.3349", "--json"],
             ["edit", "23829", "--private", "--longitude=-122.0090", "--json"],
@@ -201,8 +204,11 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
             "--no-urgent",
             "--proximity",
             "--radius",
+            "--clear-tags",
+            "--remove-tag",
             "--section",
             "--section-id",
+            "--set-tags",
             "--subtask",
             "--tags",
             "--unassign",
@@ -222,6 +228,25 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
                 normalized.contains("--private"),
                 "`--private` should be preserved for \(flag)"
             )
+        }
+    }
+
+    func testKeepsPrivateForRemCTL13CommandsWhoseValuesLookLikeOldCommandNames() async throws {
+        let cases = [
+            ["list-create", "add", "--private", "--symbol", "education3", "--json"],
+            ["template-create", "edit", "--from-list", "Projects", "--private", "--json"],
+            ["group-create", "show", "--private", "--add-list", "Projects", "--json"],
+            ["smart-list-create", "today", "--private", "--flagged", "--json"],
+            ["section-create", "search", "-l", "Projects", "--private", "--json"]
+        ]
+
+        for arguments in cases {
+            let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+                for: remCTLAdapter(),
+                arguments: arguments
+            ) { _ in nil }
+
+            XCTAssertEqual(normalized, arguments, "Failed to preserve --private for \(arguments)")
         }
     }
 

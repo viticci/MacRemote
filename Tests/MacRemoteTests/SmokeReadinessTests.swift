@@ -187,11 +187,11 @@ final class SmokeReadinessTests: XCTestCase {
         XCTAssertFalse(model.isToolIDExposed("remctl.today"))
         XCTAssertFalse(model.isToolIDExposed("custom.echo"))
         XCTAssertTrue(model.isToolIDExposed("remctl.upcoming"))
-        XCTAssertEqual(model.toolExposureSummary.total, 9)
+        XCTAssertEqual(model.toolExposureSummary.total, RemCTLToolCatalog.builtInTools.count - 1)
 
         XCTAssertNil(model.setToolEnabled(id: "remctl.today", enabled: true))
         XCTAssertTrue(model.isToolIDExposed("remctl.today"))
-        XCTAssertEqual(model.toolExposureSummary.total, 10)
+        XCTAssertEqual(model.toolExposureSummary.total, RemCTLToolCatalog.builtInTools.count)
     }
 
     @MainActor

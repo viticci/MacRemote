@@ -5,6 +5,7 @@ struct ToolsView: View {
     @State private var isShowingAddTool = false
     @State private var draft = ToolDefinitionDraft()
     @State private var errorMessage: String?
+    @State private var selectedTab: ToolsTab = .clis
 
     var body: some View {
         ScrollView {
@@ -17,35 +18,41 @@ struct ToolsView: View {
 
                     Spacer()
 
-                    Button("Add Tool", systemImage: "plus") {
-                        draft = ToolDefinitionDraft()
-                        errorMessage = nil
-                        isShowingAddTool = true
+                    Picker("Tool Type", selection: $selectedTab) {
+                        ForEach(ToolsTab.allCases) { tab in
+                            Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                }
+                    .pickerStyle(.segmented)
+                    .frame(width: 260)
 
-                ToolSurfaceControlPanel(errorMessage: $errorMessage)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(
-                        "Commands",
-                        subtitle: "Every tool is an explicit executable plus argv definition. Toggle exposure per tool."
-                    )
-
-                    if orderedTools.isEmpty {
-                        EmptyToolSurfaceView {
+                    if selectedTab == .clis {
+                        Button("Add Tool", systemImage: "plus") {
                             draft = ToolDefinitionDraft()
                             errorMessage = nil
                             isShowingAddTool = true
                         }
-                    } else {
-                        ForEach(orderedTools) { tool in
-                            ToolPanel(tool: tool) {
-                                errorMessage = appModel.deleteUserTool(id: tool.id)
-                            }
-                        }
+                        .buttonStyle(.borderedProminent)
                     }
+                }
+
+                ToolSurfaceControlPanel(errorMessage: $errorMessage)
+
+                switch selectedTab {
+                case .clis:
+                    CLIToolsSection(
+                        tools: orderedCLITools,
+                        addAction: {
+                            draft = ToolDefinitionDraft()
+                            errorMessage = nil
+                            isShowingAddTool = true
+                        },
+                        deleteAction: { tool in
+                            errorMessage = appModel.deleteUserTool(id: tool.id)
+                        }
+                    )
+                case .localMCPs:
+                    LocalMCPToolsView(errorMessage: $errorMessage)
                 }
             }
             .padding(24)
@@ -76,12 +83,58 @@ struct ToolsView: View {
         }
     }
 
-    private var orderedTools: [ToolDefinition] {
-        appModel.tools.sorted { lhs, rhs in
+    private var orderedCLITools: [ToolDefinition] {
+        appModel.tools.filter { !$0.isMCPBridge }.sorted { lhs, rhs in
             if lhs.category.title != rhs.category.title {
                 return lhs.category.title < rhs.category.title
             }
             return lhs.name < rhs.name
+        }
+    }
+}
+
+private enum ToolsTab: String, CaseIterable, Identifiable {
+    case clis
+    case localMCPs
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .clis: "CLIs"
+        case .localMCPs: "Local MCPs"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .clis: "terminal"
+        case .localMCPs: "point.3.connected.trianglepath.dotted"
+        }
+    }
+}
+
+private struct CLIToolsSection: View {
+    let tools: [ToolDefinition]
+    let addAction: () -> Void
+    let deleteAction: (ToolDefinition) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                "CLIs",
+                subtitle: "Expose exact executables through CLI adapters or narrow command templates."
+            )
+
+            if tools.isEmpty {
+                EmptyToolSurfaceView(addAction: addAction)
+            } else {
+                ForEach(tools) { tool in
+                    ToolPanel(tool: tool) {
+                        deleteAction(tool)
+                    }
+                }
+            }
         }
     }
 }
@@ -203,7 +256,11 @@ private struct ToolPanel: View {
                 }
             }
 
-            CommandLineView(executable: tool.executablePath, arguments: tool.argumentPattern)
+            if let bridge = tool.mcpBridge {
+                MCPBridgeLineView(bridge: bridge)
+            } else {
+                CommandLineView(executable: tool.executablePath, arguments: tool.argumentPattern)
+            }
 
             if !tool.parameters.isEmpty {
                 Divider()
@@ -247,7 +304,7 @@ private struct ToolBadgeStrip: View {
     var body: some View {
         HStack(spacing: 7) {
             StatusBadge(title: tool.category.title, systemImage: tool.category.systemImage, tint: .secondary)
-            StatusBadge(title: tool.isGenericCLIAdapter ? "CLI Adapter" : "Template", systemImage: "slider.horizontal.3", tint: .blue)
+            StatusBadge(title: toolModeTitle, systemImage: tool.isMCPBridge ? "point.3.connected.trianglepath.dotted" : "slider.horizontal.3", tint: .blue)
             StatusBadge(title: tool.capability.title, systemImage: tool.capability.systemImage, tint: capabilityTint)
 
             ForEach(tool.permissionRequirements, id: \.self) { requirement in
@@ -262,6 +319,13 @@ private struct ToolBadgeStrip: View {
         case .write: .orange
         case .destructive: .red
         }
+    }
+
+    private var toolModeTitle: String {
+        if tool.isMCPBridge {
+            return "MCP Bridge"
+        }
+        return tool.isGenericCLIAdapter ? "CLI Adapter" : "Template"
     }
 }
 

@@ -44,6 +44,9 @@ final class AppModel {
             persistBrrrSettings()
         }
     }
+    var localMCPScanState: LocalMCPScanState = .idle
+    var localMCPWorkingServerID: String?
+    var localMCPErrorMessage: String?
 
     private static let instanceIDKey = "MacRemote.instanceID"
     private static let remCTLProfileEnabledKey = "MacRemote.remCTLProfileEnabled"
@@ -72,6 +75,7 @@ final class AppModel {
     private let pushoverSender: any PushoverSending
     private let brrrSender: any BrrrSending
     private let processRunner = ProcessRunner()
+    private let localMCPScanner: LocalMCPScanner
     private var authCoordinator: OAuthCoordinator!
     private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
     private var localServer: LocalMCPServer?
@@ -83,7 +87,8 @@ final class AppModel {
         toolStore: ToolRegistryStore = ToolRegistryStore(),
         oauthGrantStore: OAuthGrantStore? = nil,
         pushoverSender: any PushoverSending = PushoverService(),
-        brrrSender: any BrrrSending = BrrrService()
+        brrrSender: any BrrrSending = BrrrService(),
+        localMCPScanner: LocalMCPScanner = LocalMCPScanner()
     ) {
         self.userDefaults = userDefaults
         self.toolStore = toolStore
@@ -92,6 +97,7 @@ final class AppModel {
         self.toolSurfaceRuntime = ToolSurfaceRuntime(environment: Self.toolEnvironment)
         self.pushoverSender = pushoverSender
         self.brrrSender = brrrSender
+        self.localMCPScanner = localMCPScanner
         self.pushoverSettings = Self.loadPushoverSettings(from: userDefaults)
         self.brrrSettings = Self.loadBrrrSettings(from: userDefaults)
         let loadedConnectorProvider = Self.loadConnectorProvider(from: userDefaults)
@@ -567,6 +573,89 @@ final class AppModel {
             appendLog(level: .error, "Could not add tools from \(sourceName): \(error.localizedDescription)")
             return error.localizedDescription
         }
+    }
+
+    func scanLocalMCPServers() {
+        guard !localMCPScanState.isScanning else {
+            appendLog(level: .warning, "Local MCP scan is already running.")
+            return
+        }
+
+        localMCPScanState = .scanning
+        localMCPErrorMessage = nil
+        appendLog(level: .info, "Scanning this Mac for local MCP servers.")
+        let scanner = localMCPScanner
+
+        Task {
+            let candidates = await scanner.scan(includeRemote: false, probe: true)
+            localMCPScanState = .loaded(candidates, Date())
+            let bridgeableCount = candidates.filter(\.bridgeable).count
+            appendLog(level: .info, "Found \(candidates.count) MCP server\(candidates.count == 1 ? "" : "s"); \(bridgeableCount) bridgeable.")
+        }
+    }
+
+    func importLocalMCPServer(candidateID: String) {
+        guard localMCPWorkingServerID == nil else {
+            appendLog(level: .warning, "Wait for the current Local MCP import to finish.")
+            return
+        }
+        guard var candidate = localMCPScanState.candidate(id: candidateID) else {
+            localMCPErrorMessage = "Scan this Mac before importing that MCP server."
+            return
+        }
+        guard candidate.bridgeable else {
+            localMCPErrorMessage = candidate.reason ?? "This MCP server is scan-only."
+            return
+        }
+
+        localMCPWorkingServerID = candidateID
+        localMCPErrorMessage = nil
+        let scanner = localMCPScanner
+
+        Task {
+            do {
+                if candidate.probe?.tools.isEmpty ?? true {
+                    candidate.probe = try await scanner.probe(candidate: candidate)
+                }
+                let bridgeTools = try scanner.bridgeTools(for: candidate)
+                let replaced = try replaceLocalMCPBridgeTools(bridgeTools, bridgeIdentity: candidate.bridgeIdentity)
+                localMCPScanState = localMCPScanState.replacingCandidate(candidate)
+                localMCPWorkingServerID = nil
+                appendLog(
+                    level: .info,
+                    "Imported \(bridgeTools.count) tools from \(candidate.displayName). Replaced \(replaced) existing bridge tool\(replaced == 1 ? "" : "s")."
+                )
+            } catch {
+                localMCPWorkingServerID = nil
+                localMCPErrorMessage = error.localizedDescription
+                appendLog(level: .error, "Local MCP import failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func setLocalMCPBridgeServerEnabled(bridgeIdentity: String, enabled: Bool) -> String? {
+        let serverTools = tools.filter { $0.mcpBridgeIdentity == bridgeIdentity }
+        guard !serverTools.isEmpty else {
+            return "No imported tools found for that MCP server."
+        }
+
+        if enabled {
+            for tool in serverTools {
+                disabledToolIDs.remove(tool.id)
+            }
+        } else {
+            for tool in serverTools {
+                disabledToolIDs.insert(tool.id)
+            }
+        }
+
+        persistToolExposureState()
+        syncRunningToolSurface()
+        appendLog(
+            level: enabled ? .info : .warning,
+            "\(enabled ? "Enabled" : "Disabled") \(serverTools.count) bridge tools for \(serverTools.first?.mcpBridgeServerName ?? "Local MCP")."
+        )
+        return nil
     }
 
     func deleteUserTool(id: String) -> String? {
@@ -1332,6 +1421,38 @@ final class AppModel {
         }
     }
 
+    private func replaceLocalMCPBridgeTools(_ bridgeTools: [ToolDefinition], bridgeIdentity: String?) throws -> Int {
+        guard let bridgeIdentity else {
+            throw ToolValidationError.invalidMCPBridge("bridge identity is missing")
+        }
+
+        let originalTools = tools
+        let originalDisabledToolIDs = disabledToolIDs
+        let replacedToolIDs = tools
+            .filter { $0.mcpBridgeIdentity == bridgeIdentity }
+            .map(\.id)
+
+        do {
+            tools.removeAll { $0.mcpBridgeIdentity == bridgeIdentity }
+            for toolID in replacedToolIDs {
+                disabledToolIDs.remove(toolID)
+                clientToolPermissionSnapshot = clientToolPermissionStore.removeToolIDFromAllClients(toolID)
+            }
+            for tool in bridgeTools {
+                appendTool(tool)
+            }
+
+            try persistUserDefinedTools()
+            persistToolExposureState()
+            syncRunningToolSurface()
+            return replacedToolIDs.count
+        } catch {
+            tools = originalTools
+            disabledToolIDs = originalDisabledToolIDs
+            throw error
+        }
+    }
+
     private static func toolSignature(_ tool: ToolDefinition) -> String {
         toolSignature(executablePath: tool.executablePath, argumentPattern: tool.argumentPattern)
     }
@@ -1365,8 +1486,8 @@ final class AppModel {
         userDefaults.set(isRemCTLProfileEnabled, forKey: Self.remCTLProfileEnabledKey)
     }
 
-    private func toolExecutorSnapshot() -> ConfiguredToolExecutor {
-        ConfiguredToolExecutor(tools: exposedTools, environment: AppModel.toolEnvironment)
+    private func toolExecutorSnapshot() -> ToolSurfaceRuntime {
+        ToolSurfaceRuntime(tools: exposedTools, environment: AppModel.toolEnvironment)
     }
 
     private func syncRunningToolSurface() {

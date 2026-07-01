@@ -350,6 +350,56 @@ Current MCP tool descriptions include `title`, `description`, `inputSchema`,
 `outputSchema`, and tool `annotations` such as `readOnlyHint`,
 `destructiveHint`, `idempotentHint`, and `openWorldHint`.
 
+### Local MCP Bridge
+
+MacRemote can also import tools from local MCP servers and
+re-expose them through the remote MacRemote MCP surface. This is for Mac-only
+MCP servers already attached to local clients such as Claude Code, Codex,
+Grok, OpenCode, Cursor, LM Studio, Xcode Coding Assistant, or Claude Desktop.
+
+In the app, open **Tools → Local MCPs**, then use **Scan This Mac** to detect
+local servers, inspect their upstream tools, import or refresh bridge tools,
+and enable or disable the imported server surface.
+
+Bridge tools do not use a shell. For streamable HTTP/SSE servers, MacRemote
+initializes the upstream MCP server over HTTP, tracks the negotiated
+`Mcp-Session-Id`, forwards exact JSON arguments to `tools/call`, and returns
+the upstream result as the MacRemote tool output. For stdio servers, MacRemote
+launches the configured executable path directly with its configured argv,
+speaks JSON-RPC over stdin/stdout, forwards exact JSON arguments to
+`tools/call`, and terminates the short-lived upstream process after the probe
+or call. Upstream `inputSchema` and tool annotations are preserved where
+available.
+
+Scan known local agent configs and Claude extension manifests:
+
+```bash
+script/macremotectl scan-mcp --json --probe
+```
+
+Import a detected local MCP server from the CLI:
+
+```bash
+script/macremotectl add-mcp-server claude_extension.paste --replace
+```
+
+Or import a direct endpoint:
+
+```bash
+script/macremotectl add-mcp-server http://127.0.0.1:39725/mcp --name Paste --replace
+```
+
+By default, CLI imports allow local stdio MCP servers and loopback HTTP MCP
+endpoints. Remote HTTPS MCP URLs require `--include-remote`. Secret-looking
+literal headers are refused; use environment-backed headers, TOML config
+references, or extension manifest references so tokens are resolved at call
+time instead of copied into MacRemote's tool registry.
+
+When a local client splits one upstream service into multiple MCP auth profiles,
+MacRemote imports each configured server as its own bridge. MacRemote preserves
+the upstream tool list exposed by each wrapper, so service-specific filtering
+stays in the wrapper instead of becoming product-specific MacRemote behavior.
+
 ## Presets
 
 The app detects installed commands and offers:

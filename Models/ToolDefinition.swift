@@ -19,6 +19,138 @@ enum ToolOrigin: String, Codable, Sendable {
     case userDefined
 }
 
+enum ToolBackend: String, Codable, Sendable {
+    case process
+    case mcpHTTPBridge
+    case mcpStdioBridge
+}
+
+enum MCPBridgeHeaderValueSourceKind: String, Codable, Sendable {
+    case environment
+    case jsonFile
+    case tomlFile
+}
+
+struct MCPBridgeHeaderValueSource: Codable, Hashable, Sendable {
+    let kind: MCPBridgeHeaderValueSourceKind
+    let environmentKey: String?
+    let filePath: String?
+    let keyPath: [String]?
+    let prefix: String?
+
+    init(
+        kind: MCPBridgeHeaderValueSourceKind,
+        environmentKey: String? = nil,
+        filePath: String? = nil,
+        keyPath: [String]? = nil,
+        prefix: String? = nil
+    ) {
+        self.kind = kind
+        self.environmentKey = environmentKey
+        self.filePath = filePath
+        self.keyPath = keyPath
+        self.prefix = prefix
+    }
+}
+
+struct MCPBridgeHeader: Codable, Hashable, Sendable {
+    let name: String
+    let value: String?
+    let valueSource: MCPBridgeHeaderValueSource?
+
+    init(name: String, value: String? = nil, valueSource: MCPBridgeHeaderValueSource? = nil) {
+        self.name = name
+        self.value = value
+        self.valueSource = valueSource
+    }
+}
+
+struct MCPBridgeConfiguration: Codable, Hashable, Sendable {
+    let serverName: String
+    let serverURL: String
+    let toolName: String
+    let toolTitle: String?
+    let toolDescription: String?
+    let inputSchema: JSONValue?
+    let annotations: JSONValue?
+    let protocolVersion: String
+    let headers: [MCPBridgeHeader]
+
+    init(
+        serverName: String,
+        serverURL: String,
+        toolName: String,
+        toolTitle: String? = nil,
+        toolDescription: String? = nil,
+        inputSchema: JSONValue? = nil,
+        annotations: JSONValue? = nil,
+        protocolVersion: String = "2025-06-18",
+        headers: [MCPBridgeHeader] = []
+    ) {
+        self.serverName = serverName
+        self.serverURL = serverURL
+        self.toolName = toolName
+        self.toolTitle = toolTitle
+        self.toolDescription = toolDescription
+        self.inputSchema = inputSchema
+        self.annotations = annotations
+        self.protocolVersion = protocolVersion
+        self.headers = headers
+    }
+}
+
+struct MCPStdioEnvironmentVariable: Codable, Hashable, Sendable {
+    let name: String
+    let value: String?
+    let valueSource: MCPBridgeHeaderValueSource?
+
+    init(name: String, value: String? = nil, valueSource: MCPBridgeHeaderValueSource? = nil) {
+        self.name = name
+        self.value = value
+        self.valueSource = valueSource
+    }
+}
+
+struct MCPStdioBridgeConfiguration: Codable, Hashable, Sendable {
+    let serverName: String
+    let command: String
+    let args: [String]
+    let startupTimeoutSeconds: TimeInterval?
+    let toolName: String
+    let toolTitle: String?
+    let toolDescription: String?
+    let inputSchema: JSONValue?
+    let annotations: JSONValue?
+    let protocolVersion: String
+    let environment: [MCPStdioEnvironmentVariable]
+
+    init(
+        serverName: String,
+        command: String,
+        args: [String] = [],
+        startupTimeoutSeconds: TimeInterval? = nil,
+        toolName: String,
+        toolTitle: String? = nil,
+        toolDescription: String? = nil,
+        inputSchema: JSONValue? = nil,
+        annotations: JSONValue? = nil,
+        protocolVersion: String = "2025-06-18",
+        environment: [MCPStdioEnvironmentVariable] = []
+    ) {
+        self.serverName = serverName
+        self.command = command
+        self.args = args
+        self.startupTimeoutSeconds = startupTimeoutSeconds
+        self.toolName = toolName
+        self.toolTitle = toolTitle
+        self.toolDescription = toolDescription
+        self.inputSchema = inputSchema
+        self.annotations = annotations
+        self.protocolVersion = protocolVersion
+        self.environment = environment
+    }
+}
+
 enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
     case reminders
     case habits
@@ -119,19 +251,80 @@ enum ToolParameterKind: String, Codable, Sendable {
 enum ToolArgumentValue: Equatable, Sendable {
     case string(String)
     case stringArray([String])
+    case json(JSONValue)
 
     var stringValue: String? {
-        if case .string(let value) = self {
+        switch self {
+        case .string(let value):
             return value
+        case .json(.string(let value)):
+            return value
+        case .json(.number(let value)) where value.rounded() == value:
+            return String(Int(value))
+        default:
+            return nil
         }
-        return nil
     }
 
     var stringArrayValue: [String]? {
-        if case .stringArray(let value) = self {
+        switch self {
+        case .stringArray(let value):
+            return value
+        case .json(.array(let values)):
+            let strings = values.compactMap { value -> String? in
+                if case .string(let string) = value {
+                    return string
+                }
+                return nil
+            }
+            return strings.count == values.count ? strings : nil
+        default:
+            return nil
+        }
+    }
+
+    var jsonValue: JSONValue {
+        switch self {
+        case .string(let value):
+            return .string(value)
+        case .stringArray(let value):
+            return .array(value.map(JSONValue.string))
+        case .json(let value):
             return value
         }
-        return nil
+    }
+
+    static func fromJSONObject(_ value: Any) -> ToolArgumentValue? {
+        switch value {
+        case let string as String:
+            return .string(string)
+        case let int as Int:
+            return .json(.number(Double(int)))
+        case let double as Double:
+            guard double.isFinite else { return nil }
+            return .json(.number(double))
+        case let strings as [String]:
+            return .stringArray(strings)
+        case let array as [Any]:
+            let values = array.compactMap { item -> String? in
+                switch item {
+                case let string as String:
+                    return string
+                case let int as Int:
+                    return String(int)
+                case let double as Double where double.rounded() == double:
+                    return String(Int(double))
+                default:
+                    return nil
+                }
+            }
+            if values.count == array.count {
+                return .stringArray(values)
+            }
+            return JSONValue.fromJSONObject(value).map(ToolArgumentValue.json)
+        default:
+            return JSONValue.fromJSONObject(value).map(ToolArgumentValue.json)
+        }
     }
 }
 
@@ -216,9 +409,18 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let origin: ToolOrigin
     let category: ToolCategory
     let permissionRequirements: [ToolPermissionRequirement]
+    let backend: ToolBackend
+    let mcpBridge: MCPBridgeConfiguration?
+    let mcpStdioBridge: MCPStdioBridgeConfiguration?
 
     var preview: String {
-        ([executablePath] + argumentPattern).joined(separator: " ")
+        if let mcpBridge {
+            return "\(mcpBridge.serverURL) → \(mcpBridge.toolName)"
+        }
+        if let mcpStdioBridge {
+            return "\(([mcpStdioBridge.command] + mcpStdioBridge.args).joined(separator: " ")) → \(mcpStdioBridge.toolName)"
+        }
+        return ([executablePath] + argumentPattern).joined(separator: " ")
     }
 
     var isUserDefined: Bool {
@@ -226,7 +428,46 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     }
 
     var isGenericCLIAdapter: Bool {
-        argumentPattern == ["{args}"] || argumentPattern == ["{argv}"]
+        backend == .process && (argumentPattern == ["{args}"] || argumentPattern == ["{argv}"])
+    }
+
+    var isMCPBridge: Bool {
+        (backend == .mcpHTTPBridge && mcpBridge != nil) ||
+            (backend == .mcpStdioBridge && mcpStdioBridge != nil)
+    }
+
+    var mcpBridgeIdentity: String? {
+        if let mcpBridge {
+            return "http:\(mcpBridge.serverURL)"
+        }
+        if let mcpStdioBridge {
+            return "stdio:\(([mcpStdioBridge.command] + mcpStdioBridge.args).joined(separator: "\u{1f}"))"
+        }
+        return nil
+    }
+
+    var mcpBridgeServerName: String? {
+        mcpBridge?.serverName ?? mcpStdioBridge?.serverName
+    }
+
+    var mcpBridgeToolName: String? {
+        mcpBridge?.toolName ?? mcpStdioBridge?.toolName
+    }
+
+    var mcpBridgeToolTitle: String? {
+        mcpBridge?.toolTitle ?? mcpStdioBridge?.toolTitle
+    }
+
+    var mcpBridgeToolDescription: String? {
+        mcpBridge?.toolDescription ?? mcpStdioBridge?.toolDescription
+    }
+
+    var mcpBridgeInputSchema: JSONValue? {
+        mcpBridge?.inputSchema ?? mcpStdioBridge?.inputSchema
+    }
+
+    var mcpBridgeAnnotations: JSONValue? {
+        mcpBridge?.annotations ?? mcpStdioBridge?.annotations
     }
 
     enum CodingKeys: String, CodingKey {
@@ -242,6 +483,9 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         case origin
         case category
         case permissionRequirements
+        case backend
+        case mcpBridge
+        case mcpStdioBridge
     }
 
     init(
@@ -256,7 +500,10 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         outputByteLimit: Int,
         origin: ToolOrigin = .builtIn,
         category: ToolCategory = .utilities,
-        permissionRequirements: [ToolPermissionRequirement] = []
+        permissionRequirements: [ToolPermissionRequirement] = [],
+        backend: ToolBackend = .process,
+        mcpBridge: MCPBridgeConfiguration? = nil,
+        mcpStdioBridge: MCPStdioBridgeConfiguration? = nil
     ) {
         self.id = id
         self.name = name
@@ -270,6 +517,9 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         self.origin = origin
         self.category = category
         self.permissionRequirements = permissionRequirements
+        self.backend = backend
+        self.mcpBridge = mcpBridge
+        self.mcpStdioBridge = mcpStdioBridge
     }
 
     init(from decoder: Decoder) throws {
@@ -286,6 +536,9 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         origin = try container.decodeIfPresent(ToolOrigin.self, forKey: .origin) ?? .userDefined
         category = try container.decodeIfPresent(ToolCategory.self, forKey: .category) ?? .utilities
         permissionRequirements = try container.decodeIfPresent([ToolPermissionRequirement].self, forKey: .permissionRequirements) ?? []
+        backend = try container.decodeIfPresent(ToolBackend.self, forKey: .backend) ?? .process
+        mcpBridge = try container.decodeIfPresent(MCPBridgeConfiguration.self, forKey: .mcpBridge)
+        mcpStdioBridge = try container.decodeIfPresent(MCPStdioBridgeConfiguration.self, forKey: .mcpStdioBridge)
     }
 }
 
@@ -301,6 +554,7 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
     case undefinedPlaceholder(String)
     case invalidTimeout
     case invalidOutputLimit
+    case invalidMCPBridge(String)
     case missingParameter(String)
     case invalidInteger(String)
     case integerOutOfRange(String)
@@ -321,6 +575,7 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
         case .undefinedPlaceholder(let name): "Argument placeholder has no matching parameter: \(name)"
         case .invalidTimeout: "Timeout must be between 1 and 60 seconds."
         case .invalidOutputLimit: "Output limit must be between 1 KB and 5 MB."
+        case .invalidMCPBridge(let detail): "Invalid MCP bridge: \(detail)"
         case .missingParameter(let name): "Missing parameter: \(name)"
         case .invalidInteger(let name): "Expected integer for parameter: \(name)"
         case .integerOutOfRange(let name): "Integer parameter out of range: \(name)"

@@ -43,154 +43,226 @@ enum RemCTLToolCatalog {
 
     static var readOnlyTools: [ToolDefinition] {
         [
+            readOnlyTool(
+                id: "remctl.today",
+                name: "Today",
+                summary: "Return due today and overdue reminders.",
+                argumentPattern: ["--format", "json", "today"]
+            ),
+            readOnlyTool(
+                id: "remctl.upcoming",
+                name: "Upcoming",
+                summary: "Return reminders due in the next N days.",
+                argumentPattern: ["--format", "json", "upcoming", "{days}"],
+                parameters: [
+                    ToolParameter(
+                        name: "days",
+                        title: "Days",
+                        kind: .integer,
+                        required: false,
+                        defaultValue: "7",
+                        integerRange: 1...3650
+                    )
+                ],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.overdue",
+                name: "Overdue",
+                summary: "Return all overdue reminders.",
+                argumentPattern: ["--format", "json", "overdue"]
+            ),
+            readOnlyTool(
+                id: "remctl.flagged",
+                name: "Flagged",
+                summary: "Return flagged reminders.",
+                argumentPattern: ["--format", "json", "flagged"]
+            ),
+            readOnlyTool(
+                id: "remctl.urgent",
+                name: "Urgent",
+                summary: "Return urgent reminders.",
+                argumentPattern: ["--format", "json", "urgent"]
+            ),
+            readOnlyTool(
+                id: "remctl.lists",
+                name: "Lists",
+                summary: "Return all iCloud reminder lists.",
+                argumentPattern: ["--format", "json", "lists"]
+            ),
+            readOnlyTool(
+                id: "remctl.groups",
+                name: "Groups",
+                summary: "Return Reminders list groups and child-list counts.",
+                argumentPattern: ["--format", "json", "groups"],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.smart_lists",
+                name: "Smart Lists",
+                summary: "Return Reminders smart lists and decoded filter metadata.",
+                argumentPattern: ["--format", "json", "smart-lists"],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.templates",
+                name: "Templates",
+                summary: "Return saved Reminders templates.",
+                argumentPattern: ["--format", "json", "templates"],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.sections",
+                name: "Sections",
+                summary: "Return sections across iCloud reminder lists.",
+                argumentPattern: ["--format", "json", "sections"]
+            ),
+            readOnlyTool(
+                id: "remctl.tags",
+                name: "Tags",
+                summary: "Return synced Reminders hashtag labels.",
+                argumentPattern: ["--format", "json", "tags"]
+            ),
+            readOnlyTool(
+                id: "remctl.list_symbols",
+                name: "List Symbols",
+                summary: "Return official Reminders list badge symbol names.",
+                argumentPattern: ["--format", "json", "list-symbols"]
+            ),
+            readOnlyTool(
+                id: "remctl.stats",
+                name: "Stats",
+                summary: "Return reminder database statistics.",
+                argumentPattern: ["--format", "json", "stats"]
+            ),
+            readOnlyTool(
+                id: "remctl.search",
+                name: "Search",
+                summary: "Search reminders by query.",
+                argumentPattern: ["--format", "json", "search", "{query}"],
+                parameters: [
+                    ToolParameter(
+                        name: "query",
+                        title: "Query",
+                        kind: .string,
+                        maximumLength: 160
+                    )
+                ],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.show",
+                name: "Show List",
+                summary: "Show reminders in a named list or group.",
+                argumentPattern: ["--format", "json", "show", "{list}"],
+                parameters: [
+                    ToolParameter(
+                        name: "list",
+                        title: "List",
+                        kind: .string,
+                        maximumLength: 80
+                    )
+                ],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.group_info",
+                name: "Group Info",
+                summary: "Return details for one Reminders list group.",
+                argumentPattern: ["--format", "json", "group-info", "{group}"],
+                parameters: [
+                    ToolParameter(
+                        name: "group",
+                        title: "Group",
+                        kind: .string,
+                        maximumLength: 120
+                    )
+                ],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.template_info",
+                name: "Template Info",
+                summary: "Return saved reminders and metadata for one Reminders template.",
+                argumentPattern: ["--format", "json", "template-info", "{template}"],
+                parameters: [
+                    ToolParameter(
+                        name: "template",
+                        title: "Template",
+                        kind: .string,
+                        maximumLength: 160
+                    )
+                ],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.sharees",
+                name: "Sharees",
+                summary: "Return people available for assignment in a shared list.",
+                argumentPattern: ["--format", "json", "sharees", "{list}"],
+                parameters: [
+                    ToolParameter(
+                        name: "list",
+                        title: "List",
+                        kind: .string,
+                        maximumLength: 80
+                    )
+                ]
+            ),
+            readOnlyTool(
+                id: "remctl.subtasks",
+                name: "Subtasks",
+                summary: "Return subtasks for a numeric reminder id.",
+                argumentPattern: ["--format", "json", "subtasks", "{id}"],
+                parameters: [
+                    ToolParameter(
+                        name: "id",
+                        title: "Reminder ID",
+                        kind: .integer,
+                        integerRange: 1...999_999_999
+                    )
+                ],
+                outputByteLimit: 1024 * 1024
+            ),
+            readOnlyTool(
+                id: "remctl.info",
+                name: "Reminder Info",
+                summary: "Return detail for a numeric reminder id.",
+                argumentPattern: ["--format", "json", "info", "{id}"],
+                parameters: [
+                    ToolParameter(
+                        name: "id",
+                        title: "Reminder ID",
+                        kind: .integer,
+                        integerRange: 1...999_999_999
+                    )
+                ]
+            )
+        ]
+    }
+
+    private static func readOnlyTool(
+        id: String,
+        name: String,
+        summary: String,
+        argumentPattern: [String],
+        parameters: [ToolParameter] = [],
+        timeoutSeconds: Double = 10,
+        outputByteLimit: Int = 512 * 1024
+    ) -> ToolDefinition {
         ToolDefinition(
-            id: "remctl.today",
-            name: "Today",
-            summary: "Return due today and overdue reminders.",
+            id: id,
+            name: name,
+            summary: summary,
             executablePath: executablePath,
-            argumentPattern: ["--format", "json", "today"],
-            parameters: [],
+            argumentPattern: argumentPattern,
+            parameters: parameters,
             capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.upcoming",
-            name: "Upcoming",
-            summary: "Return reminders due in the next N days.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "upcoming", "{days}"],
-            parameters: [
-                ToolParameter(
-                    name: "days",
-                    title: "Days",
-                    kind: .integer,
-                    required: false,
-                    defaultValue: "7",
-                    integerRange: 1...31
-                )
-            ],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 1024 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.overdue",
-            name: "Overdue",
-            summary: "Return all overdue reminders.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "overdue"],
-            parameters: [],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.lists",
-            name: "Lists",
-            summary: "Return all iCloud reminder lists.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "lists"],
-            parameters: [],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.sections",
-            name: "Sections",
-            summary: "Return sections across iCloud reminder lists.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "sections"],
-            parameters: [],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.stats",
-            name: "Stats",
-            summary: "Return reminder database statistics.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "stats"],
-            parameters: [],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.search",
-            name: "Search",
-            summary: "Search reminders by query.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "search", "{query}"],
-            parameters: [
-                ToolParameter(
-                    name: "query",
-                    title: "Query",
-                    kind: .string,
-                    maximumLength: 160
-                )
-            ],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 1024 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.show",
-            name: "Show List",
-            summary: "Show reminders in a named list.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "show", "{list}"],
-            parameters: [
-                ToolParameter(
-                    name: "list",
-                    title: "List",
-                    kind: .string,
-                    maximumLength: 80
-                )
-            ],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 1024 * 1024,
-            category: .reminders,
-            permissionRequirements: permissionRequirements
-        ),
-        ToolDefinition(
-            id: "remctl.info",
-            name: "Reminder Info",
-            summary: "Return detail for a numeric reminder id.",
-            executablePath: executablePath,
-            argumentPattern: ["--format", "json", "info", "{id}"],
-            parameters: [
-                ToolParameter(
-                    name: "id",
-                    title: "Reminder ID",
-                    kind: .integer,
-                    integerRange: 1...999_999_999
-                )
-            ],
-            capability: .readOnly,
-            timeoutSeconds: 10,
-            outputByteLimit: 512 * 1024,
+            timeoutSeconds: timeoutSeconds,
+            outputByteLimit: outputByteLimit,
             category: .reminders,
             permissionRequirements: permissionRequirements
         )
-        ]
     }
 
     static var builtInTools: [ToolDefinition] { [fullCLITool] + readOnlyTools }

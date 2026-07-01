@@ -236,6 +236,35 @@ struct CommandLineView: View {
     }
 }
 
+struct MCPBridgeLineView: View {
+    let bridge: MCPBridgeConfiguration
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("MCP Bridge")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Text(bridge.serverURL)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "arrow.right")
+                    .foregroundStyle(.secondary)
+                Text(bridge.toolName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(.system(.callout, design: .monospaced))
+            .textSelection(.enabled)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+    }
+}
+
 struct StartTunnelButton: View {
     @Environment(AppModel.self) private var appModel
     let title: String
