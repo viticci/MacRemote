@@ -74,13 +74,13 @@ Then in the app:
 The public URL has this shape:
 
 ```text
-https://<trycloudflare-host>/mcp/<instance-id>
+https://<trycloudflare-host>/mcp
 ```
 
 Persistent Cloudflare domains use the same MCP path:
 
 ```text
-https://<subdomain.example.com>/mcp/<instance-id>
+https://<subdomain.example.com>/mcp
 ```
 
 Share that URL only with the remote MCP client you are testing. If Cloudflare
@@ -175,8 +175,8 @@ When you deploy a custom domain, MacRemote:
    or updates the MacRemote Service Auth policy for that token.
 8. Fetches the tunnel run token and starts the named tunnel locally.
 
-Access is deliberately scoped to `/mcp/*`, not the entire hostname. Dynamic MCP
-clients need to fetch `/.well-known/oauth-protected-resource`,
+Access is deliberately scoped to `/mcp/*`, not the entire hostname or exact
+`/mcp` endpoint. Dynamic MCP clients need to fetch `/.well-known/oauth-protected-resource`,
 `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and
 `/token` before they have a MacRemote bearer token. Some clients do not attach
 custom static headers to those OAuth bootstrap requests. If Cloudflare Access
@@ -201,7 +201,7 @@ resources manually if you want MacRemote to take over that hostname.
 9. Copy the public MCP URL from **Tunnel**. It has this shape:
 
 ```text
-https://<subdomain.example.com>/mcp/<instance-id>
+https://<subdomain.example.com>/mcp
 ```
 
 For Raycast or another client that supports static headers, copy the generated
@@ -271,8 +271,8 @@ starts the named tunnel in one flow.
 ### Search indexing and URL privacy
 
 MacRemote does not publish a website, sitemap, or directory page for the custom
-domain. A client receives an MCP endpoint under a random instance path, not a
-public landing page. Still, do not treat the hostname as secret security.
+domain. A client receives an OAuth-gated MCP endpoint, not a public landing
+page. Still, do not treat the hostname as secret security.
 
 For the lowest chance of the URL appearing in search results:
 
@@ -280,8 +280,9 @@ For the lowest chance of the URL appearing in search results:
 - Do not link to the MacRemote hostname from public pages, docs, social posts,
   or issue trackers.
 - Do not paste the full MCP URL into public logs or screenshots.
-- Rotate the MacRemote instance ID from **Settings** if the URL was shared with
-  the wrong client.
+- Revoke OAuth grants, delete the specific client from **Clients**, or rotate
+  the MacRemote instance ID from **Settings** if access was shared with the
+  wrong client.
 - Revoke and recreate Cloudflare Access service tokens if their headers were
   exposed.
 
@@ -313,9 +314,10 @@ domain, hidden URL, or robots rule is a replacement for those controls.
   `<hostname>/mcp/*`, or redeploy the custom domain from MacRemote so it can
   migrate the older whole-host Access app.
 - **DOCTYPE HTML response from an MCP client**: the client received a Cloudflare
-  Access HTML page instead of MCP/OAuth JSON. Confirm the Access app is scoped
-  to `/mcp/*`, then confirm the client sends `CF-Access-Client-Id` and
-  `CF-Access-Client-Secret` headers on MCP requests.
+  Access HTML page instead of MCP/OAuth JSON. Use the copied `https://<host>/mcp`
+  URL. If the client intentionally uses the legacy `/mcp/<instance-id>` path,
+  confirm it sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers
+  on every MCP request.
 - **A non-MacRemote DNS record already exists**: the hostname already has a DNS
   record that MacRemote will not overwrite. Pick a different subdomain or remove
   the conflicting record in Cloudflare.
@@ -461,7 +463,7 @@ After the tunnel is running, copy the public MCP URL from **Tunnel**.
 Direct MCP preflight:
 
 ```bash
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py --mcp-preflight-only
 ```
 
@@ -469,7 +471,7 @@ Full Anthropic API smoke:
 
 ```bash
 ANTHROPIC_API_KEY="<key>" \
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py
 ```
 
@@ -487,7 +489,7 @@ For a broad CLI adapter, use a harmless command and approve the call in
 
 ```bash
 ANTHROPIC_API_KEY="<key>" \
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp/<instance-id>" \
+MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py \
   --tool preset-or-custom-tool-id \
   --prompt 'Call the selected MacRemote MCP tool once with harmless read-only arguments.'

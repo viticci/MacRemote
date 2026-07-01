@@ -32,7 +32,7 @@ final class LocalMCPServerTests: XCTestCase {
             "X-Forwarded-Host": "macremote-test.trycloudflare.com",
             "X-Forwarded-Proto": "https"
         ]
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let localHealth = try await getJSON(url: base.appendingPathComponent("health"))
         XCTAssertEqual(localHealth.json["ok"] as? Bool, true)
@@ -60,7 +60,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let connectorIcon = try await getWithHeaders(url: base.appendingPathComponent("macremote-icon.png"))
         XCTAssertEqual(connectorIcon.statusCode, 200)
@@ -106,7 +106,7 @@ final class LocalMCPServerTests: XCTestCase {
             "X-Forwarded-Host": "macremote-test.trycloudflare.com",
             "X-Forwarded-Proto": "https"
         ]
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         for index in 0..<20 {
             let response = try await postJSON(
@@ -173,21 +173,28 @@ final class LocalMCPServerTests: XCTestCase {
             "X-Forwarded-Host": "macremote-test.trycloudflare.com",
             "X-Forwarded-Proto": "https"
         ]
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let protectedResource = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-protected-resource"),
             headers: forwardedHeaders
         )
-        XCTAssertEqual(protectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp/test-instance")
+        XCTAssertEqual(protectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp")
         XCTAssertEqual(protectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
         XCTAssertEqual(protectedResource.json["mcp_protocol_version"] as? String, "2025-11-25")
+
+        let aliasProtectedResource = try await getJSON(
+            url: base.appendingPathComponent(".well-known/oauth-protected-resource/mcp"),
+            headers: forwardedHeaders
+        )
+        XCTAssertEqual(aliasProtectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp")
+        XCTAssertEqual(aliasProtectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
 
         let pathProtectedResource = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-protected-resource/mcp/test-instance"),
             headers: forwardedHeaders
         )
-        XCTAssertEqual(pathProtectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp/test-instance")
+        XCTAssertEqual(pathProtectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp")
         XCTAssertEqual(pathProtectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
 
         let authorizationServer = try await getJSON(
@@ -230,7 +237,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let noAuth = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -242,7 +249,7 @@ final class LocalMCPServerTests: XCTestCase {
         )
         XCTAssertEqual(noAuth.statusCode, 401)
         let challenge = try XCTUnwrap(headerValue(noAuth.headers, named: "WWW-Authenticate"))
-        XCTAssertTrue(challenge.contains("resource_metadata=\"http://127.0.0.1:\(port)/.well-known/oauth-protected-resource/mcp/test-instance\""))
+        XCTAssertTrue(challenge.contains("resource_metadata=\"http://127.0.0.1:\(port)/.well-known/oauth-protected-resource/mcp\""))
         XCTAssertTrue(challenge.contains("scope=\"mcp:tools\""))
 
         let invalidOrigin = try await postJSON(
@@ -443,7 +450,7 @@ final class LocalMCPServerTests: XCTestCase {
         let base = URL(string: "http://127.0.0.1:\(port)")!
         let resource = "\(base.absoluteString)/mcp/test-instance"
         let verifier = "server-public-client-verifier"
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let registered = try await postJSON(
             url: base.appendingPathComponent("register"),
@@ -536,7 +543,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let toolCall = try await postJSON(
@@ -591,7 +598,7 @@ final class LocalMCPServerTests: XCTestCase {
             "X-Forwarded-Host": "macremote-test.trycloudflare.com",
             "X-Forwarded-Proto": "https"
         ]
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let unauthenticatedPublicAlias = try await postJSON(
             url: base.appendingPathComponent("mcp"),
@@ -602,7 +609,11 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(unauthenticatedPublicAlias.statusCode, 404)
+        XCTAssertEqual(unauthenticatedPublicAlias.statusCode, 401)
+        XCTAssertTrue(
+            headerValue(unauthenticatedPublicAlias.headers, named: "WWW-Authenticate")?
+                .contains("resource_metadata=\"https://macremote-test.trycloudflare.com/.well-known/oauth-protected-resource/mcp\"") == true
+        )
 
         let accessToken = try await authorizedAccessToken(
             base: base,
@@ -678,7 +689,7 @@ final class LocalMCPServerTests: XCTestCase {
             "X-Forwarded-Host": "127.0.0.1:\(port)",
             "X-Forwarded-Proto": "http"
         ]
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let publicHealth = try await getJSON(url: base.appendingPathComponent("health"), headers: spoofedHeaders)
         XCTAssertEqual(publicHealth.json["public_metadata"] as? Bool, true)
@@ -700,7 +711,7 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(legacyPublicPath.statusCode, 404)
+        XCTAssertEqual(legacyPublicPath.statusCode, 401)
     }
 
     func testForwardedIssuerBindsBearerTokenToOrigin() async throws {
@@ -737,7 +748,7 @@ final class LocalMCPServerTests: XCTestCase {
             "X-Forwarded-Host": "macremote-two.trycloudflare.com",
             "X-Forwarded-Proto": "https"
         ]
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(
             base: base,
             coordinator: coordinator,
@@ -805,7 +816,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let health = try await getJSON(url: base.appendingPathComponent("health"))
         XCTAssertEqual(health.json["tool_profile"] as? String, "pocketctl-cli")
         XCTAssertEqual(health.json["tool_count"] as? Int, 1)
@@ -874,7 +885,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
@@ -931,7 +942,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
@@ -974,7 +985,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
@@ -1030,7 +1041,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
@@ -1078,7 +1089,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
@@ -1128,7 +1139,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let callTask = Task { () throws -> ToolCallResultResponse in
@@ -1207,7 +1218,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
         let client = try XCTUnwrap(coordinator.connectedClientSnapshot().first)
         _ = permissions.setAllowed(true, clientID: client.id, toolID: tool.id)
@@ -1274,7 +1285,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let initialList = try await toolsList(base: base, accessToken: accessToken)
@@ -1357,7 +1368,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let listedTools = try await toolsList(base: base, accessToken: accessToken)
@@ -1425,7 +1436,7 @@ final class LocalMCPServerTests: XCTestCase {
         defer { server.stop() }
 
         let base = URL(string: "http://127.0.0.1:\(port)")!
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForServerReady(base: base)
 
         let health = try await getJSON(url: base.appendingPathComponent("health"))
         XCTAssertEqual(health.json["tool_profile"] as? String, "mcp-bridge")
@@ -1608,6 +1619,29 @@ private func get(url: URL, headers: [String: String] = [:]) async throws -> (sta
     return (response.statusCode, response.data)
 }
 
+private func waitForServerReady(
+    base: URL,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async throws {
+    let healthURL = base.appendingPathComponent("health")
+    var lastError: Error?
+    for _ in 0..<50 {
+        do {
+            let response = try await get(url: healthURL)
+            if response.statusCode == 200 {
+                return
+            }
+        } catch {
+            lastError = error
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+    }
+
+    XCTFail("Timed out waiting for local MCP test server: \(lastError?.localizedDescription ?? "no response")", file: file, line: line)
+    throw NSError(domain: "MacRemoteTests", code: 2)
+}
+
 private func getWithHeaders(
     url: URL,
     headers: [String: String] = [:]
@@ -1692,7 +1726,7 @@ private func headerValue(_ headers: [AnyHashable: Any], named name: String) -> S
 private func resourceURL(base: URL, headers: [String: String], instanceID: String) -> String {
     if let forwardedHost = headers["X-Forwarded-Host"] {
         let scheme = headers["X-Forwarded-Proto"] ?? "https"
-        return "\(scheme)://\(forwardedHost)/mcp/\(instanceID)"
+        return "\(scheme)://\(forwardedHost)/mcp"
     }
     return "\(base.absoluteString)/mcp/\(instanceID)"
 }

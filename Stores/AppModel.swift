@@ -280,6 +280,28 @@ final class AppModel {
         )
     }
 
+    func deleteOAuthClient(id clientID: String) -> String? {
+        guard let client = connectedClients.first(where: { $0.id == clientID }) else {
+            return "Client not found."
+        }
+        guard let summary = authCoordinator.revokeClient(id: clientID) else {
+            return "Client not found."
+        }
+
+        approvals = authCoordinator.approvalSnapshot()
+        notifiedAuthorizationRequestIDs.formIntersection(Set(approvals.map(\.id)))
+        setConnectedClients(authCoordinator.connectedClientSnapshot())
+        clientToolPermissionSnapshot = clientToolPermissionStore.removeClient(
+            clientID,
+            clientTrustID: client.trustID
+        )
+        appendLog(
+            level: .warning,
+            "Deleted OAuth client \(client.name): \(summary.authorizations) authorizations, \(summary.accessTokens) access tokens, \(summary.refreshTokens) refresh tokens."
+        )
+        return nil
+    }
+
     func setConnectorProvider(_ provider: ConnectorProviderProfile) {
         guard connectorProvider != provider else { return }
         connectorProvider = provider
@@ -1026,7 +1048,6 @@ final class AppModel {
     func publicMCPURL(for tunnelBaseURL: URL) -> URL {
         tunnelBaseURL
             .appendingPathComponent("mcp")
-            .appendingPathComponent(instanceID)
     }
 
     func smokeTestCopyCommand(for mode: SmokeTestMode, mcpURL: URL) -> String {

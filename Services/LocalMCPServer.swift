@@ -148,7 +148,8 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         let base = baseURL(for: request, activePort: activePort)
-        let mcpResourceURL = mcpResourceURL(base: base)
+        let isPublicRequest = base != localBaseURL(activePort: activePort)
+        let mcpResourceURL = mcpResourceURL(base: base, isPublicRequest: isPublicRequest)
         guard isAllowedOrigin(for: request, base: base, activePort: activePort) else {
             return jsonErrorResponse(
                 status: .forbidden,
@@ -157,14 +158,13 @@ final class LocalMCPServer: @unchecked Sendable {
             )
         }
 
-        let isPublicRequest = base != localBaseURL(activePort: activePort)
         if let group = publicRateLimitGroup(for: request, isPublicRequest: isPublicRequest),
            let response = publicRateLimitResponseIfNeeded(for: group) {
             return response
         }
 
         if request.method == "GET", isProtectedResourceMetadataPath(request.path) {
-            return jsonResponse(protectedResourceMetadata(base: base))
+            return jsonResponse(protectedResourceMetadata(base: base, isPublicRequest: isPublicRequest))
         }
 
         if request.method == "GET", request.path == Self.connectorIconPath {
@@ -179,7 +179,7 @@ final class LocalMCPServer: @unchecked Sendable {
             return staticIconResponse(fileName: Self.faviconPNGFileName, contentType: "image/png")
         }
 
-        let allowAuthenticatedMCPAlias = request.bearerToken != nil
+        let allowAuthenticatedMCPAlias = isPublicRequest || request.bearerToken != nil
         if isMCPPath(
             request.path,
             allowLegacyPath: allowsLegacyMCPPath(base: base, activePort: activePort) || allowAuthenticatedMCPAlias
@@ -227,8 +227,8 @@ final class LocalMCPServer: @unchecked Sendable {
         "/mcp/\(instanceID)"
     }
 
-    private func mcpResourceURL(base: String) -> String {
-        "\(base)\(mcpEndpointPath)"
+    private func mcpResourceURL(base: String, isPublicRequest: Bool = false) -> String {
+        "\(base)\(isPublicRequest ? "/mcp" : mcpEndpointPath)"
     }
 
     private func mcpResourceAliases(base: String) -> [String] {
@@ -247,12 +247,12 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     private func protectedResourceMetadataURL(base: String) -> String {
-        "\(base)/.well-known/oauth-protected-resource\(mcpEndpointPath)"
+        "\(base)/.well-known/oauth-protected-resource/mcp"
     }
 
-    private func protectedResourceMetadata(base: String) -> [String: Any] {
+    private func protectedResourceMetadata(base: String, isPublicRequest: Bool = false) -> [String: Any] {
         [
-            "resource": mcpResourceURL(base: base),
+            "resource": mcpResourceURL(base: base, isPublicRequest: isPublicRequest),
             "authorization_servers": [base],
             "scopes_supported": ["mcp:tools"],
             "bearer_methods_supported": ["header"],
@@ -264,6 +264,7 @@ final class LocalMCPServer: @unchecked Sendable {
 
     private func isProtectedResourceMetadataPath(_ path: String) -> Bool {
         path == "/.well-known/oauth-protected-resource" ||
+            path == "/.well-known/oauth-protected-resource/mcp" ||
             path == "/.well-known/oauth-protected-resource\(mcpEndpointPath)"
     }
 

@@ -537,7 +537,7 @@ def command_cloudflare_deploy(args: argparse.Namespace) -> int:
     result = {
         "hostname": hostname,
         "public_url": f"https://{hostname}",
-        "mcp_url_hint": f"https://{hostname}/mcp/<instance-id>",
+        "mcp_url_hint": f"https://{hostname}/mcp",
         "zone": zone,
         "tunnel": {
             "id": tunnel["id"],

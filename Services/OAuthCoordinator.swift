@@ -473,6 +473,48 @@ final class OAuthCoordinator: @unchecked Sendable {
         return summary
     }
 
+    func revokeClient(id clientID: String) -> OAuthRevocationSummary? {
+        let result: (summary: OAuthRevocationSummary?, snapshot: [ApprovalRequest]) = lock.withLock {
+            guard clients[clientID] != nil else {
+                return (nil, approvalSnapshotLocked())
+            }
+
+            let authorizationIDs = authorizations
+                .filter { $0.value.clientID == clientID }
+                .map(\.key)
+            let accessTokenHashes = accessTokensByHash
+                .filter { $0.value.clientID == clientID }
+                .map(\.key)
+            let refreshTokenHashes = refreshTokensByHash
+                .filter { $0.value.clientID == clientID }
+                .map(\.key)
+
+            clients.removeValue(forKey: clientID)
+            for authorizationID in authorizationIDs {
+                authorizations.removeValue(forKey: authorizationID)
+            }
+            for tokenHash in accessTokenHashes {
+                accessTokensByHash.removeValue(forKey: tokenHash)
+            }
+            for tokenHash in refreshTokenHashes {
+                refreshTokensByHash.removeValue(forKey: tokenHash)
+            }
+            try? persistGrantSnapshotLocked()
+
+            return (
+                OAuthRevocationSummary(
+                    clients: 1,
+                    authorizations: authorizationIDs.count,
+                    accessTokens: accessTokenHashes.count,
+                    refreshTokens: refreshTokenHashes.count
+                ),
+                approvalSnapshotLocked()
+            )
+        }
+        notify(result.snapshot)
+        return result.summary
+    }
+
     private func exchangeAuthorizationCode(form: [String: String], issuer: String, resource _: String) throws -> [String: Any] {
         guard let code = form["code"], !code.isEmpty else {
             throw OAuthError.invalidRequest("Missing code.")

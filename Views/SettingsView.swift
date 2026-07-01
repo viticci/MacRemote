@@ -55,7 +55,7 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Text("Stops exposure, clears grants, and changes the public MCP path.")
+                    Text("Stops exposure, clears grants, and rotates the private instance identifier.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -311,7 +311,7 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("MacRemote will stop the local server and tunnel, clear pending OAuth and tool approvals, and require remote clients to use a new MCP URL path.")
+            Text("MacRemote will stop the local server and tunnel, clear pending OAuth and tool approvals, and rotate the private instance identifier.")
         }
         .confirmationDialog(
             "Revoke OAuth Grants?",

@@ -49,6 +49,7 @@ struct ClientsView: View {
 
 private struct ClientTrustPanel: View {
     @Environment(AppModel.self) private var appModel
+    @State private var isShowingDeleteConfirmation = false
     let client: ConnectedClient
     let tools: [ToolDefinition]
 
@@ -97,6 +98,10 @@ private struct ClientTrustPanel: View {
                     appModel.clearToolAllowances(for: client.id)
                 }
                 .disabled(allowedCurrentTools.isEmpty)
+
+                Button("Delete Client", systemImage: "trash", role: .destructive) {
+                    isShowingDeleteConfirmation = true
+                }
             }
 
             Divider()
@@ -118,6 +123,18 @@ private struct ClientTrustPanel: View {
             }
         }
         .panelStyle()
+        .confirmationDialog(
+            "Delete \(client.name)?",
+            isPresented: $isShowingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Client", role: .destructive) {
+                _ = appModel.deleteOAuthClient(id: client.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("MacRemote will remove this client's OAuth registration, tokens, pending authorizations, and always-allow tool settings. The remote app must connect again.")
+        }
     }
 }
 

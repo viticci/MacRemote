@@ -16,7 +16,7 @@ final class TunnelServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testAppModelCurrentPublicMCPURLAddsInstancePath() throws {
+    func testAppModelCurrentPublicMCPURLUsesStableAlias() throws {
         let defaults = try makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName(defaults)) }
 
@@ -26,7 +26,7 @@ final class TunnelServiceTests: XCTestCase {
 
         XCTAssertEqual(
             model.currentPublicMCPURL?.absoluteString,
-            "https://quiet-river-123.trycloudflare.com/mcp/abc123"
+            "https://quiet-river-123.trycloudflare.com/mcp"
         )
     }
 
@@ -67,7 +67,7 @@ final class TunnelServiceTests: XCTestCase {
             )
         ]
 
-        XCTAssertEqual(model.currentPublicMCPURL?.absoluteString, "https://quiet-river-123.trycloudflare.com/mcp/\(originalInstanceID)")
+        XCTAssertEqual(model.currentPublicMCPURL?.absoluteString, "https://quiet-river-123.trycloudflare.com/mcp")
 
         model.rotateInstanceID()
 

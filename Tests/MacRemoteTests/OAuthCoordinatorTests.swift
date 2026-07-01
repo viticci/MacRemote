@@ -939,6 +939,49 @@ final class OAuthCoordinatorTests: XCTestCase {
             XCTAssertEqual(error as? OAuthError, .invalidRequest("Unknown client_id."))
         }
     }
+
+    func testRevokeClientInvalidatesOnlyThatClientAndForcesReregistration() throws {
+        let coordinator = OAuthCoordinator()
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp"
+        let redirectURI = "http://127.0.0.1/callback"
+        let first = try issueApprovedTokens(
+            coordinator: coordinator,
+            clientName: "First Client",
+            redirectURI: redirectURI,
+            issuer: issuer,
+            resource: resource
+        )
+        let second = try issueApprovedTokens(
+            coordinator: coordinator,
+            clientName: "Second Client",
+            redirectURI: "http://127.0.0.1/second-callback",
+            issuer: issuer,
+            resource: resource
+        )
+        XCTAssertEqual(coordinator.connectedClientSnapshot().count, 2)
+        XCTAssertTrue(coordinator.validateAccessToken(first.accessToken, issuer: issuer, resource: resource))
+        XCTAssertTrue(coordinator.validateAccessToken(second.accessToken, issuer: issuer, resource: resource))
+
+        let summary = try XCTUnwrap(coordinator.revokeClient(id: first.clientID))
+
+        XCTAssertEqual(summary.clients, 1)
+        XCTAssertEqual(summary.authorizations, 1)
+        XCTAssertEqual(summary.accessTokens, 1)
+        XCTAssertEqual(summary.refreshTokens, 1)
+        XCTAssertFalse(coordinator.validateAccessToken(first.accessToken, issuer: issuer, resource: resource))
+        XCTAssertTrue(coordinator.validateAccessToken(second.accessToken, issuer: issuer, resource: resource))
+        XCTAssertEqual(coordinator.connectedClientSnapshot().map(\.id), [second.clientID])
+        XCTAssertNil(coordinator.revokeClient(id: first.clientID))
+
+        let reregistered = try coordinator.registerClient(from: [
+            "client_name": "First Client",
+            "redirect_uris": [redirectURI],
+            "scope": "mcp:tools"
+        ])
+        let reregisteredClientID = try XCTUnwrap(reregistered["client_id"] as? String)
+        XCTAssertNotEqual(reregisteredClientID, first.clientID)
+    }
 }
 
 private func isolatedOAuthDefaults(
