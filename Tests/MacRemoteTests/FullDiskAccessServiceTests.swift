@@ -260,4 +260,31 @@ struct FullDiskAccessServiceTests {
 
         #expect(firstSignature != secondSignature)
     }
+
+    @Test func interpreterProbeInvocationsCoverKnownInterpreters() {
+        let sentinel = "/probe/sentinel"
+
+        let python = FullDiskAccessService.probeInvocationArguments(
+            forInterpreterAt: "/opt/homebrew/Cellar/python@3.14/3.14.6/bin/python3.14",
+            sentinel: sentinel
+        )
+        #expect(python?.first == "-c")
+        #expect(python?.last?.contains(sentinel) == true)
+
+        let node = FullDiskAccessService.probeInvocationArguments(forInterpreterAt: "/usr/local/bin/node", sentinel: sentinel)
+        #expect(node?.first == "-e")
+        #expect(node?.last?.contains(sentinel) == true)
+
+        let shell = FullDiskAccessService.probeInvocationArguments(forInterpreterAt: "/bin/zsh", sentinel: sentinel)
+        #expect(shell?.first == "-c")
+        #expect(shell?.last?.contains(sentinel) == true)
+
+        // Unknown interpreters have no safe one-liner: probed at run time.
+        #expect(FullDiskAccessService.probeInvocationArguments(forInterpreterAt: "/usr/bin/ruby", sentinel: sentinel) == nil)
+        #expect(FullDiskAccessService.probeInvocationArguments(forInterpreterAt: "/usr/local/bin/codex", sentinel: sentinel) == nil)
+    }
+
+    @Test func protectedSentinelIsAFullDiskAccessGatedLocation() {
+        #expect(FullDiskAccessService.protectedSentinelPath.hasSuffix("/Library/Application Support/com.apple.TCC"))
+    }
 }

@@ -254,23 +254,41 @@ enum FullDiskAccessTargetRole: String, Equatable, Sendable {
     }
 }
 
+/// Truthful per-target access state: the result of actually trying to read
+/// protected data as that target, never a guess at System Settings rows
+/// (macOS does not let apps read the TCC database).
+enum FullDiskAccessTargetAccessState: Equatable, Sendable {
+    /// Not probed yet.
+    case unknown
+    /// A probe read protected data successfully from this target's context.
+    case working
+    /// A probe ran and macOS denied the protected read.
+    case blocked
+    /// No safe probe exists (arbitrary tool binaries can't be told to read a
+    /// sentinel file); access is attributed when the tool actually runs.
+    case runtimeChecked
+}
+
 struct FullDiskAccessTarget: Identifiable, Equatable, Sendable {
     var id: String { path }
     let title: String
     let path: String
     let subtitle: String
     let role: FullDiskAccessTargetRole
+    var accessState: FullDiskAccessTargetAccessState
 
     init(
         title: String,
         path: String,
         subtitle: String,
-        role: FullDiskAccessTargetRole = .helperReported
+        role: FullDiskAccessTargetRole = .helperReported,
+        accessState: FullDiskAccessTargetAccessState = .unknown
     ) {
         self.title = title
         self.path = path
         self.subtitle = subtitle
         self.role = role
+        self.accessState = accessState
     }
 }
 

@@ -109,7 +109,85 @@ struct FullDiskAccessService: Sendable {
         let helperTargets = tools.contains(where: Self.isRemCTLTool)
             ? await remCTLPermissionTargets(environment: environment)
             : []
-        return Self.mergedTargets(inferredTargets + helperTargets)
+        return await probedTargets(Self.mergedTargets(inferredTargets + helperTargets))
+    }
+
+    // MARK: - Per-target access probes
+
+    /// A directory every account has that macOS only lets Full Disk Access
+    /// holders read. Listing it proves effective access; being denied proves
+    /// the target's context has none.
+    static let protectedSentinelPath = NSHomeDirectory() + "/Library/Application Support/com.apple.TCC"
+
+    /// Fills `accessState` on every target by actually trying a protected
+    /// read as that target: in-process for the host app row, a spawned
+    /// interpreter one-liner for interpreter rows. Tool binaries can't be
+    /// driven to read a sentinel, so they stay `.runtimeChecked` — macOS
+    /// attributes their access when they really run.
+    private func probedTargets(_ targets: [FullDiskAccessTarget]) async -> [FullDiskAccessTarget] {
+        guard !targets.isEmpty else { return targets }
+        let sentinel = Self.protectedSentinelPath
+
+        return await withTaskGroup(
+            of: (Int, FullDiskAccessTargetAccessState).self,
+            returning: [FullDiskAccessTarget].self
+        ) { group in
+            for (index, target) in targets.enumerated() {
+                group.addTask {
+                    (index, await self.probeAccessState(for: target, sentinel: sentinel))
+                }
+            }
+            var probed = targets
+            while let (index, state) = await group.next() {
+                probed[index].accessState = state
+            }
+            return probed
+        }
+    }
+
+    private func probeAccessState(for target: FullDiskAccessTarget, sentinel: String) async -> FullDiskAccessTargetAccessState {
+        switch target.role {
+        case .hostApp:
+            // The in-process read only speaks for the running app; another
+            // host app reported by a helper can't be probed from here.
+            guard target.path == Bundle.main.bundleURL.path else { return .runtimeChecked }
+            return (try? FileManager.default.contentsOfDirectory(atPath: sentinel)) != nil ? .working : .blocked
+        case .toolInterpreter, .helperReported:
+            guard let arguments = Self.probeInvocationArguments(forInterpreterAt: target.path, sentinel: sentinel) else {
+                return .runtimeChecked
+            }
+            do {
+                let result = try await runner.run(
+                    executablePath: target.path,
+                    arguments: arguments,
+                    timeoutSeconds: 5,
+                    outputByteLimit: 16 * 1024
+                )
+                if result.timedOut { return .unknown }
+                return result.succeeded ? .working : .blocked
+            } catch {
+                return .unknown
+            }
+        case .toolExecutable:
+            return .runtimeChecked
+        }
+    }
+
+    /// One-liner argv that makes a known interpreter list the sentinel and
+    /// exit 0 on success, nonzero when macOS denies the read. Unknown
+    /// interpreters return nil (probed at run time instead).
+    static func probeInvocationArguments(forInterpreterAt path: String, sentinel: String) -> [String]? {
+        let basename = URL(fileURLWithPath: path).lastPathComponent
+        if basename.hasPrefix("python") {
+            return ["-c", "import os, sys; os.listdir('\(sentinel)')"]
+        }
+        if basename == "node" {
+            return ["-e", "require('fs').readdirSync('\(sentinel)')"]
+        }
+        if ["sh", "bash", "zsh", "dash"].contains(basename) {
+            return ["-c", "ls '\(sentinel)' >/dev/null"]
+        }
+        return nil
     }
 
     private func openSystemFullDiskAccessSettings(

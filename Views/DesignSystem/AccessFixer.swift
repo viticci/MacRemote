@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// MARK: - TargetRow (GUIDELINES §2 — FullDiskAccessTargetRow anatomy kept verbatim)
+// MARK: - TargetRow (GUIDELINES §2 — FullDiskAccessTargetRow anatomy + probed access chip)
 
 struct TargetRow: View {
     let target: FullDiskAccessTarget
@@ -29,6 +29,8 @@ struct TargetRow: View {
                         .padding(.horizontal, Space.s2)
                         .padding(.vertical, Space.s1)
                         .background(.quaternary, in: Capsule())
+
+                    accessChip
                 }
 
                 Text(target.path)
@@ -59,6 +61,24 @@ struct TargetRow: View {
         .background(.quaternary.opacity(0.4), in: AppShape.mono)
         .draggable(URL(fileURLWithPath: target.path))
         .help("Drag this row into Full Disk Access, or copy the path and use Command-Shift-G.")
+    }
+
+    /// Truthful probed access per target (never a guess at System Settings
+    /// rows): green when a protected read worked from this target's context,
+    /// attention when macOS denied it, quiet when it can only be attributed
+    /// while the tool runs.
+    @ViewBuilder
+    private var accessChip: some View {
+        switch target.accessState {
+        case .working:
+            StateChip("Access works", systemImage: "checkmark.circle.fill", role: .ready)
+        case .blocked:
+            StateChip("No access yet", systemImage: "exclamationmark.circle.fill", role: .attention)
+        case .runtimeChecked:
+            StateChip("Checked when it runs", systemImage: "clock", tint: .secondary)
+        case .unknown:
+            EmptyView()
+        }
     }
 }
 
