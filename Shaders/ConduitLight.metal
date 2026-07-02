@@ -70,10 +70,14 @@ half4 conduitLight(float2 position,
     half shimmer = 0.85h + 0.15h * half(sin(uv.x * 21.0 - time * (2.0 * M_PI_F * 32.0 / 120.0)));
     half currents = (fwd * laneA + rev * laneB) * caps * half(nz) * shimmer * half(flow);
 
-    half I = (currents * 0.22h + rimGather + meridian) * half(intensity);
+    half I = (currents * 0.36h + rimGather + meridian) * half(intensity);
 
     // Hard luminance ceiling (GUIDELINES §5.1 defense): added light never
     // exceeds 0.25 alpha over the glass, even if gains are retuned later.
     half a = min(I, 0.25h) * color.a;                // capsule mask + AA from source alpha
-    return half4(tint.rgb * a, a);                   // premultiplied
+
+    // Tracer heads run hot-white with a tinted falloff — green-on-green light
+    // sat below the noticeability threshold on the tinted glass.
+    half3 lightColor = mix(tint.rgb, half3(1.0h), saturate(currents * 0.6h));
+    return half4(lightColor * a, a);                 // premultiplied
 }
