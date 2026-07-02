@@ -151,34 +151,50 @@ struct AppModelToolUpdateTests {
 /// AI & Agents) are matched by name + executable basename.
 struct CatalogCategoryMigrationTests {
     @Test func staleCategoriesFollowTheCatalogWithoutTouchingOthers() throws {
+        let claudePath = "/Users/viticci/.local/bin/claude"
+        let codexPath = "/Users/viticci/.local/bin/codex"
         let presets = [
-            AppModel.CatalogCategoryReference(name: "Claude Code", executablePath: "/Users/someone/.local/bin/claude", category: .ai),
-            AppModel.CatalogCategoryReference(name: "Codex CLI", executablePath: "/opt/homebrew/bin/codex", category: .ai),
+            AppModel.CatalogCategoryReference(name: "Claude Code", executablePath: claudePath, category: .ai),
+            AppModel.CatalogCategoryReference(name: "Codex CLI", executablePath: codexPath, category: .ai),
             AppModel.CatalogCategoryReference(name: "Git Status", executablePath: "/usr/bin/git", category: .developer)
         ]
 
-        let staleClaude = try makeTool(id: "custom.1", name: "Claude Code", executablePath: "/Users/viticci/.local/bin/claude", category: .developer)
-        let correctCodex = try makeTool(id: "custom.2", name: "Codex CLI", executablePath: "/Users/viticci/.local/bin/codex", category: .ai)
-        let unrelated = try makeTool(id: "custom.3", name: "My Claude Wrapper", executablePath: "/Users/viticci/.local/bin/claude", category: .developer)
+        // Exact name + full path as the preset → a genuine catalog-derived tool.
+        let staleClaude = try makeTool(id: "custom.1", name: "Claude Code", executablePath: claudePath, category: .developer)
+        // Right name, but a DIFFERENT binary of the same basename → must NOT flip
+        // (this is the safety guard: full path, not basename).
+        let otherClaude = try makeTool(id: "custom.5", name: "Claude Code", executablePath: "/opt/impostor/bin/claude", category: .developer)
+        let correctCodex = try makeTool(id: "custom.2", name: "Codex CLI", executablePath: codexPath, category: .ai)
+        let unrelated = try makeTool(id: "custom.3", name: "My Claude Wrapper", executablePath: claudePath, category: .developer)
         let gitStatus = try makeTool(id: "custom.4", name: "Git Status", executablePath: "/usr/bin/git", category: .developer)
 
         let updates = AppModel.staleCatalogCategoryUpdates(
-            tools: [staleClaude, correctCodex, unrelated, gitStatus],
+            tools: [staleClaude, otherClaude, correctCodex, unrelated, gitStatus],
             presets: presets
         )
 
-        // Stale Claude Code flips (basename match survives a different home
-        // directory); already-correct, renamed, and same-category tools don't.
+        // Only the exact name+path match flips; the same-basename impostor,
+        // already-correct, renamed, and same-category tools are untouched.
         #expect(updates == ["custom.1": .ai])
     }
 
     private func makeTool(id: String, name: String, executablePath: String, category: ToolCategory) throws -> ToolDefinition {
-        var draft = ToolDefinitionDraft()
-        draft.name = name
-        draft.summary = "Test tool"
-        draft.executablePath = executablePath
-        draft.category = category
-        return try draft.makeTool(id: id)
+        // Construct directly (not via draft.makeTool) so the fixture doesn't
+        // require the executable to exist on the test machine — the migration
+        // logic operates purely on the persisted name + path.
+        ToolDefinition(
+            id: id,
+            name: name,
+            summary: "Test tool",
+            executablePath: executablePath,
+            argumentPattern: ["{args}"],
+            parameters: [ToolParameter(name: "args", title: "Arguments", kind: .stringArray, required: false)],
+            capability: .readOnly,
+            timeoutSeconds: 5,
+            outputByteLimit: 1024,
+            origin: .userDefined,
+            category: category
+        )
     }
 }
 

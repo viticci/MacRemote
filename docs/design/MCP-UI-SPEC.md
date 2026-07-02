@@ -87,8 +87,21 @@ Shipped action packs:
   are also directly callable by the model.
 
 Preset-carried actions reach existing installations through a one-time
-migration (`migrateCatalogUIActionsIfNeeded`, name + executable basename
-matching, never overwriting tools that already have actions).
+migration (`migrateCatalogUIActionsIfNeeded`, matching on **name + full
+executable path** — a same-basename impostor at a different path never
+inherits another tool's category or destructive actions — and never
+overwriting tools that already have actions). The marker is set only after a
+durable save, so a failed write retries next launch.
+
+**Write-back requires a shared write tool.** An action resolves through
+`resolveActionTarget` against the *exposed* tool set. Reminder check-off /
+reschedule / edit / delete target the flexible RemCTL adapter by basename, so
+that adapter ("Run RemCTL") must be shared for the affordances to appear. If
+only the read-only reminder tools are shared, the widget renders a plain
+table with no action buttons — truthful (you can't write without a shared
+write tool), not a bug. This is deliberate: the alternative (showing buttons
+that fail on click) is worse. The affordances also stay behind normal
+capability gating and host approval at execution.
 
 ## The widget (Widget/MacRemoteWidget.html)
 

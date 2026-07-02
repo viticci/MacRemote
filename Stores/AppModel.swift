@@ -2595,13 +2595,15 @@ final class AppModel {
     /// basename; the marker keeps later user-chosen categories authoritative.
     private func migrateStaleCatalogCategoriesIfNeeded() {
         guard !userDefaults.bool(forKey: Self.catalogCategoryMigrationKey) else { return }
-        userDefaults.set(true, forKey: Self.catalogCategoryMigrationKey)
 
         let presets = DefaultToolPresetCatalog.presets.map {
             CatalogCategoryReference(name: $0.name, executablePath: $0.executablePath, category: $0.category)
         }
         let updates = Self.staleCatalogCategoryUpdates(tools: tools, presets: presets)
-        guard !updates.isEmpty else { return }
+        guard !updates.isEmpty else {
+            userDefaults.set(true, forKey: Self.catalogCategoryMigrationKey)
+            return
+        }
 
         for index in tools.indices {
             if let category = updates[tools[index].id] {
@@ -2610,6 +2612,8 @@ final class AppModel {
         }
         do {
             try persistUserDefinedTools()
+            // Mark done only after a durable save; a failed write retries next launch.
+            userDefaults.set(true, forKey: Self.catalogCategoryMigrationKey)
             appendLog(level: .info, "Updated the category of \(updates.count) tool\(updates.count == 1 ? "" : "s") to match the current library (e.g. AI & Agents).")
         } catch {
             appendLog(level: .error, "Could not save updated tool categories: \(error.localizedDescription)")
@@ -2622,14 +2626,16 @@ final class AppModel {
     /// only when the tool has none — later user-authored actions stay theirs.
     private func migrateCatalogUIActionsIfNeeded() {
         guard !userDefaults.bool(forKey: Self.catalogUIActionsMigrationKey) else { return }
-        userDefaults.set(true, forKey: Self.catalogUIActionsMigrationKey)
 
         var presetActions: [String: [ToolUIAction]] = [:]
         for preset in DefaultToolPresetCatalog.presets {
             guard let actions = preset.uiActions, !actions.isEmpty else { continue }
             presetActions[Self.categoryMigrationKey(name: preset.name, executablePath: preset.executablePath)] = actions
         }
-        guard !presetActions.isEmpty else { return }
+        guard !presetActions.isEmpty else {
+            userDefaults.set(true, forKey: Self.catalogUIActionsMigrationKey)
+            return
+        }
 
         var updated = 0
         for index in tools.indices where tools[index].origin == .userDefined && tools[index].uiActions == nil && !tools[index].isMCPBridge {
@@ -2639,9 +2645,14 @@ final class AppModel {
                 updated += 1
             }
         }
-        guard updated > 0 else { return }
+        guard updated > 0 else {
+            userDefaults.set(true, forKey: Self.catalogUIActionsMigrationKey)
+            return
+        }
         do {
             try persistUserDefinedTools()
+            // Mark done only after a durable save; a failed write retries next launch.
+            userDefaults.set(true, forKey: Self.catalogUIActionsMigrationKey)
             appendLog(level: .info, "Added widget actions to \(updated) tool\(updated == 1 ? "" : "s") from the library catalog.")
         } catch {
             appendLog(level: .error, "Could not save widget actions: \(error.localizedDescription)")
@@ -2676,8 +2687,13 @@ final class AppModel {
         return updates
     }
 
+    /// Match on the FULL executable path, not just the basename: a user's
+    /// own Flexible Command named e.g. "Today" wrapping a *different* binary
+    /// called "remctl" must never inherit a catalog tool's category or its
+    /// (possibly destructive) widget actions. Preset-derived tools carry the
+    /// catalog's exact resolved path, so legitimate retrofits still match.
     private nonisolated static func categoryMigrationKey(name: String, executablePath: String) -> String {
-        "\(name)\u{1f}\(URL(fileURLWithPath: executablePath).lastPathComponent)"
+        "\(name)\u{1f}\(executablePath)"
     }
 
     private func appendTool(_ tool: ToolDefinition) {

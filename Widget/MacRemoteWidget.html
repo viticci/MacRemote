@@ -477,6 +477,30 @@ const MacRemoteWidget = (() => {
   /* ---------- ANSI SGR → styled spans (curated palette) ---------- */
   const ANSI_FG = { 30:'gray',31:'red',32:'green',33:'yellow',34:'blue',35:'magenta',36:'cyan',37:'white',
                     90:'gray',91:'red',92:'green',93:'yellow',94:'blue',95:'magenta',96:'cyan',97:'white' };
+  const ANSI_NAMES = ['gray','red','green','yellow','blue','magenta','cyan','white'];
+  // Map a truecolor triple to the nearest curated palette bucket.
+  function rgbToClass(r, g, b) {
+    r = r || 0; g = g || 0; b = b || 0;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    if (max - min < 32) return max > 160 ? 'white' : 'gray';
+    const hi = 96, R = r >= hi, G = g >= hi, B = b >= hi;
+    if (R && G && !B) return 'yellow';
+    if (R && B && !G) return 'magenta';
+    if (G && B && !R) return 'cyan';
+    if (R && !G && !B) return 'red';
+    if (G && !R && !B) return 'green';
+    if (B && !R && !G) return 'blue';
+    return max > 160 ? 'white' : 'gray';
+  }
+  // Map a 256-color index to a palette bucket (standard, 6×6×6 cube, grays).
+  function ansiIndexToClass(n) {
+    n = n || 0;
+    if (n < 16) return ANSI_NAMES[n % 8];
+    if (n >= 232) return n < 244 ? 'gray' : 'white';
+    const i = n - 16;
+    const step = (v) => v === 0 ? 0 : v * 40 + 55;
+    return rgbToClass(step(Math.floor(i / 36)), step(Math.floor((i % 36) / 6)), step(i % 6));
+  }
   function ansiToHtml(text) {
     const parts = String(text).split(/\x1b\[([0-9;]*)m/);
     let html = '', st = { fg: null, bold: false, dim: false, italic: false, under: false };
@@ -491,8 +515,24 @@ const MacRemoteWidget = (() => {
         if (st.under) cls.push('mrw-a-under');
         html += cls.length ? '<span class="' + cls.join(' ') + '">' + esc(parts[i]) + '</span>' : esc(parts[i]);
       } else {
-        for (const code of (parts[i] === '' ? ['0'] : parts[i].split(';'))) {
-          const c = +code;
+        const codes = (parts[i] === '' ? ['0'] : parts[i].split(';')).map(Number);
+        for (let j = 0; j < codes.length; j++) {
+          const c = codes[j];
+          // 38/48 introduce an extended-color operand run (5;n or 2;r;g;b).
+          // Consume it so its params aren't mis-read as standalone SGR codes
+          // (e.g. the "2" in 38;2;… wrongly toggling dim). We map extended
+          // foregrounds to the nearest palette bucket; backgrounds are dropped.
+          if (c === 38 || c === 48) {
+            const mode = codes[j + 1];
+            if (mode === 5) {
+              if (c === 38) st.fg = ansiIndexToClass(codes[j + 2]);
+              j += 2;
+            } else if (mode === 2) {
+              if (c === 38) st.fg = rgbToClass(codes[j + 2], codes[j + 3], codes[j + 4]);
+              j += 4;
+            }
+            continue;
+          }
           if (c === 0) st = { fg: null, bold: false, dim: false, italic: false, under: false };
           else if (c === 1) st.bold = true;
           else if (c === 2) st.dim = true;
@@ -1024,10 +1064,18 @@ const pending = new Map();
 const state = { result: null, toolInput: {} };
 
 const post = (m) => window.parent.postMessage(m, "*");
-function request(method, params) {
+function request(method, params, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const id = nextID++;
-    pending.set(id, { resolve, reject });
+    // Time out if the host never answers: otherwise the pending Map leaks and
+    // the row's action button stays stuck in its spinner forever.
+    const timer = setTimeout(() => {
+      if (pending.delete(id)) { reject(new Error("timeout")); }
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); }
+    });
     post({ jsonrpc: "2.0", id, method, params });
   });
 }
@@ -1105,13 +1153,17 @@ new ResizeObserver(() => {
 
 /* Resolve {input.name} (collected inputs) then {field} (row) placeholders. */
 function substitute(value, row, inputs) {
+  // Only substitute primitives; an array/object field would String()-coerce
+  // to "a,b" / "[object Object]" and silently corrupt the argv. Leave the
+  // placeholder untouched instead so a misconfigured action fails loudly.
+  const primitive = (v) => v !== undefined && v !== null && typeof v !== "object";
   if (typeof value === "string") {
     return value.replace(/\{([A-Za-z0-9_.]+)\}/g, (m, field) => {
       if (field.startsWith("input.")) {
         const v = (inputs || {})[field.slice(6)];
-        return v !== undefined && v !== null ? String(v) : m;
+        return primitive(v) ? String(v) : m;
       }
-      return row[field] !== undefined && row[field] !== null ? String(row[field]) : m;
+      return primitive(row[field]) ? String(row[field]) : m;
     });
   }
   if (Array.isArray(value)) { return value.map(v => substitute(v, row, inputs)); }
