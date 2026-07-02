@@ -1,0 +1,29 @@
+- iframe [ref=e2]:
+  - article "Today — Failed" [ref=f1e4]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - generic [ref=f1e8]: Today
+        - status [ref=f1e9]: Failed
+      - generic [ref=f1e10]:
+        - generic [ref=f1e11]: 420 ms
+        - generic [ref=f1e12]: ·
+        - generic [ref=f1e13]: exit 1
+    - generic [ref=f1e14]:
+      - generic [ref=f1e15]:
+        - img [ref=f1e17]
+        - generic [ref=f1e19]:
+          - generic [ref=f1e20]: Today couldn’t complete this command
+          - generic [ref=f1e21]: It exited with code 1 after 420 ms. The details below usually explain why.
+      - generic [ref=f1e22]:
+        - generic [ref=f1e23]: stderr
+        - text: "error: Reminders store not readable from this process context. Grant Full Disk Access and retry."
+    - generic [ref=f1e24]:
+      - generic [ref=f1e25]:
+        - img [ref=f1e26]
+        - text: MacRemote
+      - button "Copy output" [ref=f1e29] [cursor=pointer]:
+        - img [ref=f1e30]
+        - text: Copy output
+      - button "Run again" [ref=f1e33] [cursor=pointer]:
+        - img [ref=f1e34]
+        - text: Run again

@@ -1773,7 +1773,9 @@ private func makeScannedAdapterTool(
 private struct FakeToolExecutor: ToolExecuting {
     func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
         let stdout: String
-        if let payload = parameters["payload"] {
+        if parameters["value"]?.stringValue == "giant-stdout" {
+            stdout = String(repeating: "a", count: 150_000)
+        } else if let payload = parameters["payload"] {
             let data = try? JSONSerialization.data(
                 withJSONObject: payload.jsonValue.anyValue,
                 options: [.sortedKeys]
@@ -2007,4 +2009,202 @@ private func resourceURL(base: URL, headers: [String: String], instanceID: Strin
         return "\(scheme)://\(forwardedHost)/mcp"
     }
     return "\(base.absoluteString)/mcp/\(instanceID)"
+}
+
+// MARK: - MCP Apps (SEP-1865) universal widget
+
+/// The universal widget: one ui:// resource covers the whole catalog, hosts
+/// without the extension keep the mandated text fallback untouched, and
+/// declared UI actions ride CallToolResult._meta with public tool names.
+struct MCPUISupportTests {
+    private func makeUITestServer() -> (LocalMCPServer, OAuthCoordinator) {
+        let coordinator = OAuthCoordinator()
+        let listTool = ToolDefinition(
+            id: "test.reminders",
+            name: "Reminders List",
+            summary: "Return reminder rows.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{value}"],
+            parameters: [
+                ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64),
+                ToolParameter(name: "payload", title: "Payload", kind: .string, required: false, maximumLength: 512 * 1024)
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024 * 1024,
+            uiActions: [
+                ToolUIAction(
+                    id: "complete",
+                    title: "Mark Done",
+                    kind: .checkOff,
+                    toolID: "test.mutator",
+                    arguments: .object(["args": .array([.string("done"), .string("{id}")])]),
+                    requiredRowFields: ["id"],
+                    completedWhenField: "completed"
+                )
+            ]
+        )
+        let mutatorTool = ToolDefinition(
+            id: "test.mutator",
+            name: "Mutator",
+            summary: "Mutate a reminder.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(name: "args", title: "Arguments", kind: .stringArray, required: false)
+            ],
+            capability: .write,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [listTool, mutatorTool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        return (server, coordinator)
+    }
+
+    @Test func initializeAdvertisesResourcesAndToolsCarryWidgetMeta() async throws {
+        #expect(LocalMCPServer.widgetHTML != nil)
+
+        let (server, coordinator) = makeUITestServer()
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let initialize = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": [
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": [
+                        "extensions": [
+                            "io.modelcontextprotocol/ui": ["mimeTypes": ["text/html;profile=mcp-app"]]
+                        ]
+                    ],
+                    "clientInfo": ["name": "UI Host", "version": "1.0"]
+                ]
+            ]
+        )
+        let capabilities = try #require((initialize.json["result"] as? [String: Any])?["capabilities"] as? [String: Any])
+        #expect((capabilities["resources"] as? [String: Any]) != nil)
+
+        let tools = try await toolsList(base: base, accessToken: token)
+        for tool in tools {
+            let meta = try #require(tool["_meta"] as? [String: Any], "every tool links the widget")
+            let ui = try #require(meta["ui"] as? [String: Any])
+            #expect(ui["resourceUri"] as? String == "ui://macremote/output")
+        }
+    }
+
+    @Test func widgetResourceReadsBackWithSandboxMeta() async throws {
+        let (server, coordinator) = makeUITestServer()
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+        let mcp = base.appendingPathComponent("mcp/test-instance")
+
+        let list = try await postJSON(
+            url: mcp, bearerToken: token,
+            body: ["jsonrpc": "2.0", "id": 1, "method": "resources/list"]
+        )
+        let resources = try #require((list.json["result"] as? [String: Any])?["resources"] as? [[String: Any]])
+        #expect(resources.count == 1)
+        #expect(resources.first?["uri"] as? String == "ui://macremote/output")
+        #expect(resources.first?["mimeType"] as? String == "text/html;profile=mcp-app")
+
+        let read = try await postJSON(
+            url: mcp, bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 2, "method": "resources/read",
+                "params": ["uri": "ui://macremote/output"]
+            ]
+        )
+        let contents = try #require((read.json["result"] as? [String: Any])?["contents"] as? [[String: Any]])
+        let item = try #require(contents.first)
+        #expect(item["mimeType"] as? String == "text/html;profile=mcp-app")
+        let html = try #require(item["text"] as? String)
+        #expect(html.contains("<!DOCTYPE html>"))
+        #expect(html.contains("ui/initialize"))
+        #expect(html.contains("net.viticci.macremote/ui"))
+        let itemMeta = try #require(item["_meta"] as? [String: Any])
+        let ui = try #require(itemMeta["ui"] as? [String: Any])
+        #expect(ui["prefersBorder"] as? Bool == true)
+
+        let unknown = try await postJSON(
+            url: mcp, bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 3, "method": "resources/read",
+                "params": ["uri": "ui://macremote/other"]
+            ]
+        )
+        #expect((unknown.json["error"] as? [String: Any])?["code"] as? Int == -32002)
+    }
+
+    @Test func toolResultCarriesActionsWithPublicToolNames() async throws {
+        let (server, coordinator) = makeUITestServer()
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "test_reminders", "arguments": ["value": "x"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        // Fallback stays intact for non-rendering hosts.
+        let content = try #require(result["content"] as? [[String: Any]])
+        #expect(content.first?["type"] as? String == "text")
+        #expect((result["structuredContent"] as? [String: Any]) != nil)
+
+        let meta = try #require(result["_meta"] as? [String: Any])
+        let ui = try #require(meta["net.viticci.macremote/ui"] as? [String: Any])
+        #expect(ui["toolTitle"] as? String == "Reminders List")
+        #expect(ui["toolName"] as? String == "test_reminders")
+        let actions = try #require(ui["actions"] as? [[String: Any]])
+        let action = try #require(actions.first)
+        #expect(action["id"] as? String == "complete")
+        #expect(action["kind"] as? String == "checkOff")
+        #expect(action["toolName"] as? String == "test_mutator")
+        #expect(action["toolCapability"] as? String == "write")
+        #expect(action["toolID"] == nil, "internal ids never leak to clients")
+        #expect(action["completedWhenField"] as? String == "completed")
+    }
+
+    @Test func oversizedStdoutIsCappedBelowWidgetHydrationCliff() async throws {
+        let (server, coordinator) = makeUITestServer()
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "test_reminders", "arguments": ["value": "giant-stdout"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        let structured = try #require(result["structuredContent"] as? [String: Any])
+        let stdout = try #require(structured["stdout"] as? String)
+        #expect(stdout.count == LocalMCPServer.mcpStdoutCharacterLimit)
+        #expect(structured["truncatedStdout"] as? Bool == true)
+    }
 }

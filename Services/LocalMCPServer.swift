@@ -598,17 +598,29 @@ final class LocalMCPServer: @unchecked Sendable {
             switch method {
             case "initialize":
                 let requestedVersion = (message["params"] as? [String: Any])?["protocolVersion"] as? String
+                var capabilities: [String: Any] = [
+                    "tools": [
+                        "listChanged": false
+                    ]
+                ]
+                if widgetAvailable {
+                    // MCP Apps (SEP-1865): the widget resource rides the
+                    // standard resources capability.
+                    capabilities["resources"] = ["listChanged": false]
+                }
                 return jsonRPCResult(id: id, result: [
                     "protocolVersion": negotiatedProtocolVersion(requestedVersion),
-                    "capabilities": [
-                        "tools": [
-                            "listChanged": false
-                        ]
-                    ],
+                    "capabilities": capabilities,
                     "serverInfo": serverInfo(base: base)
                 ])
             case "ping":
                 return jsonRPCResult(id: id, result: [:])
+            case "resources/list":
+                return resourcesList(id: id)
+            case "resources/read":
+                return resourcesRead(id: id, message: message)
+            case "resources/templates/list":
+                return jsonRPCResult(id: id, result: ["resourceTemplates": []])
             case "tools/list":
                 let tools = toolProvider()
                 let toolNames = MCPToolNameMapper.publicNames(for: tools)
@@ -700,7 +712,7 @@ final class LocalMCPServer: @unchecked Sendable {
                 outcome.succeeded ? .info : .warning,
                 "\(outcome.toolName) MCP call exited \(outcome.exitCode) in \(outcome.duration.formattedDuration)."
             ))
-            return jsonRPCResult(id: id, result: [
+            var result: [String: Any] = [
                 "structuredContent": structuredContent,
                 "content": [
                     [
@@ -709,7 +721,11 @@ final class LocalMCPServer: @unchecked Sendable {
                     ]
                 ],
                 "isError": !outcome.succeeded
-            ])
+            ]
+            if let uiMeta = resultUIMeta(for: tool, tools: tools) {
+                result["_meta"] = [Self.resultUIMetaKey: uiMeta]
+            }
+            return jsonRPCResult(id: id, result: result)
         } catch let error as ToolValidationError {
             return jsonRPCError(id: id, code: -32602, message: error.localizedDescription)
         } catch {
@@ -742,18 +758,28 @@ final class LocalMCPServer: @unchecked Sendable {
         ])
     }
 
+    /// Results above ~150k characters are diverted by Claude's code-execution
+    /// sandbox to a file: the model gets a pointer and the widget never
+    /// hydrates. Cap the envelope's streams below that cliff; per-tool
+    /// `outputByteLimit` still governs what the tool may produce, this only
+    /// bounds what one MCP result carries inline.
+    static let mcpStdoutCharacterLimit = 100_000
+    static let mcpStderrCharacterLimit = 16_000
+
     private func structuredContent(for outcome: ToolExecutionOutcome) -> [String: Any] {
-        [
+        let stdout = String(outcome.stdout.prefix(Self.mcpStdoutCharacterLimit))
+        let stderr = String(outcome.stderr.prefix(Self.mcpStderrCharacterLimit))
+        return [
             "toolID": outcome.toolID,
             "toolName": outcome.toolName,
             "exitCode": Int(outcome.exitCode),
             "succeeded": outcome.succeeded,
-            "stdout": outcome.stdout,
-            "stderr": outcome.stderr,
+            "stdout": stdout,
+            "stderr": stderr,
             "durationSeconds": outcome.duration,
             "timedOut": outcome.timedOut,
-            "truncatedStdout": outcome.truncatedStdout,
-            "truncatedStderr": outcome.truncatedStderr
+            "truncatedStdout": outcome.truncatedStdout || stdout.count < outcome.stdout.count,
+            "truncatedStderr": outcome.truncatedStderr || stderr.count < outcome.stderr.count
         ]
     }
 
@@ -762,8 +788,112 @@ final class LocalMCPServer: @unchecked Sendable {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func toolJSON(_ tool: ToolDefinition, publicName: String) -> [String: Any] {
+    // MARK: - MCP Apps (SEP-1865) universal widget
+
+    /// One adaptive widget renders every tool's uniform result envelope, so a
+    /// single resource covers the whole catalog. Hosts without the extension
+    /// ignore `_meta` and keep the mandated text fallback.
+    static let widgetResourceURI = "ui://macremote/output"
+    static let widgetMIMEType = "text/html;profile=mcp-app"
+    /// The `_meta` key on tools that links them to the widget (SEP-1865
+    /// nested form; the flat "ui/resourceUri" form is deprecated).
+    static let toolUIMetaKey = "ui"
+    /// Namespaced `_meta` key on CallToolResult carrying MacRemote's render
+    /// hints (declared UI actions, display metadata) to the widget.
+    static let resultUIMetaKey = "net.viticci.macremote/ui"
+
+    static let widgetHTML: String? = {
+        guard let url = Bundle.module.url(forResource: "MacRemoteWidget", withExtension: "html") else {
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }()
+
+    private var widgetAvailable: Bool { Self.widgetHTML != nil }
+
+    private func widgetResourceDescriptor() -> [String: Any] {
         [
+            "uri": Self.widgetResourceURI,
+            "name": "macremote-output",
+            "title": "MacRemote Tool Output",
+            "description": "Adaptive rendering of any MacRemote tool result: tables, trees, terminal output, and declared row actions.",
+            "mimeType": Self.widgetMIMEType
+        ]
+    }
+
+    private func resourcesList(id: Any?) -> Data {
+        jsonRPCResult(id: id, result: [
+            "resources": widgetAvailable ? [widgetResourceDescriptor()] : []
+        ])
+    }
+
+    private func resourcesRead(id: Any?, message: [String: Any]) -> Data {
+        guard let uri = (message["params"] as? [String: Any])?["uri"] as? String else {
+            return jsonRPCError(id: id, code: -32602, message: "Missing resource uri.")
+        }
+        guard uri == Self.widgetResourceURI, let html = Self.widgetHTML else {
+            return jsonRPCError(id: id, code: -32002, message: "Unknown resource: \(uri)")
+        }
+        return jsonRPCResult(id: id, result: [
+            "contents": [
+                [
+                    "uri": Self.widgetResourceURI,
+                    "mimeType": Self.widgetMIMEType,
+                    "text": html,
+                    // SEP-1865 sandbox hints: the widget makes zero external
+                    // requests, so the CSP allowlists stay empty (most
+                    // restrictive), and a border suits a data panel.
+                    "_meta": [
+                        "ui": [
+                            "prefersBorder": true,
+                            "csp": [
+                                "connectDomains": [],
+                                "resourceDomains": []
+                            ],
+                            "permissions": [
+                                "clipboardWrite": [:]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ])
+    }
+
+    /// Render hints attached to CallToolResult._meta: declared actions with
+    /// tool ids translated to public MCP names (the widget calls tools by
+    /// public name through the host — same connection, same gating).
+    private func resultUIMeta(for tool: ToolDefinition, tools: [ToolDefinition]) -> [String: Any]? {
+        guard widgetAvailable else { return nil }
+        let publicNames = MCPToolNameMapper.publicNames(for: tools)
+        var payload: [String: Any] = [
+            "version": 1,
+            "toolTitle": tool.name,
+            "toolName": publicNames[tool.id] ?? MCPToolNameMapper.publicName(for: tool.id),
+            "capability": tool.capability.rawValue,
+            "category": tool.category.title
+        ]
+        if let actions = tool.uiActions, !actions.isEmpty {
+            let encodedActions: [[String: Any]] = actions.compactMap { action in
+                guard let targetTool = tools.first(where: { $0.id == action.toolID }),
+                      let encoded = try? JSONEncoder().encode(action),
+                      var json = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+                    return nil
+                }
+                json["toolName"] = publicNames[targetTool.id] ?? MCPToolNameMapper.publicName(for: targetTool.id)
+                json["toolCapability"] = targetTool.capability.rawValue
+                json.removeValue(forKey: "toolID")
+                return json
+            }
+            if !encodedActions.isEmpty {
+                payload["actions"] = encodedActions
+            }
+        }
+        return payload
+    }
+
+    private func toolJSON(_ tool: ToolDefinition, publicName: String) -> [String: Any] {
+        var json: [String: Any] = [
             "name": publicName,
             "title": tool.name,
             "description": toolDescription(for: tool),
@@ -771,6 +901,12 @@ final class LocalMCPServer: @unchecked Sendable {
             "outputSchema": outputSchema(),
             "annotations": annotations(for: tool)
         ]
+        if widgetAvailable {
+            json["_meta"] = [
+                Self.toolUIMetaKey: ["resourceUri": Self.widgetResourceURI]
+            ]
+        }
+        return json
     }
 
     private func toolDescription(for tool: ToolDefinition) -> String {

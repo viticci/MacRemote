@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MacRemote Tool Output</title>
+<style>
+html, body { margin: 0; padding: 0; background: transparent; }
+body { padding: 2px; }
+.mrw-waiting {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  font-size: 12px; color: light-dark(rgba(60,60,67,.62), rgba(235,235,245,.60));
+  padding: 18px; text-align: center; color-scheme: light dark;
+}
+/* Host-forced theme (SEP-1865 hostContext.theme) overrides the ambient
+   scheme: light-dark() tokens key off color-scheme, so forcing is one rule. */
+:root[data-mrw-theme="dark"] .mrw, :root[data-mrw-theme="dark"] .mrw-waiting { color-scheme: dark; }
+:root[data-mrw-theme="light"] .mrw, :root[data-mrw-theme="light"] .mrw-waiting { color-scheme: light; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MACREMOTE WIDGET — REUSABLE STYLES  (everything scoped under .mrw)
+   The widget is a precision instrument: one card, one accent line for
+   status, dense-but-calm typography, hover-revealed affordances.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.mrw, .mrw * { box-sizing: border-box; margin: 0; padding: 0; }
+
+.mrw {
+  color-scheme: light dark;
+
+  /* — instrument palette — */
+  --bg:          light-dark(#ffffff, #1d1d20);
+  --panel:       light-dark(#f6f6f8, #161619);
+  --text:        light-dark(#1d1d1f, #f5f5f7);
+  --text2:       light-dark(rgba(60,60,67,.62), rgba(235,235,245,.60));
+  --text3:       light-dark(rgba(60,60,67,.34), rgba(235,235,245,.30));
+  --line:        light-dark(rgba(0,0,0,.10),  rgba(255,255,255,.11));
+  --line2:       light-dark(rgba(0,0,0,.055), rgba(255,255,255,.065));
+  --accent:      light-dark(#0071e3, #0a84ff);
+  --accent-tint: light-dark(rgba(0,113,227,.09), rgba(10,132,255,.16));
+  --ok:          light-dark(#1d7a35, #32d158);
+  --ok-line:     light-dark(#34c759, #30d158);
+  --ok-tint:     light-dark(rgba(52,199,89,.13),  rgba(48,209,88,.16));
+  --bad:         light-dark(#d70015, #ff6961);
+  --bad-line:    light-dark(#ff3b30, #ff453a);
+  --bad-tint:    light-dark(rgba(255,59,48,.09),  rgba(255,69,58,.14));
+  --warn:        light-dark(#9a5200, #ffb340);
+  --warn-line:   light-dark(#ff9500, #ff9f0a);
+  --warn-tint:   light-dark(rgba(255,149,0,.13), rgba(255,159,10,.15));
+  --hover:       light-dark(rgba(0,0,0,.035), rgba(255,255,255,.05));
+  --press:       light-dark(rgba(0,0,0,.06),  rgba(255,255,255,.08));
+
+  /* — curated ANSI (Xcode-console energy, never a hacker box) — */
+  --ansi-gray:    light-dark(#6e6e73, #98989d);
+  --ansi-red:     light-dark(#d70015, #ff6961);
+  --ansi-green:   light-dark(#1d7a35, #32d158);
+  --ansi-yellow:  light-dark(#9a5200, #ffd60a);
+  --ansi-blue:    light-dark(#0056c9, #6cb2ff);
+  --ansi-magenta: light-dark(#ad3da4, #da8fff);
+  --ansi-cyan:    light-dark(#006c7f, #66d4cf);
+  --ansi-white:   light-dark(#3a3a3c, #f2f2f7);
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ——— card shell ——— */
+.mrw-card {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px light-dark(rgba(0,0,0,.04), rgba(0,0,0,.35)),
+              0 6px 24px light-dark(rgba(0,0,0,.05), rgba(0,0,0,.30));
+}
+
+/* the single accent line — the whole status story in 2px */
+.mrw-accent {
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--status-line) 9%, var(--status-line) 91%, transparent 100%);
+  opacity: .95;
+}
+.mrw-card[data-status="success"] { --status: var(--ok);   --status-line: var(--ok-line);   --status-tint: var(--ok-tint); }
+.mrw-card[data-status="failed"]  { --status: var(--bad);  --status-line: var(--bad-line);  --status-tint: var(--bad-tint); }
+.mrw-card[data-status="timeout"] { --status: var(--warn); --status-line: var(--warn-line); --status-tint: var(--warn-tint); }
+
+/* ——— header ——— */
+.mrw-header {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 12px 16px 10px;
+}
+.mrw-title-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mrw-tool { font-size: 13px; font-weight: 600; letter-spacing: -.08px; white-space: nowrap; }
+.mrw-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 590; letter-spacing: .01em;
+  padding: 2px 8px 2px 7px; border-radius: 100px;
+  color: var(--status); background: var(--status-tint);
+  white-space: nowrap;
+}
+.mrw-chip::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--status-line); flex: none;
+}
+.mrw-metrics {
+  margin-left: auto; display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--mono); font-size: 11px; color: var(--text2);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.mrw-metrics .mrw-sep { color: var(--text3); }
+.mrw-cmd {
+  flex-basis: 100%; min-width: 0;
+  font-family: var(--mono); font-size: 11px; color: var(--text3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-top: 1px;
+}
+.mrw-cmd::before { content: "$ "; color: var(--text3); }
+
+/* ——— truncation notice ——— */
+.mrw-truncated {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0 16px 8px; padding: 5px 10px;
+  font-size: 11px; color: var(--text2);
+  background: var(--line2); border-radius: 6px;
+}
+.mrw-truncated svg { flex: none; opacity: .7; }
+.mrw-truncated b { font-weight: 590; font-variant-numeric: tabular-nums; color: var(--text); }
+
+/* ——— body / scroll cap ——— */
+.mrw-scroll {
+  max-height: 400px; /* fixed cap: vh is circular inside a self-sizing iframe */
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--line2);
+}
+
+/* ════════ TABLE state — the hero ════════ */
+.mrw-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 480px; }
+.mrw-table th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg);
+  font-size: 11px; font-weight: 590; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text2); text-align: left;
+  padding: 0; box-shadow: inset 0 -1px var(--line2);
+}
+.mrw-th-btn {
+  all: unset; display: flex; align-items: center; gap: 4px;
+  width: 100%; padding: 8px 12px; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-th-btn:hover { color: var(--text); }
+.mrw-th-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.mrw-sort-glyph { font-size: 8px; line-height: 1; color: var(--accent); opacity: 0; transform: translateY(-.5px); }
+th[aria-sort] .mrw-sort-glyph { opacity: 1; }
+
+.mrw-table td {
+  padding: 9px 12px; font-size: 12.5px;
+  border-bottom: 1px solid var(--line2);
+  vertical-align: middle;
+  transition: background-color .12s ease;
+}
+.mrw-table tr:last-child td { border-bottom: none; }
+.mrw-table tbody tr:hover td { background: var(--hover); }
+.mrw-td-num { text-align: right; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.mrw-td-dim { color: var(--text3); }
+.mrw-td-primary { font-weight: 480; }
+tr.mrw-row-done .mrw-td-primary { text-decoration: line-through; }
+tr.mrw-row-done td { color: var(--text3); }
+
+/* leading check circle — Apple Reminders energy */
+.mrw-td-check { width: 38px; padding-right: 0 !important; }
+.mrw-check {
+  all: unset; display: grid; place-items: center;
+  width: 19px; height: 19px; border-radius: 50%;
+  border: 1.5px solid var(--line); cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-check:hover { border-color: var(--accent); }
+.mrw-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mrw-check svg { opacity: 0; transition: opacity .12s ease; }
+.mrw-check[data-state="pending"] {
+  border-color: var(--line2); border-top-color: var(--accent);
+  animation: mrw-spin .65s linear infinite;
+}
+.mrw-check[data-state="done"] {
+  border-color: var(--accent); background: var(--accent); animation: mrw-pop .2s ease;
+}
+.mrw-check[data-state="done"] svg { opacity: 1; }
+
+/* trailing per-row buttons — revealed on hover, always on touch */
+.mrw-td-actions { width: 1%; text-align: right; white-space: nowrap; }
+.mrw-rowbtn {
+  all: unset; font-size: 11px; font-weight: 560; color: var(--accent);
+  padding: 3.5px 9px; border-radius: 6px; cursor: pointer;
+  background: var(--accent-tint);
+  opacity: 0; transform: translateX(2px);
+  transition: opacity .14s ease, transform .14s ease, background-color .14s ease;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+tr:hover .mrw-rowbtn, .mrw-rowbtn:focus-visible,
+.mrw-rowbtn[data-state="pending"], .mrw-rowbtn[data-state="done"] { opacity: 1; transform: none; }
+.mrw-rowbtn:hover { background: light-dark(rgba(0,113,227,.15), rgba(10,132,255,.24)); }
+.mrw-rowbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mrw-rowbtn[data-state="pending"] { color: var(--text2); background: var(--line2); pointer-events: none; }
+.mrw-rowbtn[data-state="done"] { color: var(--ok); background: var(--ok-tint); pointer-events: none; }
+@media (hover: none) { .mrw-rowbtn { opacity: 1; transform: none; } }
+
+/* ════════ TREE state ════════ */
+.mrw-tree { padding: 10px 16px 12px; font-size: 12px; }
+.mrw-tree-row { display: flex; align-items: baseline; gap: 6px; padding: 3px 0; min-width: 0; }
+.mrw-tree-key { color: var(--text); font-weight: 520; flex: none; }
+.mrw-tree-key::after { content: ""; }
+.mrw-tree-colon { color: var(--text3); flex: none; }
+.mrw-tree-val { font-family: var(--mono); font-size: 11.5px; word-break: break-word; min-width: 0; }
+.mrw-v-str  { color: var(--text); }
+.mrw-v-num  { color: var(--ansi-blue); font-variant-numeric: tabular-nums; }
+.mrw-v-bool { color: var(--ansi-magenta); }
+.mrw-v-null { color: var(--text3); font-style: italic; }
+.mrw-tree-branch { }
+.mrw-tree-head {
+  all: unset; display: flex; align-items: center; gap: 6px;
+  padding: 3px 0; cursor: pointer; width: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-tree-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.mrw-disclose {
+  flex: none; width: 12px; height: 12px; display: grid; place-items: center;
+  color: var(--text3); transition: transform .16s ease;
+}
+.mrw-tree-head[aria-expanded="true"] .mrw-disclose { transform: rotate(90deg); }
+.mrw-tree-head:hover .mrw-disclose { color: var(--text2); }
+.mrw-tree-count { font-family: var(--mono); font-size: 10.5px; color: var(--text3); }
+.mrw-tree-kids {
+  margin-left: 5.5px; padding-left: 14px;
+  border-left: 1px solid var(--line2);
+}
+.mrw-tree-kids[hidden] { display: none; }
+.mrw-tree > .mrw-tree-branch > .mrw-tree-kids { border-left: none; margin-left: 0; padding-left: 18px; }
+.mrw-tree-leaf-pad { width: 12px; flex: none; }
+
+/* ════════ TERMINAL state — Xcode-console refinement ════════ */
+.mrw-term {
+  margin: 12px 16px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  padding: 11px 14px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  font-variant-numeric: tabular-nums;
+}
+.mrw-a-bold { font-weight: 650; }
+.mrw-a-dim { color: var(--text3); }
+.mrw-a-italic { font-style: italic; }
+.mrw-a-under { text-decoration: underline; }
+.mrw-a-gray    { color: var(--ansi-gray); }
+.mrw-a-red     { color: var(--ansi-red); }
+.mrw-a-green   { color: var(--ansi-green); }
+.mrw-a-yellow  { color: var(--ansi-yellow); }
+.mrw-a-blue    { color: var(--ansi-blue); }
+.mrw-a-magenta { color: var(--ansi-magenta); }
+.mrw-a-cyan    { color: var(--ansi-cyan); }
+.mrw-a-white   { color: var(--ansi-white); }
+
+/* ════════ ERROR state ════════ */
+.mrw-error { padding: 14px 16px 16px; }
+.mrw-error-head { display: flex; align-items: flex-start; gap: 9px; }
+.mrw-error-icon {
+  flex: none; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--bad); background: var(--bad-tint); margin-top: 1px;
+}
+.mrw-error-title { font-size: 13px; font-weight: 600; letter-spacing: -.08px; }
+.mrw-error-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.mrw-stderr {
+  margin-top: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-left: 3px solid var(--bad-line);
+  border-radius: 8px;
+  padding: 10px 13px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+}
+.mrw-stderr-label {
+  display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--bad); margin-bottom: 5px; font-weight: 600;
+}
+.mrw-error details { margin-top: 10px; }
+.mrw-error summary {
+  font-size: 11.5px; color: var(--text2); cursor: pointer; user-select: none;
+  list-style: none; display: inline-flex; align-items: center; gap: 5px;
+}
+.mrw-error summary::-webkit-details-marker { display: none; }
+.mrw-error summary .mrw-disclose { transition: transform .16s ease; }
+.mrw-error details[open] summary .mrw-disclose { transform: rotate(90deg); }
+.mrw-error details .mrw-term { margin: 8px 0 0; }
+
+/* ════════ EMPTY state ════════ */
+.mrw-empty {
+  padding: 30px 20px 32px; text-align: center;
+}
+.mrw-empty-icon {
+  width: 34px; height: 34px; margin: 0 auto 10px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--ok); background: var(--ok-tint);
+}
+.mrw-empty-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: -.08px; }
+.mrw-empty-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+
+/* ——— footer ——— */
+.mrw-footer {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px 8px 16px;
+  border-top: 1px solid var(--line2);
+}
+.mrw-brand {
+  display: inline-flex; align-items: center; gap: 5.5px;
+  font-size: 10.5px; font-weight: 590; letter-spacing: .02em;
+  color: var(--text3); user-select: none;
+}
+.mrw-brand svg { opacity: .8; }
+.mrw-footer-spacer { flex: 1; }
+.mrw-btn {
+  all: unset; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 560; color: var(--text2);
+  padding: 4.5px 9px; border-radius: 7px; cursor: pointer;
+  transition: background-color .13s ease, color .13s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-btn:hover { background: var(--hover); color: var(--text); }
+.mrw-btn:active { background: var(--press); }
+.mrw-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mrw-btn svg { flex: none; }
+.mrw-btn[data-state="done"] { color: var(--ok); }
+.mrw-btn[data-state="pending"] { color: var(--text3); pointer-events: none; }
+.mrw-btn-primary { color: var(--accent); }
+.mrw-btn-primary:hover { background: var(--accent-tint); color: var(--accent); }
+
+/* shared inline spinner */
+.mrw-spin {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  border: 1.5px solid var(--line); border-top-color: currentColor;
+  animation: mrw-spin .65s linear infinite;
+}
+@keyframes mrw-spin { to { transform: rotate(360deg); } }
+@keyframes mrw-pop { 0% { transform: scale(.7); } 60% { transform: scale(1.12); } 100% { transform: scale(1); } }
+
+/* narrow layouts (~360px) */
+@container (max-width: 430px) { }
+@media (max-width: 480px) {
+  .mrw-header { padding: 11px 13px 9px; }
+  .mrw-metrics { margin-left: 0; flex-basis: 100%; order: 3; }
+  .mrw-truncated { margin: 0 13px 8px; }
+  .mrw-tree { padding: 8px 13px 10px; }
+  .mrw-term { margin: 10px 13px 12px; }
+  .mrw-error { padding: 12px 13px 14px; }
+  .mrw-footer { padding-left: 13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mrw * { transition: none !important; animation-duration: 1.2s; }
+}
+</style>
+</head>
+<body>
+<div id="mrw-root"><div class="mrw-waiting">Waiting for tool output…</div></div>
+<script id="macremote-widget">
+/* ════════════════════════════════════════════════════════════════════════
+   MACREMOTE WIDGET — REUSABLE RENDERING MODULE
+   API:  MacRemoteWidget.mount(container, payload)
+   payload = {
+     tool:       { name, command? },
+     status:     'success' | 'failed' | 'timeout',
+     durationMs: number | null,
+     exitCode:   number | null,
+     stdout:     string,           // raw tool output (JSON or text/ANSI)
+     stderr:     string,
+     truncated:  { shown, total, unit? } | null,
+     rowActions: [ { id, kind:'check'|'button', label?, doneLabel?, title? } ],
+     onAction:   (actionId, row)  => Promise,   // host bridge (optional)
+     onRunAgain: ()               => Promise    // host bridge (optional)
+   }
+   ════════════════════════════════════════════════════════════════════════ */
+const MacRemoteWidget = (() => {
+  'use strict';
+
+  /* ---------- tiny DOM helpers ---------- */
+  const el = (tag, cls, ...kids) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    for (const k of kids) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k));
+    return n;
+  };
+  const svg = (m) => { const t = document.createElement('template'); t.innerHTML = m.trim(); return t.content.firstChild; };
+  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  /* ---------- iconography (13–14px strokes, currentColor) ---------- */
+  const I = {
+    logo: () => svg('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="3" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="10.5" r="1.6" fill="currentColor"/><path d="M8.5 21h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'),
+    check: () => svg('<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 6.3 5 8.8l4.5-5.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    checkTint: () => svg('<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 6.3 5 8.8l4.5-5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    copy: () => svg('<svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true"><rect x="4.75" y="4.75" width="7.5" height="7.5" rx="1.8" stroke="currentColor" stroke-width="1.4"/><path d="M9.25 3V2.8A1.8 1.8 0 0 0 7.45 1H2.8A1.8 1.8 0 0 0 1 2.8v4.65a1.8 1.8 0 0 0 1.8 1.8H4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'),
+    rerun: () => svg('<svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M12.25 7A5.25 5.25 0 1 1 7 1.75c1.9 0 3.57 1 4.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11.9 1.4v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    chevron: () => svg('<svg class="mrw-disclose" width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M3.2 1.6 6.8 5 3.2 8.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    alert: () => svg('<svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 4.4v3.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="7" cy="10.3" r=".95" fill="currentColor"/></svg>'),
+    scissors: () => svg('<svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1.5 7h11M10.2 4.6 12.5 7l-2.3 2.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2.2 2"/></svg>'),
+    emptyCheck: () => svg('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.2 8.6 6.4 11.8 12.8 4.6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    spinner: () => el('span', 'mrw-spin')
+  };
+
+  /* ---------- formatting ---------- */
+  const STATUS = {
+    success: { label: 'Success' },
+    failed:  { label: 'Failed' },
+    timeout: { label: 'Timed out' }
+  };
+  function fmtDuration(ms) {
+    if (ms == null) return null;
+    if (ms < 1000) return Math.round(ms) + ' ms';
+    if (ms < 60000) return (ms / 1000).toFixed(1).replace(/\.0$/, '') + ' s';
+    const m = Math.floor(ms / 60000), s = Math.round((ms % 60000) / 1000);
+    return m + ' m ' + s + ' s';
+  }
+  const prettyKey = (k) => String(k)
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, c => c.toUpperCase());
+
+  /* ---------- content-state detection ---------- */
+  // Rows for the table state: a bare array of objects, or the common
+  // CLI shape of an object with exactly one array-of-objects value
+  // (e.g. remctl's {"items": [...]}).
+  function tableRowsFrom(j) {
+    const isRowArray = (a) => Array.isArray(a) && a.length && a.every(x => x && typeof x === 'object' && !Array.isArray(x));
+    if (isRowArray(j)) return j;
+    if (j && typeof j === 'object' && !Array.isArray(j)) {
+      const arrayKeys = Object.keys(j).filter(k => Array.isArray(j[k]));
+      if (arrayKeys.length === 1 && isRowArray(j[arrayKeys[0]])) return j[arrayKeys[0]];
+    }
+    return null;
+  }
+
+  function detectState(p) {
+    const out = (p.stdout || '').trim();
+    if (p.status !== 'success' && (p.stderr || '').trim()) return 'error';
+    if (!out) return (p.stderr || '').trim() ? 'error' : 'empty';
+    try {
+      const j = JSON.parse(out);
+      if (tableRowsFrom(j)) return 'table';
+      if (j && typeof j === 'object') return 'tree';
+    } catch (_) { /* not JSON — fall through to terminal */ }
+    return 'terminal';
+  }
+
+  /* ---------- ANSI SGR → styled spans (curated palette) ---------- */
+  const ANSI_FG = { 30:'gray',31:'red',32:'green',33:'yellow',34:'blue',35:'magenta',36:'cyan',37:'white',
+                    90:'gray',91:'red',92:'green',93:'yellow',94:'blue',95:'magenta',96:'cyan',97:'white' };
+  function ansiToHtml(text) {
+    const parts = String(text).split(/\x1b\[([0-9;]*)m/);
+    let html = '', st = { fg: null, bold: false, dim: false, italic: false, under: false };
+    for (let i = 0; i < parts.length; i++) {
+      if (i % 2 === 0) {
+        if (!parts[i]) continue;
+        const cls = [];
+        if (st.fg)    cls.push('mrw-a-' + st.fg);
+        if (st.bold)  cls.push('mrw-a-bold');
+        if (st.dim)   cls.push('mrw-a-dim');
+        if (st.italic)cls.push('mrw-a-italic');
+        if (st.under) cls.push('mrw-a-under');
+        html += cls.length ? '<span class="' + cls.join(' ') + '">' + esc(parts[i]) + '</span>' : esc(parts[i]);
+      } else {
+        for (const code of (parts[i] === '' ? ['0'] : parts[i].split(';'))) {
+          const c = +code;
+          if (c === 0) st = { fg: null, bold: false, dim: false, italic: false, under: false };
+          else if (c === 1) st.bold = true;
+          else if (c === 2) st.dim = true;
+          else if (c === 3) st.italic = true;
+          else if (c === 4) st.under = true;
+          else if (c === 22) { st.bold = false; st.dim = false; }
+          else if (c === 39) st.fg = null;
+          else if (ANSI_FG[c]) st.fg = ANSI_FG[c];
+        }
+      }
+    }
+    return html;
+  }
+
+  /* ---------- async affordance helper: idle → pending → done ---------- */
+  function runAffordance(btn, work, onDone) {
+    if (btn.dataset.state === 'pending' || btn.dataset.state === 'done') return;
+    btn.dataset.state = 'pending';
+    const restore = btn.cloneNode(true); // snapshot not needed; we rebuild below
+    Promise.resolve().then(work).then(() => {
+      btn.dataset.state = 'done';
+      onDone && onDone();
+    }).catch(() => { btn.dataset.state = ''; });
+  }
+
+  /* ════════ header ════════ */
+  function renderHeader(p) {
+    const meta = STATUS[p.status] || STATUS.success;
+    const header = el('header', 'mrw-header');
+    const chip = el('span', 'mrw-chip', meta.label);
+    chip.setAttribute('role', 'status');
+    header.append(el('div', 'mrw-title-group', el('span', 'mrw-tool', p.tool.name), chip));
+
+    const metrics = el('div', 'mrw-metrics');
+    const bits = [];
+    const d = fmtDuration(p.durationMs);
+    if (d) bits.push(d);
+    if (p.exitCode != null) bits.push('exit ' + p.exitCode);
+    bits.forEach((b, i) => {
+      if (i) metrics.append(el('span', 'mrw-sep', '·'));
+      metrics.append(el('span', null, b));
+    });
+    header.append(metrics);
+    if (p.tool.command) {
+      const cmd = el('div', 'mrw-cmd', p.tool.command);
+      cmd.title = p.tool.command;
+      header.append(cmd);
+    }
+    return header;
+  }
+
+  function renderTruncated(t) {
+    const n = el('div', 'mrw-truncated');
+    n.append(I.scissors());
+    const unit = t.unit || 'lines';
+    if (t.total == null) {
+      const strong = el('b', null, 'first ' + t.shown.toLocaleString() + ' ' + unit);
+      n.append('Output truncated — showing the ', strong, '; the full result stayed on the Mac.');
+    } else {
+      const strong = el('b', null, t.shown.toLocaleString() + ' of ' + t.total.toLocaleString());
+      n.append('Output truncated — showing ', strong, ' ' + unit + '.');
+    }
+    return n;
+  }
+
+  /* ════════ TABLE state ════════ */
+  function renderTable(p, rows) {
+    const PREFERRED = ['id', 'title', 'name', 'list', 'due', 'date', 'priority', 'completed'];
+    const seen = [];
+    for (const r of rows) for (const k of Object.keys(r)) if (!seen.includes(k)) seen.push(k);
+    const cols = seen
+      .filter(k => rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== ''))
+      .sort((a, b) => {
+        const pa = PREFERRED.indexOf(a), pb = PREFERRED.indexOf(b);
+        return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+      })
+      .slice(0, 8);
+    const numeric = Object.fromEntries(cols.map(c =>
+      [c, rows.every(r => r[c] == null || typeof r[c] === 'number')]));
+
+    rows.forEach((r, i) => Object.defineProperty(r, '__mrwIdx', { value: i, enumerable: false }));
+    const actionState = new Map();          // rowIdx -> { actionId -> state }
+    const sort = { key: null, dir: 1 };
+
+    const wrap = el('div', 'mrw-scroll');
+    const table = el('table', 'mrw-table');
+    const checkActions  = (p.rowActions || []).filter(a => a.kind === 'check');
+    const buttonActions = (p.rowActions || []).filter(a => a.kind === 'button');
+
+    /* — sticky sortable header — */
+    const thead = el('thead'); const headRow = el('tr');
+    if (checkActions.length) headRow.append(el('th', 'mrw-td-check'));
+    const ths = {};
+    for (const c of cols) {
+      const glyph = el('span', 'mrw-sort-glyph', '▲');
+      const btn = el('button', 'mrw-th-btn', prettyKey(c), glyph);
+      btn.type = 'button';
+      const th = el('th', numeric[c] ? 'mrw-td-num' : null, btn);
+      btn.addEventListener('click', () => {
+        if (sort.key === c) sort.dir *= -1; else { sort.key = c; sort.dir = 1; }
+        for (const [k, t] of Object.entries(ths)) {
+          if (k === sort.key) { t.setAttribute('aria-sort', sort.dir > 0 ? 'ascending' : 'descending'); t.querySelector('.mrw-sort-glyph').textContent = sort.dir > 0 ? '▲' : '▼'; }
+          else t.removeAttribute('aria-sort');
+        }
+        paintRows();
+      });
+      ths[c] = th; headRow.append(th);
+    }
+    if (buttonActions.length) headRow.append(el('th', 'mrw-td-actions'));
+    thead.append(headRow);
+
+    const tbody = el('tbody');
+
+    function cellNode(v, isPrimary, isNum) {
+      const cls = ['', isNum ? 'mrw-td-num' : '', isPrimary ? 'mrw-td-primary' : ''].join(' ').trim();
+      if (v == null) { const td = el('td', (cls + ' mrw-td-dim').trim(), '—'); return td; }
+      if (typeof v === 'object') return el('td', cls, JSON.stringify(v).slice(0, 60));
+      if (typeof v === 'boolean') return el('td', (cls + ' mrw-td-dim').trim(), v ? 'true' : 'false');
+      return el('td', cls || null, String(v));
+    }
+
+    function paintRows() {
+      const ordered = rows.slice();
+      if (sort.key) {
+        const k = sort.key;
+        ordered.sort((a, b) => {
+          const av = a[k], bv = b[k];
+          if (av == null) return 1; if (bv == null) return -1;
+          if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sort.dir;
+          return String(av).localeCompare(String(bv), undefined, { numeric: true }) * sort.dir;
+        });
+      }
+      tbody.textContent = '';
+      for (const row of ordered) {
+        const tr = el('tr');
+        const rowSt = actionState.get(row.__mrwIdx) || {};
+
+        if (checkActions.length) {
+          const act = checkActions[0];
+          const applies = !p.actionApplies || p.actionApplies(act, row);
+          const alreadyDone = p.completedField != null && !!row[p.completedField];
+          if (!applies) { tr.append(el('td', 'mrw-td-check')); }
+          else {
+          const btn = el('button', 'mrw-check');
+          btn.type = 'button';
+          btn.title = act.title || 'Mark complete';
+          btn.setAttribute('aria-label', (act.title || 'Mark complete') + ': ' + String(row[cols[0]] ?? ''));
+          btn.append(I.check());
+          btn.dataset.state = alreadyDone ? 'done' : (rowSt[act.id] || '');
+          if (alreadyDone || rowSt[act.id] === 'done') tr.classList.add('mrw-row-done');
+          btn.addEventListener('click', () => {
+            if (btn.dataset.state) return;
+            btn.dataset.state = 'pending';
+            setRowState(row, act.id, 'pending');
+            invoke(act.id, row).then(() => {
+              btn.dataset.state = 'done';
+              setRowState(row, act.id, 'done');
+              tr.classList.add('mrw-row-done');
+            }).catch(() => { btn.dataset.state = ''; setRowState(row, act.id, ''); });
+          });
+          tr.append(el('td', 'mrw-td-check', btn));
+          }
+        }
+
+        cols.forEach((c, ci) => tr.append(cellNode(row[c], ci === 0, numeric[c])));
+
+        if (buttonActions.length) {
+          const td = el('td', 'mrw-td-actions');
+          for (const act of buttonActions) {
+            if (p.actionApplies && !p.actionApplies(act, row)) continue;
+            const b = el('button', 'mrw-rowbtn');
+            b.type = 'button';
+            b.dataset.state = rowSt[act.id] || '';
+            const label = () => {
+              b.textContent = '';
+              if (b.dataset.state === 'pending') { b.append(I.spinner(), act.label || 'Run'); }
+              else if (b.dataset.state === 'done') { b.append(I.checkTint(), act.doneLabel || 'Done'); }
+              else b.append(act.label || 'Run');
+            };
+            label();
+            b.addEventListener('click', () => {
+              if (b.dataset.state) return;
+              b.dataset.state = 'pending'; setRowState(row, act.id, 'pending'); label();
+              invoke(act.id, row).then(() => {
+                b.dataset.state = 'done'; setRowState(row, act.id, 'done'); label();
+              }).catch(() => { b.dataset.state = ''; setRowState(row, act.id, ''); label(); });
+            });
+            td.append(b);
+          }
+          tr.append(td);
+        }
+        tbody.append(tr);
+      }
+    }
+    function setRowState(row, actionId, s) {
+      const cur = actionState.get(row.__mrwIdx) || {};
+      cur[actionId] = s; actionState.set(row.__mrwIdx, cur);
+    }
+    function invoke(actionId, row) {
+      const clean = { ...row };
+      return p.onAction ? Promise.resolve(p.onAction(actionId, clean)) : Promise.resolve();
+    }
+
+    paintRows();
+    table.append(thead, tbody);
+    wrap.append(table);
+    return wrap;
+  }
+
+  /* ════════ TREE state ════════ */
+  function renderTree(p, obj) {
+    const scroll = el('div', 'mrw-scroll');
+    const tree = el('div', 'mrw-tree');
+    tree.append(branchNode(null, obj, 0));
+    scroll.append(tree);
+    return scroll;
+
+    function valueNode(v) {
+      if (v === null)            return el('span', 'mrw-tree-val mrw-v-null', 'null');
+      if (typeof v === 'number') return el('span', 'mrw-tree-val mrw-v-num', String(v));
+      if (typeof v === 'boolean')return el('span', 'mrw-tree-val mrw-v-bool', String(v));
+      return el('span', 'mrw-tree-val mrw-v-str', String(v));
+    }
+    function branchNode(key, val, depth) {
+      const isObj = val && typeof val === 'object';
+      if (!isObj) {
+        const row = el('div', 'mrw-tree-row');
+        row.append(el('span', 'mrw-tree-leaf-pad'));
+        if (key != null) row.append(el('span', 'mrw-tree-key', key), el('span', 'mrw-tree-colon', ':'));
+        row.append(valueNode(val));
+        return row;
+      }
+      const isArr = Array.isArray(val);
+      const entries = isArr ? val.map((v, i) => [String(i), v]) : Object.entries(val);
+      const branch = el('div', 'mrw-tree-branch');
+      const kids = el('div', 'mrw-tree-kids');
+      for (const [k, v] of entries) kids.append(branchNode(k, v, depth + 1));
+
+      if (key == null) { branch.append(kids); return branch; } // root: no header row
+
+      const count = isArr ? val.length + (val.length === 1 ? ' item' : ' items')
+                          : entries.length + (entries.length === 1 ? ' key' : ' keys');
+      const head = el('button', 'mrw-tree-head');
+      head.type = 'button';
+      head.append(I.chevron(), el('span', 'mrw-tree-key', key), el('span', 'mrw-tree-count', isArr ? '[' + count + ']' : '{' + count + '}'));
+      const open = depth < 2;
+      head.setAttribute('aria-expanded', String(open));
+      kids.hidden = !open;
+      head.addEventListener('click', () => {
+        const now = head.getAttribute('aria-expanded') !== 'true';
+        head.setAttribute('aria-expanded', String(now));
+        kids.hidden = !now;
+      });
+      branch.append(head, kids);
+      return branch;
+    }
+  }
+
+  /* ════════ TERMINAL state ════════ */
+  function renderTerminal(p, text) {
+    const scroll = el('div', 'mrw-scroll');
+    const pane = el('div', 'mrw-term');
+    pane.innerHTML = ansiToHtml(text);
+    scroll.append(pane);
+    return scroll;
+  }
+
+  /* ════════ ERROR state ════════ */
+  function renderError(p) {
+    const box = el('div', 'mrw-error');
+    const timedOut = p.status === 'timeout';
+    const title = timedOut
+      ? p.tool.name + ' ran out of time'
+      : p.tool.name + ' couldn’t complete this command';
+    const subBits = [];
+    if (p.exitCode != null) subBits.push('It exited with code ' + p.exitCode);
+    else if (timedOut) subBits.push('The command was stopped');
+    const d = fmtDuration(p.durationMs);
+    if (d) subBits.push((subBits.length ? 'after ' : 'It ran for ') + d);
+    const sub = subBits.join(' ') + '. The details below usually explain why.';
+
+    const icon = el('div', 'mrw-error-icon'); icon.append(I.alert());
+    box.append(el('div', 'mrw-error-head', icon,
+      el('div', null, el('div', 'mrw-error-title', title), el('div', 'mrw-error-sub', sub))));
+
+    if ((p.stderr || '').trim()) {
+      const pane = el('div', 'mrw-stderr');
+      pane.append(el('span', 'mrw-stderr-label', 'stderr'));
+      const body = el('span');
+      body.innerHTML = ansiToHtml(p.stderr.trim());
+      pane.append(body);
+      box.append(pane);
+    }
+    if ((p.stdout || '').trim()) {
+      const details = el('details');
+      const summary = el('summary');
+      summary.append(I.chevron(), 'Standard output before the failure');
+      const pane = el('div', 'mrw-term');
+      pane.innerHTML = ansiToHtml(p.stdout.trim());
+      details.append(summary, pane);
+      box.append(details);
+    }
+    return box;
+  }
+
+  /* ════════ EMPTY state ════════ */
+  function renderEmpty(p) {
+    const box = el('div', 'mrw-empty');
+    const icon = el('div', 'mrw-empty-icon'); icon.append(I.emptyCheck());
+    const d = fmtDuration(p.durationMs);
+    box.append(icon,
+      el('div', 'mrw-empty-title', 'Completed — nothing to report'),
+      el('div', 'mrw-empty-sub', p.tool.name + ' finished cleanly' + (d ? ' in ' + d : '') + ', with no output.'));
+    return box;
+  }
+
+  /* ════════ footer ════════ */
+  function renderFooter(p, rawOutput) {
+    const f = el('footer', 'mrw-footer');
+    const brand = el('span', 'mrw-brand');
+    brand.append(I.logo(), 'MacRemote');
+    f.append(brand, el('span', 'mrw-footer-spacer'));
+
+    if (rawOutput) {
+      const copyBtn = el('button', 'mrw-btn');
+      copyBtn.type = 'button';
+      const setCopyLabel = (done) => {
+        copyBtn.textContent = '';
+        copyBtn.append(done ? I.checkTint() : I.copy(), done ? 'Copied' : 'Copy output');
+      };
+      setCopyLabel(false);
+      copyBtn.addEventListener('click', () => {
+        copyToClipboard(rawOutput).then(() => {
+          copyBtn.dataset.state = 'done'; setCopyLabel(true);
+          setTimeout(() => { delete copyBtn.dataset.state; setCopyLabel(false); }, 1400);
+        });
+      });
+      f.append(copyBtn);
+    }
+
+    const runBtn = el('button', 'mrw-btn mrw-btn-primary');
+    runBtn.type = 'button';
+    const setRunLabel = (state) => {
+      runBtn.textContent = '';
+      if (state === 'pending') runBtn.append(I.spinner(), 'Running…');
+      else runBtn.append(I.rerun(), 'Run again');
+    };
+    setRunLabel('');
+    runBtn.addEventListener('click', () => {
+      if (runBtn.dataset.state === 'pending') return;
+      runBtn.dataset.state = 'pending'; setRunLabel('pending');
+      const work = p.onRunAgain ? Promise.resolve(p.onRunAgain()) : Promise.resolve();
+      work.finally(() => { delete runBtn.dataset.state; setRunLabel(''); });
+    });
+    f.append(runBtn);
+    return f;
+  }
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).catch(() => legacyCopy(text));
+    }
+    return legacyCopy(text);
+  }
+  function legacyCopy(text) {
+    return new Promise((res) => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      ta.remove(); res();
+    });
+  }
+
+  /* ════════ mount ════════ */
+  function mount(container, payload) {
+    const p = Object.assign({ stdout: '', stderr: '', status: 'success', tool: { name: 'tool' } }, payload);
+    const state = detectState(p);
+    const root = el('div', 'mrw');
+    const card = el('article', 'mrw-card');
+    card.dataset.status = p.status;
+    card.setAttribute('aria-label', p.tool.name + ' — ' + (STATUS[p.status] || STATUS.success).label);
+
+    card.append(el('div', 'mrw-accent'), renderHeader(p));
+    if (p.truncated) card.append(renderTruncated(p.truncated));
+
+    let body;
+    if (state === 'table')      body = renderTable(p, tableRowsFrom(JSON.parse(p.stdout.trim())));
+    else if (state === 'tree')  body = renderTree(p, JSON.parse(p.stdout.trim()));
+    else if (state === 'error') body = renderError(p);
+    else if (state === 'empty') body = renderEmpty(p);
+    else                        body = renderTerminal(p, p.stdout);
+    card.append(body);
+
+    const raw = (p.stdout || '').trim() || (p.stderr || '').trim();
+    card.append(renderFooter(p, raw || null));
+
+    root.append(card);
+    container.textContent = '';
+    container.append(root);
+    return { state };
+  }
+
+  return { mount, detectState, ansiToHtml };
+})();
+</script>
+<script id="macremote-transport">/* ════════════════════════════════════════════════════════════════════════
+   MACREMOTE TRANSPORT — MCP Apps (SEP-1865) host bridge.
+   Raw JSON-RPC 2.0 over postMessage with window.parent. The View initiates
+   ui/initialize; the host streams ui/notifications/tool-input and
+   ui/notifications/tool-result; widget-initiated tools/call rides the same
+   authenticated server connection (and MacRemote's approval gating) via the
+   host. Renders through MacRemoteWidget.mount above.
+   ════════════════════════════════════════════════════════════════════════ */
+(() => {
+"use strict";
+
+const PROTOCOL_VERSION = "2026-01-26";
+const UI_META_KEY = "net.viticci.macremote/ui";
+const rootEl = document.getElementById("mrw-root");
+
+let nextID = 1;
+const pending = new Map();
+const state = { result: null, toolInput: {} };
+
+const post = (m) => window.parent.postMessage(m, "*");
+function request(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = nextID++;
+    pending.set(id, { resolve, reject });
+    post({ jsonrpc: "2.0", id, method, params });
+  });
+}
+const notify = (method, params) => post({ jsonrpc: "2.0", method, params: params || {} });
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window.parent) { return; }
+  const msg = event.data;
+  if (!msg || msg.jsonrpc !== "2.0") { return; }
+
+  if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+    const waiter = pending.get(msg.id);
+    if (waiter) {
+      pending.delete(msg.id);
+      msg.error ? waiter.reject(msg.error) : waiter.resolve(msg.result);
+    }
+    return;
+  }
+  switch (msg.method) {
+    case "ui/notifications/tool-input":
+      state.toolInput = (msg.params && msg.params.arguments) || {};
+      break;
+    case "ui/notifications/tool-result":
+      state.result = msg.params || {};
+      renderResult();
+      break;
+    case "ui/notifications/tool-cancelled":
+      rootEl.innerHTML = '<div class="mrw-waiting">Cancelled' +
+        ((msg.params && msg.params.reason) ? ": " + String(msg.params.reason).replace(/[&<>]/g, "") : "") + "</div>";
+      break;
+    case "ui/notifications/host-context-changed":
+      applyHostContext((msg.params && msg.params.hostContext) || msg.params || {});
+      break;
+    case "ui/resource-teardown":
+      if (msg.id !== undefined) { post({ jsonrpc: "2.0", id: msg.id, result: {} }); }
+      break;
+    case "ping":
+      if (msg.id !== undefined) { post({ jsonrpc: "2.0", id: msg.id, result: {} }); }
+      break;
+  }
+});
+
+function applyHostContext(ctx) {
+  if (!ctx) { return; }
+  // light-dark() tokens key off color-scheme, so a host-forced theme is one
+  // property write away.
+  if (ctx.theme === "dark" || ctx.theme === "light") {
+    document.documentElement.dataset.mrwTheme = ctx.theme;
+  }
+}
+
+(function boot() {
+  pending.set(0, {
+    resolve: (result) => {
+      applyHostContext(result && result.hostContext);
+      notify("ui/notifications/initialized");
+    },
+    reject: () => { /* standalone preview: no host, stay quiet */ }
+  });
+  post({
+    jsonrpc: "2.0", id: 0, method: "ui/initialize",
+    params: {
+      appInfo: { name: "MacRemote Output", version: "1.0.0" },
+      appCapabilities: {},
+      protocolVersion: PROTOCOL_VERSION
+    }
+  });
+})();
+
+new ResizeObserver(() => {
+  notify("ui/notifications/size-changed", {
+    height: Math.ceil(document.documentElement.getBoundingClientRect().height)
+  });
+}).observe(document.body);
+
+/* Resolve {field} placeholders in action argument templates from the row. */
+function substitute(value, row) {
+  if (typeof value === "string") {
+    return value.replace(/\{([A-Za-z0-9_.]+)\}/g, (m, field) =>
+      row[field] !== undefined && row[field] !== null ? String(row[field]) : m);
+  }
+  if (Array.isArray(value)) { return value.map(v => substitute(v, row)); }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value)) { out[k] = substitute(value[k], row); }
+    return out;
+  }
+  return value;
+}
+
+function renderResult() {
+  const result = state.result || {};
+  const env = result.structuredContent || {};
+  const meta = (result._meta || {})[UI_META_KEY] || {};
+  const actions = meta.actions || [];
+  const byId = {};
+  for (const a of actions) { byId[a.id] = a; }
+  const check = actions.find(a => a.kind === "checkOff") || null;
+
+  MacRemoteWidget.mount(rootEl, {
+    tool: { name: meta.toolTitle || env.toolName || "Tool" },
+    status: env.timedOut ? "timeout" : (env.succeeded ? "success" : "failed"),
+    durationMs: typeof env.durationSeconds === "number" ? env.durationSeconds * 1000 : null,
+    exitCode: typeof env.exitCode === "number" ? env.exitCode : null,
+    stdout: env.stdout || "",
+    stderr: env.stderr || "",
+    truncated: env.truncatedStdout
+      ? { shown: (env.stdout || "").length, total: null, unit: "characters" }
+      : null,
+    rowActions: actions.map(a => ({
+      id: a.id,
+      kind: a.kind === "checkOff" ? "check" : "button",
+      label: a.title,
+      doneLabel: "Done",
+      title: a.title
+    })),
+    completedField: (check && check.completedWhenField) || null,
+    actionApplies: (act, row) => {
+      const raw = byId[act.id];
+      return !raw || (raw.requiredRowFields || []).every(f => row[f] !== undefined && row[f] !== null);
+    },
+    onAction: (actionId, row) => {
+      const raw = byId[actionId];
+      if (!raw) { return Promise.reject(new Error("unknown action")); }
+      return request("tools/call", {
+        name: raw.toolName,
+        arguments: substitute(raw.arguments, row)
+      }).then(r => {
+        if (r && r.isError === true) { throw new Error("action failed"); }
+      });
+    },
+    onRunAgain: meta.toolName
+      ? () => request("tools/call", { name: meta.toolName, arguments: state.toolInput || {} })
+          .then(r => { state.result = r; renderResult(); })
+      : null
+  });
+}
+})();
+</script>
+</body>
+</html>

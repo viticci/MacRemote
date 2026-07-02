@@ -47,7 +47,8 @@ enum RemCTLToolCatalog {
                 id: "remctl.today",
                 name: "Today",
                 summary: "Return due today and overdue reminders.",
-                argumentPattern: ["--format", "json", "today"]
+                argumentPattern: ["--format", "json", "today"],
+                uiActions: reminderRowUIActions
             ),
             readOnlyTool(
                 id: "remctl.upcoming",
@@ -64,25 +65,29 @@ enum RemCTLToolCatalog {
                         integerRange: 1...3650
                     )
                 ],
-                outputByteLimit: 1024 * 1024
+                outputByteLimit: 1024 * 1024,
+                uiActions: reminderRowUIActions
             ),
             readOnlyTool(
                 id: "remctl.overdue",
                 name: "Overdue",
                 summary: "Return all overdue reminders.",
-                argumentPattern: ["--format", "json", "overdue"]
+                argumentPattern: ["--format", "json", "overdue"],
+                uiActions: reminderRowUIActions
             ),
             readOnlyTool(
                 id: "remctl.flagged",
                 name: "Flagged",
                 summary: "Return flagged reminders.",
-                argumentPattern: ["--format", "json", "flagged"]
+                argumentPattern: ["--format", "json", "flagged"],
+                uiActions: reminderRowUIActions
             ),
             readOnlyTool(
                 id: "remctl.urgent",
                 name: "Urgent",
                 summary: "Return urgent reminders.",
-                argumentPattern: ["--format", "json", "urgent"]
+                argumentPattern: ["--format", "json", "urgent"],
+                uiActions: reminderRowUIActions
             ),
             readOnlyTool(
                 id: "remctl.lists",
@@ -148,7 +153,8 @@ enum RemCTLToolCatalog {
                         maximumLength: 160
                     )
                 ],
-                outputByteLimit: 1024 * 1024
+                outputByteLimit: 1024 * 1024,
+                uiActions: reminderRowUIActions
             ),
             readOnlyTool(
                 id: "remctl.show",
@@ -163,7 +169,8 @@ enum RemCTLToolCatalog {
                         maximumLength: 80
                     )
                 ],
-                outputByteLimit: 1024 * 1024
+                outputByteLimit: 1024 * 1024,
+                uiActions: reminderRowUIActions
             ),
             readOnlyTool(
                 id: "remctl.group_info",
@@ -241,6 +248,24 @@ enum RemCTLToolCatalog {
         ]
     }
 
+    /// Widget affordance for reminder-list results (MCP Apps): a Reminders-style
+    /// check-off circle per row, wired to `remctl done <id>` through the full
+    /// CLI tool. Data only — the call still passes capability gating and the
+    /// host approval flow ("if allowed" is enforced by the server, not the UI).
+    static var reminderRowUIActions: [ToolUIAction] {
+        [
+            ToolUIAction(
+                id: "complete",
+                title: "Mark Done",
+                kind: .checkOff,
+                toolID: fullCLITool.id,
+                arguments: .object(["args": .array([.string("--json"), .string("done"), .string("{id}")])]),
+                requiredRowFields: ["id"],
+                completedWhenField: "completed"
+            )
+        ]
+    }
+
     private static func readOnlyTool(
         id: String,
         name: String,
@@ -248,7 +273,8 @@ enum RemCTLToolCatalog {
         argumentPattern: [String],
         parameters: [ToolParameter] = [],
         timeoutSeconds: Double = 10,
-        outputByteLimit: Int = 512 * 1024
+        outputByteLimit: Int = 512 * 1024,
+        uiActions: [ToolUIAction]? = nil
     ) -> ToolDefinition {
         ToolDefinition(
             id: id,
@@ -261,7 +287,8 @@ enum RemCTLToolCatalog {
             timeoutSeconds: timeoutSeconds,
             outputByteLimit: outputByteLimit,
             category: .reminders,
-            permissionRequirements: permissionRequirements
+            permissionRequirements: permissionRequirements,
+            uiActions: uiActions
         )
     }
 

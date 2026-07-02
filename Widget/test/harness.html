@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MacRemote Widget Test Harness</title>
+<style>
+  body { margin: 0; padding: 16px; background: #ececf0; font-family: -apple-system, sans-serif; }
+  body.dark { background: #131316; }
+  iframe { width: 100%; max-width: 760px; border: none; display: block; margin: 0 auto; height: 200px; }
+</style>
+</head>
+<body>
+<iframe id="widget" src="../MacRemoteWidget.html"></iframe>
+<script>
+"use strict";
+/* Plays the MCP Apps HOST role for the widget under test (SEP-1865):
+   answers ui/initialize, streams tool-input + tool-result fixtures, proxies
+   tools/call (recording every call in window.__toolCalls), resizes on
+   ui/notifications/size-changed. Select fixture + theme via query string:
+   harness.html?fixture=table&theme=dark */
+
+const params = new URLSearchParams(location.search);
+const fixtureName = params.get("fixture") || "table";
+const theme = params.get("theme") || "light";
+if (theme === "dark") { document.body.classList.add("dark"); }
+
+const REMINDERS = [
+  { id: 101, title: "Publish MacRemote article", list: "Editorial", due: "2026-07-02", priority: 1, completed: false },
+  { id: 102, title: "Record podcast segment", list: "Podcasts", due: "2026-07-02", priority: 0, completed: false },
+  { id: 103, title: "Reply to WWDC follow-ups", list: "Emails", due: "2026-07-03", priority: 2, completed: true },
+  { id: 104, title: "Order studio cables", list: "Shopping", due: null, priority: 0, completed: false }
+];
+
+const UI_META = {
+  version: 1,
+  toolTitle: "Today",
+  toolName: "remctl_today",
+  capability: "readOnly",
+  category: "Reminders",
+  actions: [{
+    id: "complete", title: "Mark Done", kind: "checkOff",
+    toolName: "remctl_run", toolCapability: "destructive",
+    arguments: { args: ["--json", "done", "{id}"] },
+    requiredRowFields: ["id"], completedWhenField: "completed"
+  }]
+};
+
+function envelope(overrides) {
+  return Object.assign({
+    toolID: "remctl.today", toolName: "remctl_today", exitCode: 0, succeeded: true,
+    stdout: "", stderr: "", durationSeconds: 0.42, timedOut: false,
+    truncatedStdout: false, truncatedStderr: false
+  }, overrides || {});
+}
+
+const FIXTURES = {
+  table: { structuredContent: envelope({ stdout: JSON.stringify({ items: REMINDERS }) }), _meta: {"net.viticci.macremote/ui": UI_META} },
+  tree: { structuredContent: envelope({ stdout: JSON.stringify({ database: { path: "/tmp/db", reminders: 412, lists: 9 }, ok: true }) }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Stats", toolName: "remctl_stats", capability: "readOnly"}} },
+  terminal: { structuredContent: envelope({ stdout: "Build settings:\n  [1mSDKROOT[0m = [32mMacOSX26.5.sdk[0m\n  [33mwarning:[0m 2 targets skipped\n[34mBuild complete![0m (14.2s)" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Swift Build", toolName: "swift_cli", capability: "destructive"}} },
+  error: { structuredContent: envelope({ succeeded: false, exitCode: 1, stdout: "", stderr: "error: Reminders store not readable from this process context.\nGrant Full Disk Access and retry." }), isError: true, _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Today", toolName: "remctl_today", capability: "readOnly"}} },
+  empty: { structuredContent: envelope({ stdout: "" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Sync", toolName: "sync_tool", capability: "write"}} },
+  truncated: { structuredContent: envelope({ stdout: "partial output…", truncatedStdout: true }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Log Dump", toolName: "log_dump", capability: "readOnly"}} }
+};
+
+const iframe = document.getElementById("widget");
+window.__toolCalls = [];
+window.__sizeEvents = [];
+window.__initialized = false;
+
+window.addEventListener("message", (event) => {
+  if (event.source !== iframe.contentWindow) { return; }
+  const msg = event.data;
+  if (!msg || msg.jsonrpc !== "2.0") { return; }
+  const send = (m) => iframe.contentWindow.postMessage(m, "*");
+
+  if (msg.method === "ui/initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: {
+      protocolVersion: "2026-01-26",
+      hostInfo: { name: "HarnessHost", version: "1.0" },
+      hostCapabilities: { serverTools: {} },
+      hostContext: { theme: theme, platform: "web" }
+    }});
+    return;
+  }
+  if (msg.method === "ui/notifications/initialized") {
+    window.__initialized = true;
+    send({ jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: { days: 7 } } });
+    send({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: FIXTURES[fixtureName] });
+    return;
+  }
+  if (msg.method === "ui/notifications/size-changed") {
+    window.__sizeEvents.push(msg.params);
+    if (msg.params && msg.params.height) { iframe.style.height = Math.min(msg.params.height, 640) + "px"; }
+    return;
+  }
+  if (msg.method === "tools/call") {
+    window.__toolCalls.push(msg.params);
+    setTimeout(() => {
+      send({ jsonrpc: "2.0", id: msg.id, result: {
+        structuredContent: envelope({ toolName: msg.params.name, stdout: "{\"ok\": true}" }),
+        content: [{ type: "text", text: "{\"ok\": true}" }],
+        isError: false
+      }});
+    }, 250);
+    return;
+  }
+});
+</script>
+</body>
+</html>

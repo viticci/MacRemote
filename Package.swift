@@ -72,7 +72,10 @@ let package = Package(
                 "Views"
             ],
             resources: [
-                .copy("Shaders/default.metallib")
+                .copy("Shaders/default.metallib"),
+                // Universal MCP Apps widget: one adaptive HTML document
+                // rendering every tool's result envelope (SEP-1865).
+                .copy("Widget/MacRemoteWidget.html")
             ]
         ),
         .testTarget(

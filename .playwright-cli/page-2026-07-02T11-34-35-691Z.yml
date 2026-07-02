@@ -1,0 +1,21 @@
+- iframe [ref=e2]:
+  - article "Sync — Success" [ref=f1e4]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - generic [ref=f1e8]: Sync
+        - status [ref=f1e9]: Success
+      - generic [ref=f1e10]:
+        - generic [ref=f1e11]: 420 ms
+        - generic [ref=f1e12]: ·
+        - generic [ref=f1e13]: exit 0
+    - generic [ref=f1e14]:
+      - img [ref=f1e16]
+      - generic [ref=f1e18]: Completed — nothing to report
+      - generic [ref=f1e19]: Sync finished cleanly in 420 ms, with no output.
+    - generic [ref=f1e20]:
+      - generic [ref=f1e21]:
+        - img [ref=f1e22]
+        - text: MacRemote
+      - button "Run again" [ref=f1e25] [cursor=pointer]:
+        - img [ref=f1e26]
+        - text: Run again

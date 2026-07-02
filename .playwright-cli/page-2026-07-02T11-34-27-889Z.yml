@@ -1,0 +1,21 @@
+- iframe [ref=e2]:
+  - article "Swift Build — Success" [ref=f1e4]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - generic [ref=f1e8]: Swift Build
+        - status [ref=f1e9]: Success
+      - generic [ref=f1e10]:
+        - generic [ref=f1e11]: 420 ms
+        - generic [ref=f1e12]: ·
+        - generic [ref=f1e13]: exit 0
+    - generic [ref=f1e15]: "Build settings: SDKROOT = MacOSX26.5.sdk warning: 2 targets skipped Build complete! (14.2s)"
+    - generic [ref=f1e16]:
+      - generic [ref=f1e17]:
+        - img [ref=f1e18]
+        - text: MacRemote
+      - button "Copy output" [ref=f1e21] [cursor=pointer]:
+        - img [ref=f1e22]
+        - text: Copy output
+      - button "Run again" [ref=f1e25] [cursor=pointer]:
+        - img [ref=f1e26]
+        - text: Run again

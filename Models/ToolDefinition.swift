@@ -427,6 +427,53 @@ struct ToolProvenance: Codable, Hashable, Sendable {
     }
 }
 
+/// A UI affordance a client widget may render for this tool's results —
+/// pure data, no tool-specific code paths. The widget substitutes `{field}`
+/// placeholders from the acted-on row's JSON object and calls `toolID`
+/// through the host. Every such call re-enters the server's normal
+/// capability gating and approval flow: an action is a shortcut to a tool
+/// call, never a bypass.
+struct ToolUIAction: Codable, Hashable, Sendable {
+    enum Kind: String, Codable, Sendable {
+        /// Leading completion circle on table rows (Reminders-style).
+        case checkOff
+        /// Trailing button on table rows.
+        case rowButton
+    }
+
+    let id: String
+    let title: String
+    let kind: Kind
+    /// The tool invoked when the action fires (by internal tool id; the
+    /// server translates to the public MCP name for the widget).
+    let toolID: String
+    /// Arguments for `toolID`; string leaves may contain `{field}`
+    /// placeholders resolved from the row.
+    let arguments: JSONValue
+    /// The action appears only on rows containing all of these fields.
+    let requiredRowFields: [String]
+    /// For `.checkOff`: the row field whose truthiness means "already done".
+    let completedWhenField: String?
+
+    init(
+        id: String,
+        title: String,
+        kind: Kind,
+        toolID: String,
+        arguments: JSONValue,
+        requiredRowFields: [String] = [],
+        completedWhenField: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+        self.toolID = toolID
+        self.arguments = arguments
+        self.requiredRowFields = requiredRowFields
+        self.completedWhenField = completedWhenField
+    }
+}
+
 struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let name: String
@@ -444,6 +491,8 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let mcpBridge: MCPBridgeConfiguration?
     let mcpStdioBridge: MCPStdioBridgeConfiguration?
     let provenance: ToolProvenance?
+    /// Optional widget affordances (MCP Apps): catalog/user data, never code.
+    let uiActions: [ToolUIAction]?
 
     func withCategory(_ category: ToolCategory) -> ToolDefinition {
         ToolDefinition(
@@ -462,7 +511,8 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
             backend: backend,
             mcpBridge: mcpBridge,
             mcpStdioBridge: mcpStdioBridge,
-            provenance: provenance
+            provenance: provenance,
+            uiActions: uiActions
         )
     }
 
@@ -540,6 +590,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         case mcpBridge
         case mcpStdioBridge
         case provenance
+        case uiActions
     }
 
     init(
@@ -558,7 +609,8 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         backend: ToolBackend = .process,
         mcpBridge: MCPBridgeConfiguration? = nil,
         mcpStdioBridge: MCPStdioBridgeConfiguration? = nil,
-        provenance: ToolProvenance? = nil
+        provenance: ToolProvenance? = nil,
+        uiActions: [ToolUIAction]? = nil
     ) {
         self.id = id
         self.name = name
@@ -576,6 +628,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         self.mcpBridge = mcpBridge
         self.mcpStdioBridge = mcpStdioBridge
         self.provenance = provenance
+        self.uiActions = uiActions
     }
 
     init(from decoder: Decoder) throws {
@@ -596,6 +649,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         mcpBridge = try container.decodeIfPresent(MCPBridgeConfiguration.self, forKey: .mcpBridge)
         mcpStdioBridge = try container.decodeIfPresent(MCPStdioBridgeConfiguration.self, forKey: .mcpStdioBridge)
         provenance = try container.decodeIfPresent(ToolProvenance.self, forKey: .provenance)
+        uiActions = try container.decodeIfPresent([ToolUIAction].self, forKey: .uiActions)
     }
 }
 
