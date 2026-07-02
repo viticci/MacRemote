@@ -12,13 +12,15 @@ struct DefaultToolPreset: Identifiable, Hashable, Sendable {
     let outputLimitKB: Int
     let mode: ToolAdapterMode
     let permissionRequirements: [ToolPermissionRequirement]
+    /// Widget affordances (MCP Apps) — flow into the created tool's draft.
+    let uiActions: [ToolUIAction]?
 
     var requiresFullDiskAccess: Bool {
         permissionRequirements.contains(.fullDiskAccess)
     }
 
     var draft: ToolDefinitionDraft {
-        ToolDefinitionDraft(
+        var draft = ToolDefinitionDraft(
             mode: mode,
             name: name,
             summary: summary,
@@ -31,6 +33,8 @@ struct DefaultToolPreset: Identifiable, Hashable, Sendable {
             requiresFullDiskAccess: requiresFullDiskAccess,
             permissionRequirements: permissionRequirements.filter { !$0.isFullDiskAccess }
         )
+        draft.uiActions = uiActions
+        return draft
     }
 
     init(
@@ -45,7 +49,8 @@ struct DefaultToolPreset: Identifiable, Hashable, Sendable {
         outputLimitKB: Int,
         mode: ToolAdapterMode = .commandTemplate,
         requiresFullDiskAccess: Bool = false,
-        permissionRequirements: [ToolPermissionRequirement] = []
+        permissionRequirements: [ToolPermissionRequirement] = [],
+        uiActions: [ToolUIAction]? = nil
     ) {
         self.id = id
         self.name = name
@@ -60,6 +65,7 @@ struct DefaultToolPreset: Identifiable, Hashable, Sendable {
         self.permissionRequirements = ToolPermissionRequirement.normalized(
             permissionRequirements + (requiresFullDiskAccess ? [.fullDiskAccess] : [])
         )
+        self.uiActions = uiActions
     }
 }
 
@@ -556,7 +562,52 @@ enum DefaultToolPresetCatalog {
                 capability: .readOnly,
                 category: .podcasts,
                 timeoutSeconds: 20,
-                outputLimitKB: 2048
+                outputLimitKB: 2048,
+                uiActions: pocketQueueRowActions(includeRemove: true)
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.play_next",
+                name: "PocketCTL Play Next",
+                summary: "Move one episode next in the Up Next queue by UUID.",
+                executablePath: executablePath,
+                argumentPattern: ["play-next", "{uuid}"],
+                capability: .write,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 256
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.play_last",
+                name: "PocketCTL Play Last",
+                summary: "Move one episode to the end of the Up Next queue by UUID.",
+                executablePath: executablePath,
+                argumentPattern: ["play-last", "{uuid}"],
+                capability: .write,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 256
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.play_now",
+                name: "PocketCTL Play Now",
+                summary: "Move one episode to the front of the Up Next queue by UUID.",
+                executablePath: executablePath,
+                argumentPattern: ["play-now", "{uuid}"],
+                capability: .write,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 256
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.remove_up_next",
+                name: "PocketCTL Remove From Up Next",
+                summary: "Remove one episode from the Up Next queue by UUID.",
+                executablePath: executablePath,
+                argumentPattern: ["remove-up-next", "{uuid}"],
+                capability: .destructive,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 256
             ),
             DefaultToolPreset(
                 id: "preset.pocketctl.in_progress",
@@ -567,7 +618,8 @@ enum DefaultToolPresetCatalog {
                 capability: .readOnly,
                 category: .podcasts,
                 timeoutSeconds: 20,
-                outputLimitKB: 2048
+                outputLimitKB: 2048,
+                uiActions: pocketQueueRowActions(includeRemove: false)
             ),
             DefaultToolPreset(
                 id: "preset.pocketctl.history",
@@ -674,7 +726,8 @@ enum DefaultToolPresetCatalog {
                 capability: .readOnly,
                 category: .habits,
                 timeoutSeconds: 15,
-                outputLimitKB: 2048
+                outputLimitKB: 2048,
+                uiActions: habitRowUIActions
             ),
             DefaultToolPreset(
                 id: "preset.habitctl.journal",
@@ -685,7 +738,8 @@ enum DefaultToolPresetCatalog {
                 capability: .readOnly,
                 category: .habits,
                 timeoutSeconds: 15,
-                outputLimitKB: 2048
+                outputLimitKB: 2048,
+                uiActions: habitRowUIActions
             ),
             DefaultToolPreset(
                 id: "preset.habitctl.habits",
@@ -1749,6 +1803,70 @@ enum DefaultToolPresetCatalog {
         }
 
         return presets
+    }
+
+
+    /// Widget affordances for episode-row results (MCP Apps): queue and
+    /// library verbs wired to the shared PocketCTL flexible adapter. Data
+    /// only — every call passes capability gating and the approval flow.
+    private static func pocketQueueRowActions(includeRemove: Bool) -> [ToolUIAction] {
+        var actions: [ToolUIAction] = [
+            ToolUIAction(
+                id: "play_next",
+                title: "Play Next",
+                kind: .rowButton,
+                targetExecutableBasename: "pocketctl",
+                arguments: .object(["args": .array([.string("play-next"), .string("{uuid}")])]),
+                requiredRowFields: ["uuid"]
+            ),
+            ToolUIAction(
+                id: "play_last",
+                title: "Play Last",
+                kind: .rowButton,
+                targetExecutableBasename: "pocketctl",
+                arguments: .object(["args": .array([.string("play-last"), .string("{uuid}")])]),
+                requiredRowFields: ["uuid"]
+            )
+        ]
+        if includeRemove {
+            actions.append(ToolUIAction(
+                id: "remove_up_next",
+                title: "Remove",
+                kind: .rowButton,
+                targetExecutableBasename: "pocketctl",
+                arguments: .object(["args": .array([.string("remove-up-next"), .string("{uuid}")])]),
+                requiredRowFields: ["uuid"],
+                style: .destructive
+            ))
+        } else {
+            actions.append(ToolUIAction(
+                id: "star",
+                title: "Star",
+                kind: .rowButton,
+                targetExecutableBasename: "pocketctl",
+                arguments: .object(["args": .array([.string("star"), .string("{uuid}")])]),
+                requiredRowFields: ["uuid"]
+            ))
+        }
+        return actions
+    }
+
+    /// Widget affordance for habit-row results: a Reminders-style check
+    /// circle wired to `habitctl check <id>` through the shared flexible
+    /// adapter. habitctl reports status as a string, hence the equals match.
+    private static var habitRowUIActions: [ToolUIAction] {
+        [
+            ToolUIAction(
+                id: "check",
+                title: "Mark Complete",
+                kind: .checkOff,
+                targetExecutableBasename: "habitctl",
+                arguments: .object(["args": .array([.string("check"), .string("{id}")])]),
+                requiredRowFields: ["id"],
+                completedWhenField: "status",
+                completedWhenEquals: "completed"
+            )
+        ]
     }
 
     private static func directAdapter(

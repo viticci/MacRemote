@@ -27,6 +27,9 @@ struct ToolDefinitionDraft: Equatable {
     var requiresFullDiskAccess = false
     var permissionRequirements: [ToolPermissionRequirement] = []
     var provenance: ToolProvenance?
+    /// Widget affordances (MCP Apps) carried through preset→tool and edit
+    /// round-trips; the editor UI doesn't surface them yet.
+    var uiActions: [ToolUIAction]?
 
     var argumentPattern: [String] {
         if mode == .cliAdapter {
@@ -55,7 +58,8 @@ struct ToolDefinitionDraft: Equatable {
             permissionRequirements: ToolPermissionRequirement.normalized(
                 permissionRequirements + (requiresFullDiskAccess ? [.fullDiskAccess] : [])
             ),
-            provenance: provenance
+            provenance: provenance,
+            uiActions: uiActions
         )
         try ToolArgumentResolver.validate(tool)
         return tool

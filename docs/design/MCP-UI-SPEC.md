@@ -51,10 +51,22 @@ ToolUIAction(
 
 - `kind`: `.checkOff` (leading Reminders-style circle on table rows) or
   `.rowButton` (trailing button).
-- `arguments` string leaves may contain `{field}` placeholders the widget
-  resolves from the acted-on row.
+- Targeting: `toolID` for stable built-in catalogs (remctl), or
+  `targetExecutableBasename` to address "the shared flexible adapter for
+  this executable" — preset-derived tools carry random ids, so catalog
+  actions can't reference them by id. Unresolvable actions are dropped
+  server-side; internal addressing never reaches clients.
+- `arguments` string leaves may contain `{field}` (row) and `{input.<name>}`
+  (collected input) placeholders.
+- `inputs` collects values before firing: the widget expands an inline form
+  under the row, prefilled via `prefillField` (reschedule/edit-title use
+  this).
+- `style: .destructive` arms a two-step Confirm? in the widget before firing
+  (delete uses this — on top of, never instead of, the approval flow).
 - `requiredRowFields` gates the affordance per row; `completedWhenField`
-  renders already-done rows checked and struck through.
+  renders already-done rows checked and struck through — truthiness by
+  default, string equality with `completedWhenEquals` (habitctl reports
+  `status: "completed"`).
 - **Security invariant**: an action is a shortcut to a normal `tools/call`.
   The widget calls the target tool by public name through the host, over the
   same authenticated connection; MacRemote's capability gating and the host
@@ -62,9 +74,21 @@ ToolUIAction(
   never by the UI. (`remctl.run` is destructive → Always Allow or the
   Approval window decides, exactly as if the model had called it.)
 
-Flagship: the RemCTL reminder-list tools (today/upcoming/overdue/flagged/
-urgent/search/show) declare the check-off action
-(`RemCTLToolCatalog.reminderRowUIActions`).
+Shipped action packs:
+- **RemCTL** (today/upcoming/overdue/flagged/urgent/search/show): check-off,
+  Reschedule (input: due date), Edit Title (input prefilled from the row),
+  Delete (destructive, `--force` because the CLI's interactive confirm would
+  hang a headless call — widget confirm + approval flow carry the safety).
+- **HabitCTL** (today/journal presets): check-off via `habitctl check <id>`,
+  equals-matched completion on `status`.
+- **PocketCTL** (up-next: Play Next / Play Last / Remove; in-progress:
+  Play Next / Play Last / Star), plus four new queue-management presets
+  (`play_now`, `play_next`, `play_last`, `remove_up_next`) so queue verbs
+  are also directly callable by the model.
+
+Preset-carried actions reach existing installations through a one-time
+migration (`migrateCatalogUIActionsIfNeeded`, name + executable basename
+matching, never overwriting tools that already have actions).
 
 ## The widget (Widget/MacRemoteWidget.html)
 

@@ -262,6 +262,40 @@ enum RemCTLToolCatalog {
                 arguments: .object(["args": .array([.string("--json"), .string("done"), .string("{id}")])]),
                 requiredRowFields: ["id"],
                 completedWhenField: "completed"
+            ),
+            ToolUIAction(
+                id: "reschedule",
+                title: "Reschedule",
+                kind: .rowButton,
+                toolID: fullCLITool.id,
+                arguments: .object(["args": .array([.string("--json"), .string("edit"), .string("{id}"), .string("-d"), .string("{input.due}")])]),
+                requiredRowFields: ["id"],
+                inputs: [
+                    ToolUIActionInput(name: "due", title: "New due", placeholder: "tomorrow 9:30 \u{b7} +3d \u{b7} 2026-07-10")
+                ]
+            ),
+            ToolUIAction(
+                id: "rename",
+                title: "Edit Title",
+                kind: .rowButton,
+                toolID: fullCLITool.id,
+                arguments: .object(["args": .array([.string("--json"), .string("edit"), .string("{id}"), .string("--title"), .string("{input.title}")])]),
+                requiredRowFields: ["id"],
+                inputs: [
+                    ToolUIActionInput(name: "title", title: "Title", prefillField: "title")
+                ]
+            ),
+            ToolUIAction(
+                id: "delete",
+                title: "Delete",
+                kind: .rowButton,
+                toolID: fullCLITool.id,
+                // --force: the CLI's interactive confirmation would hang a
+                // headless MCP call; the widget's two-step confirm plus the
+                // destructive-tool approval flow carry the safety instead.
+                arguments: .object(["args": .array([.string("--json"), .string("delete"), .string("{id}"), .string("--force")])]),
+                requiredRowFields: ["id"],
+                style: .destructive
             )
         ]
     }

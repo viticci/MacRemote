@@ -2208,3 +2208,102 @@ struct MCPUISupportTests {
         #expect(structured["truncatedStdout"] as? Bool == true)
     }
 }
+
+/// Basename-targeted actions (preset-derived tools have random ids) and the
+/// input/style/equals fields added for reschedule, edit, and delete verbs.
+struct MCPUIActionTargetingTests {
+    @Test func basenameTargetedActionResolvesToSharedFlexibleAdapter() async throws {
+        let coordinator = OAuthCoordinator()
+        let listTool = ToolDefinition(
+            id: "custom.aaa111",
+            name: "Up Next",
+            summary: "Queue rows.",
+            executablePath: "/opt/homebrew/bin/pocketctl",
+            argumentPattern: ["{value}"],
+            parameters: [ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024,
+            origin: .userDefined,
+            uiActions: [
+                ToolUIAction(
+                    id: "play_next",
+                    title: "Play Next",
+                    kind: .rowButton,
+                    targetExecutableBasename: "pocketctl",
+                    arguments: .object(["args": .array([.string("play-next"), .string("{uuid}")])]),
+                    requiredRowFields: ["uuid"]
+                ),
+                ToolUIAction(
+                    id: "reschedule",
+                    title: "Reschedule",
+                    kind: .rowButton,
+                    targetExecutableBasename: "pocketctl",
+                    arguments: .object(["args": .array([.string("edit"), .string("{input.due}")])]),
+                    style: .destructive,
+                    inputs: [ToolUIActionInput(name: "due", title: "New due", placeholder: "+1d")]
+                ),
+                ToolUIAction(
+                    id: "orphan",
+                    title: "Orphan",
+                    kind: .rowButton,
+                    targetExecutableBasename: "no-such-cli",
+                    arguments: .object([:])
+                )
+            ]
+        )
+        let adapter = ToolDefinition(
+            id: "custom.bbb222",
+            name: "Run PocketCTL",
+            summary: "Flexible adapter.",
+            executablePath: "/opt/homebrew/bin/pocketctl",
+            argumentPattern: ["{args}"],
+            parameters: [ToolParameter(name: "args", title: "Arguments", kind: .stringArray, required: false)],
+            capability: .destructive,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024,
+            origin: .userDefined
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [listTool, adapter],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let listed = try await toolsList(base: base, accessToken: token)
+        let listName = try #require(listed.first { $0["title"] as? String == "Up Next" }?["name"] as? String)
+        let adapterName = try #require(listed.first { $0["title"] as? String == "Run PocketCTL" }?["name"] as? String)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": listName, "arguments": ["value": "x"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        let meta = try #require(result["_meta"] as? [String: Any])
+        let ui = try #require(meta["net.viticci.macremote/ui"] as? [String: Any])
+        let actions = try #require(ui["actions"] as? [[String: Any]])
+
+        // Orphan action (unresolvable target) is dropped; the two real ones remain.
+        #expect(actions.count == 2)
+        let playNext = try #require(actions.first { $0["id"] as? String == "play_next" })
+        #expect(playNext["toolName"] as? String == adapterName)
+        #expect(playNext["toolCapability"] as? String == "destructive")
+        #expect(playNext["targetExecutableBasename"] == nil, "internal addressing never leaks")
+
+        let reschedule = try #require(actions.first { $0["id"] as? String == "reschedule" })
+        #expect(reschedule["style"] as? String == "destructive")
+        let inputs = try #require(reschedule["inputs"] as? [[String: Any]])
+        #expect(inputs.first?["name"] as? String == "due")
+        #expect(inputs.first?["placeholder"] as? String == "+1d")
+    }
+}

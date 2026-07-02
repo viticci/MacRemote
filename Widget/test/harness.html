@@ -42,6 +42,17 @@ const UI_META = {
     toolName: "remctl_run", toolCapability: "destructive",
     arguments: { args: ["--json", "done", "{id}"] },
     requiredRowFields: ["id"], completedWhenField: "completed"
+  }, {
+    id: "reschedule", title: "Reschedule", kind: "rowButton",
+    toolName: "remctl_run", toolCapability: "destructive",
+    arguments: { args: ["--json", "edit", "{id}", "-d", "{input.due}"] },
+    requiredRowFields: ["id"],
+    inputs: [{ name: "due", title: "New due", placeholder: "tomorrow 9:30" }]
+  }, {
+    id: "delete", title: "Delete", kind: "rowButton",
+    toolName: "remctl_run", toolCapability: "destructive",
+    arguments: { args: ["--json", "delete", "{id}", "--force"] },
+    requiredRowFields: ["id"], style: "destructive"
   }]
 };
 
@@ -59,7 +70,17 @@ const FIXTURES = {
   terminal: { structuredContent: envelope({ stdout: "Build settings:\n  [1mSDKROOT[0m = [32mMacOSX26.5.sdk[0m\n  [33mwarning:[0m 2 targets skipped\n[34mBuild complete![0m (14.2s)" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Swift Build", toolName: "swift_cli", capability: "destructive"}} },
   error: { structuredContent: envelope({ succeeded: false, exitCode: 1, stdout: "", stderr: "error: Reminders store not readable from this process context.\nGrant Full Disk Access and retry." }), isError: true, _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Today", toolName: "remctl_today", capability: "readOnly"}} },
   empty: { structuredContent: envelope({ stdout: "" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Sync", toolName: "sync_tool", capability: "write"}} },
-  truncated: { structuredContent: envelope({ stdout: "partial output…", truncatedStdout: true }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Log Dump", toolName: "log_dump", capability: "readOnly"}} }
+  truncated: { structuredContent: envelope({ stdout: "partial output…", truncatedStdout: true }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Log Dump", toolName: "log_dump", capability: "readOnly"}} },
+  habits: { structuredContent: envelope({ toolName: "habitctl_today", stdout: JSON.stringify([
+    { id: "-OwFK1", name: "Listen to one new song", status: "inprogress", type: "good" },
+    { id: "-OwFK2", name: "Morning walk", status: "completed", type: "good" },
+    { id: "-OwFK3", name: "Read 20 pages", status: "inprogress", type: "good" }
+  ]) }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "HabitCTL Today", toolName: "habitctl_today", capability: "readOnly", actions: [{
+    id: "check", title: "Mark Complete", kind: "checkOff",
+    toolName: "habitctl_run", toolCapability: "destructive",
+    arguments: { args: ["check", "{id}"] },
+    requiredRowFields: ["id"], completedWhenField: "status", completedWhenEquals: "completed"
+  }]}} }
 };
 
 const iframe = document.getElementById("widget");

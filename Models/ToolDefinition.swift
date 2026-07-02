@@ -433,6 +433,24 @@ struct ToolProvenance: Codable, Hashable, Sendable {
 /// through the host. Every such call re-enters the server's normal
 /// capability gating and approval flow: an action is a shortcut to a tool
 /// call, never a bypass.
+/// A user-supplied input an action collects before firing (e.g. the new due
+/// date for a reschedule). The widget renders an inline field; templates
+/// reference the value as `{input.<name>}`.
+struct ToolUIActionInput: Codable, Hashable, Sendable {
+    let name: String
+    let title: String
+    let placeholder: String?
+    /// Row field whose value prefills the input (e.g. the current title).
+    let prefillField: String?
+
+    init(name: String, title: String, placeholder: String? = nil, prefillField: String? = nil) {
+        self.name = name
+        self.title = title
+        self.placeholder = placeholder
+        self.prefillField = prefillField
+    }
+}
+
 struct ToolUIAction: Codable, Hashable, Sendable {
     enum Kind: String, Codable, Sendable {
         /// Leading completion circle on table rows (Reminders-style).
@@ -441,36 +459,59 @@ struct ToolUIAction: Codable, Hashable, Sendable {
         case rowButton
     }
 
+    enum Style: String, Codable, Sendable {
+        case normal
+        /// The widget arms a two-step confirm before firing.
+        case destructive
+    }
+
     let id: String
     let title: String
     let kind: Kind
-    /// The tool invoked when the action fires (by internal tool id; the
-    /// server translates to the public MCP name for the widget).
-    let toolID: String
-    /// Arguments for `toolID`; string leaves may contain `{field}`
-    /// placeholders resolved from the row.
+    /// Target by internal tool id (stable built-in catalogs like remctl).
+    /// The server translates to the public MCP name for the widget.
+    let toolID: String?
+    /// Alternative target: the first SHARED flexible-command adapter whose
+    /// executable basename matches (preset-derived tools carry random ids,
+    /// so catalog actions can't reference them by id).
+    let targetExecutableBasename: String?
+    /// Arguments for the target; string leaves may contain `{field}` (row)
+    /// and `{input.<name>}` (collected input) placeholders.
     let arguments: JSONValue
     /// The action appears only on rows containing all of these fields.
     let requiredRowFields: [String]
-    /// For `.checkOff`: the row field whose truthiness means "already done".
+    /// For `.checkOff`: the row field marking "already done" — truthiness by
+    /// default, string equality when `completedWhenEquals` is set (e.g.
+    /// habitctl's `status == "completed"`).
     let completedWhenField: String?
+    let completedWhenEquals: String?
+    let style: Style?
+    let inputs: [ToolUIActionInput]?
 
     init(
         id: String,
         title: String,
         kind: Kind,
-        toolID: String,
+        toolID: String? = nil,
+        targetExecutableBasename: String? = nil,
         arguments: JSONValue,
         requiredRowFields: [String] = [],
-        completedWhenField: String? = nil
+        completedWhenField: String? = nil,
+        completedWhenEquals: String? = nil,
+        style: Style? = nil,
+        inputs: [ToolUIActionInput]? = nil
     ) {
         self.id = id
         self.title = title
         self.kind = kind
         self.toolID = toolID
+        self.targetExecutableBasename = targetExecutableBasename
         self.arguments = arguments
         self.requiredRowFields = requiredRowFields
         self.completedWhenField = completedWhenField
+        self.completedWhenEquals = completedWhenEquals
+        self.style = style
+        self.inputs = inputs
     }
 }
 
@@ -495,6 +536,28 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let uiActions: [ToolUIAction]?
 
     func withCategory(_ category: ToolCategory) -> ToolDefinition {
+        ToolDefinition(
+            id: id,
+            name: name,
+            summary: summary,
+            executablePath: executablePath,
+            argumentPattern: argumentPattern,
+            parameters: parameters,
+            capability: capability,
+            timeoutSeconds: timeoutSeconds,
+            outputByteLimit: outputByteLimit,
+            origin: origin,
+            category: category,
+            permissionRequirements: permissionRequirements,
+            backend: backend,
+            mcpBridge: mcpBridge,
+            mcpStdioBridge: mcpStdioBridge,
+            provenance: provenance,
+            uiActions: uiActions
+        )
+    }
+
+    func withUIActions(_ uiActions: [ToolUIAction]?) -> ToolDefinition {
         ToolDefinition(
             id: id,
             name: name,

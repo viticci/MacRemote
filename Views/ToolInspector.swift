@@ -18,6 +18,7 @@ extension ToolDefinitionDraft {
             requiresFullDiskAccess: tool.permissionRequirements.contains(.fullDiskAccess),
             permissionRequirements: tool.permissionRequirements.filter { !$0.isFullDiskAccess }
         )
+        self.uiActions = tool.uiActions
     }
 
     /// Per-field validation by dry-running the exact save-time validation, so the

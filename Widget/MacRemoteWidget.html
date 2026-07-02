@@ -12,6 +12,19 @@ body { padding: 2px; }
   font-size: 12px; color: light-dark(rgba(60,60,67,.62), rgba(235,235,245,.60));
   padding: 18px; text-align: center; color-scheme: light dark;
 }
+/* Destructive arm state + inline input forms */
+.mrw-rowbtn[data-state="armed"] { color: var(--bad); border-color: var(--bad-line); }
+.mrw-rowbtn.mrw-destructive { color: var(--bad); }
+tr.mrw-inputrow td { background: var(--panel); padding: 0; }
+.mrw-inputform { display: flex; gap: 8px; align-items: center; padding: 9px 12px; flex-wrap: wrap; }
+.mrw-inputlabel { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--text2); font-weight: 590; }
+.mrw-input {
+  font: inherit; font-size: 12px; padding: 4px 9px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text); min-width: 190px;
+}
+.mrw-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
 /* Host-forced theme (SEP-1865 hostContext.theme) overrides the ambient
    scheme: light-dark() tokens key off color-scheme, so forcing is one rule. */
 :root[data-mrw-theme="dark"] .mrw, :root[data-mrw-theme="dark"] .mrw-waiting { color-scheme: dark; }
@@ -622,7 +635,7 @@ const MacRemoteWidget = (() => {
         if (checkActions.length) {
           const act = checkActions[0];
           const applies = !p.actionApplies || p.actionApplies(act, row);
-          const alreadyDone = p.completedField != null && !!row[p.completedField];
+          const alreadyDone = !!(p.isRowCompleted && p.isRowCompleted(row));
           if (!applies) { tr.append(el('td', 'mrw-td-check')); }
           else {
           const btn = el('button', 'mrw-check');
@@ -652,22 +665,36 @@ const MacRemoteWidget = (() => {
           const td = el('td', 'mrw-td-actions');
           for (const act of buttonActions) {
             if (p.actionApplies && !p.actionApplies(act, row)) continue;
-            const b = el('button', 'mrw-rowbtn');
+            const b = el('button', 'mrw-rowbtn' + (act.style === 'destructive' ? ' mrw-destructive' : ''));
             b.type = 'button';
             b.dataset.state = rowSt[act.id] || '';
             const label = () => {
               b.textContent = '';
               if (b.dataset.state === 'pending') { b.append(I.spinner(), act.label || 'Run'); }
               else if (b.dataset.state === 'done') { b.append(I.checkTint(), act.doneLabel || 'Done'); }
+              else if (b.dataset.state === 'armed') { b.append('Confirm?'); }
               else b.append(act.label || 'Run');
             };
-            label();
-            b.addEventListener('click', () => {
-              if (b.dataset.state) return;
+            const fire = (inputValues) => {
               b.dataset.state = 'pending'; setRowState(row, act.id, 'pending'); label();
-              invoke(act.id, row).then(() => {
+              invoke(act.id, row, inputValues).then(() => {
                 b.dataset.state = 'done'; setRowState(row, act.id, 'done'); label();
               }).catch(() => { b.dataset.state = ''; setRowState(row, act.id, ''); label(); });
+            };
+            b.addEventListener('click', () => {
+              if (b.dataset.state === 'pending' || b.dataset.state === 'done') return;
+              if (act.inputs && act.inputs.length) { toggleInputForm(tr, act, row, fire); return; }
+              if (act.style === 'destructive') {
+                if (b.dataset.state !== 'armed') {
+                  b.dataset.state = 'armed'; label();
+                  setTimeout(() => {
+                    if (b.dataset.state === 'armed') { b.dataset.state = ''; label(); }
+                  }, 3500);
+                  return;
+                }
+                b.dataset.state = '';
+              }
+              fire();
             });
             td.append(b);
           }
@@ -680,9 +707,45 @@ const MacRemoteWidget = (() => {
       const cur = actionState.get(row.__mrwIdx) || {};
       cur[actionId] = s; actionState.set(row.__mrwIdx, cur);
     }
-    function invoke(actionId, row) {
+    function invoke(actionId, row, inputValues) {
       const clean = { ...row };
-      return p.onAction ? Promise.resolve(p.onAction(actionId, clean)) : Promise.resolve();
+      return p.onAction ? Promise.resolve(p.onAction(actionId, clean, inputValues || {})) : Promise.resolve();
+    }
+
+    /* Inline input row (reschedule/edit): expands beneath the acted-on row,
+       prefilled from it, Enter or Apply to fire. */
+    function toggleInputForm(tr, act, row, fire) {
+      const existing = tr.nextElementSibling;
+      if (existing && existing.classList.contains('mrw-inputrow')) { existing.remove(); return; }
+      tbody.querySelectorAll('tr.mrw-inputrow').forEach(n => n.remove());
+      const formTr = el('tr', 'mrw-inputrow');
+      const td = el('td'); td.colSpan = 99;
+      const form = el('div', 'mrw-inputform');
+      const fields = {};
+      for (const inp of (act.inputs || [])) {
+        const wrap = el('label', 'mrw-inputlabel', inp.title);
+        const input = document.createElement('input');
+        input.className = 'mrw-input'; input.type = 'text';
+        input.placeholder = inp.placeholder || '';
+        if (inp.prefillField && row[inp.prefillField] != null) input.value = String(row[inp.prefillField]);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
+        fields[inp.name] = input;
+        wrap.append(input); form.append(wrap);
+      }
+      const go = el('button', 'mrw-rowbtn'); go.type = 'button'; go.textContent = act.label || 'Apply';
+      const cancel = el('button', 'mrw-rowbtn'); cancel.type = 'button'; cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => formTr.remove());
+      go.addEventListener('click', () => {
+        const values = {};
+        for (const k of Object.keys(fields)) { values[k] = fields[k].value; }
+        formTr.remove();
+        fire(values);
+      });
+      form.append(go, cancel);
+      td.append(form); formTr.append(td);
+      tr.after(formTr);
+      const first = Object.values(fields)[0];
+      if (first) { first.focus(); }
     }
 
     paintRows();
@@ -988,16 +1051,21 @@ new ResizeObserver(() => {
   });
 }).observe(document.body);
 
-/* Resolve {field} placeholders in action argument templates from the row. */
-function substitute(value, row) {
+/* Resolve {input.name} (collected inputs) then {field} (row) placeholders. */
+function substitute(value, row, inputs) {
   if (typeof value === "string") {
-    return value.replace(/\{([A-Za-z0-9_.]+)\}/g, (m, field) =>
-      row[field] !== undefined && row[field] !== null ? String(row[field]) : m);
+    return value.replace(/\{([A-Za-z0-9_.]+)\}/g, (m, field) => {
+      if (field.startsWith("input.")) {
+        const v = (inputs || {})[field.slice(6)];
+        return v !== undefined && v !== null ? String(v) : m;
+      }
+      return row[field] !== undefined && row[field] !== null ? String(row[field]) : m;
+    });
   }
-  if (Array.isArray(value)) { return value.map(v => substitute(v, row)); }
+  if (Array.isArray(value)) { return value.map(v => substitute(v, row, inputs)); }
   if (value && typeof value === "object") {
     const out = {};
-    for (const k of Object.keys(value)) { out[k] = substitute(value[k], row); }
+    for (const k of Object.keys(value)) { out[k] = substitute(value[k], row, inputs); }
     return out;
   }
   return value;
@@ -1027,19 +1095,24 @@ function renderResult() {
       kind: a.kind === "checkOff" ? "check" : "button",
       label: a.title,
       doneLabel: "Done",
-      title: a.title
+      title: a.title,
+      style: a.style || "normal",
+      inputs: a.inputs || null
     })),
-    completedField: (check && check.completedWhenField) || null,
+    isRowCompleted: check ? (row) => {
+      const v = row[check.completedWhenField];
+      return check.completedWhenEquals != null ? String(v) === check.completedWhenEquals : !!v;
+    } : null,
     actionApplies: (act, row) => {
       const raw = byId[act.id];
       return !raw || (raw.requiredRowFields || []).every(f => row[f] !== undefined && row[f] !== null);
     },
-    onAction: (actionId, row) => {
+    onAction: (actionId, row, inputValues) => {
       const raw = byId[actionId];
       if (!raw) { return Promise.reject(new Error("unknown action")); }
       return request("tools/call", {
         name: raw.toolName,
-        arguments: substitute(raw.arguments, row)
+        arguments: substitute(raw.arguments, row, inputValues)
       }).then(r => {
         if (r && r.isError === true) { throw new Error("action failed"); }
       });

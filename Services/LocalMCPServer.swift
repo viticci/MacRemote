@@ -875,14 +875,16 @@ final class LocalMCPServer: @unchecked Sendable {
         ]
         if let actions = tool.uiActions, !actions.isEmpty {
             let encodedActions: [[String: Any]] = actions.compactMap { action in
-                guard let targetTool = tools.first(where: { $0.id == action.toolID }),
+                guard let targetTool = resolveActionTarget(action, in: tools),
                       let encoded = try? JSONEncoder().encode(action),
                       var json = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
                     return nil
                 }
                 json["toolName"] = publicNames[targetTool.id] ?? MCPToolNameMapper.publicName(for: targetTool.id)
                 json["toolCapability"] = targetTool.capability.rawValue
+                // Internal addressing never leaves the server.
                 json.removeValue(forKey: "toolID")
+                json.removeValue(forKey: "targetExecutableBasename")
                 return json
             }
             if !encodedActions.isEmpty {
@@ -890,6 +892,23 @@ final class LocalMCPServer: @unchecked Sendable {
             }
         }
         return payload
+    }
+
+    /// Stable built-in catalogs address targets by id; preset-derived tools
+    /// carry random ids, so catalog actions address "the shared flexible
+    /// adapter for this executable" by basename. Unresolvable actions are
+    /// dropped — the widget simply doesn't offer them.
+    private func resolveActionTarget(_ action: ToolUIAction, in tools: [ToolDefinition]) -> ToolDefinition? {
+        if let toolID = action.toolID {
+            return tools.first { $0.id == toolID }
+        }
+        if let basename = action.targetExecutableBasename {
+            return tools.first {
+                $0.isGenericCLIAdapter &&
+                URL(fileURLWithPath: $0.executablePath).lastPathComponent == basename
+            }
+        }
+        return nil
     }
 
     private func toolJSON(_ tool: ToolDefinition, publicName: String) -> [String: Any] {

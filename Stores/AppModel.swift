@@ -120,6 +120,7 @@ final class AppModel {
     private static let confirmedFullDiskAccessSignatureKey = "MacRemote.confirmedFullDiskAccessSignature"
     private static let fullDiskAccessRelaunchPendingKey = "MacRemote.fullDiskAccessRelaunchPending"
     private static let catalogCategoryMigrationKey = "MacRemote.migration.catalogCategories.v1"
+    private static let catalogUIActionsMigrationKey = "MacRemote.migration.catalogUIActions.v1"
     private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
     private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
     private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"
@@ -249,6 +250,7 @@ final class AppModel {
         }
 
         migrateStaleCatalogCategoriesIfNeeded()
+        migrateCatalogUIActionsIfNeeded()
         installApprovalCoordinators()
         tunnelStatus = tunnelService.status(localServerURL: nil)
         if let startupError {
@@ -2606,6 +2608,38 @@ final class AppModel {
             appendLog(level: .info, "Updated the category of \(updates.count) tool\(updates.count == 1 ? "" : "s") to match the current library (e.g. AI & Agents).")
         } catch {
             appendLog(level: .error, "Could not save updated tool categories: \(error.localizedDescription)")
+        }
+    }
+
+    /// Same shape as the category reconciliation: preset-derived tools carry
+    /// random ids, so widget affordances added to catalog presets are copied
+    /// onto matching persisted tools once (name + executable basename), and
+    /// only when the tool has none — later user-authored actions stay theirs.
+    private func migrateCatalogUIActionsIfNeeded() {
+        guard !userDefaults.bool(forKey: Self.catalogUIActionsMigrationKey) else { return }
+        userDefaults.set(true, forKey: Self.catalogUIActionsMigrationKey)
+
+        var presetActions: [String: [ToolUIAction]] = [:]
+        for preset in DefaultToolPresetCatalog.presets {
+            guard let actions = preset.uiActions, !actions.isEmpty else { continue }
+            presetActions[Self.categoryMigrationKey(name: preset.name, executablePath: preset.executablePath)] = actions
+        }
+        guard !presetActions.isEmpty else { return }
+
+        var updated = 0
+        for index in tools.indices where tools[index].origin == .userDefined && tools[index].uiActions == nil && !tools[index].isMCPBridge {
+            let key = Self.categoryMigrationKey(name: tools[index].name, executablePath: tools[index].executablePath)
+            if let actions = presetActions[key] {
+                tools[index] = tools[index].withUIActions(actions)
+                updated += 1
+            }
+        }
+        guard updated > 0 else { return }
+        do {
+            try persistUserDefinedTools()
+            appendLog(level: .info, "Added widget actions to \(updated) tool\(updated == 1 ? "" : "s") from the library catalog.")
+        } catch {
+            appendLog(level: .error, "Could not save widget actions: \(error.localizedDescription)")
         }
     }
 
