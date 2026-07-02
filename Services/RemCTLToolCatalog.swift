@@ -258,7 +258,7 @@ enum RemCTLToolCatalog {
                 id: "complete",
                 title: "Mark Done",
                 kind: .checkOff,
-                toolID: fullCLITool.id,
+                targetExecutableBasename: "remctl",  // resolves to any shared flexible RemCTL adapter (built-in or Library-derived)
                 arguments: .object(["args": .array([.string("--json"), .string("done"), .string("{id}")])]),
                 requiredRowFields: ["id"],
                 completedWhenField: "completed"
@@ -267,7 +267,7 @@ enum RemCTLToolCatalog {
                 id: "reschedule",
                 title: "Reschedule",
                 kind: .rowButton,
-                toolID: fullCLITool.id,
+                targetExecutableBasename: "remctl",  // resolves to any shared flexible RemCTL adapter (built-in or Library-derived)
                 arguments: .object(["args": .array([.string("--json"), .string("edit"), .string("{id}"), .string("-d"), .string("{input.due}")])]),
                 requiredRowFields: ["id"],
                 inputs: [
@@ -278,7 +278,7 @@ enum RemCTLToolCatalog {
                 id: "rename",
                 title: "Edit Title",
                 kind: .rowButton,
-                toolID: fullCLITool.id,
+                targetExecutableBasename: "remctl",  // resolves to any shared flexible RemCTL adapter (built-in or Library-derived)
                 arguments: .object(["args": .array([.string("--json"), .string("edit"), .string("{id}"), .string("--title"), .string("{input.title}")])]),
                 requiredRowFields: ["id"],
                 inputs: [
@@ -289,7 +289,7 @@ enum RemCTLToolCatalog {
                 id: "delete",
                 title: "Delete",
                 kind: .rowButton,
-                toolID: fullCLITool.id,
+                targetExecutableBasename: "remctl",  // resolves to any shared flexible RemCTL adapter (built-in or Library-derived)
                 // --force: the CLI's interactive confirmation would hang a
                 // headless MCP call; the widget's two-step confirm plus the
                 // destructive-tool approval flow carry the safety instead.

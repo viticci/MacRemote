@@ -837,7 +837,12 @@ enum DefaultToolPresetCatalog {
                 timeoutSeconds: tool.timeoutSeconds,
                 outputLimitKB: max(1, tool.outputByteLimit / 1024),
                 mode: tool.isGenericCLIAdapter ? .cliAdapter : .commandTemplate,
-                permissionRequirements: tool.permissionRequirements
+                permissionRequirements: tool.permissionRequirements,
+                // Carry the widget affordances (check-off, reschedule, edit,
+                // delete) so Library-added reminder tools get them too —
+                // without this the preset-derived custom.* tools rendered a
+                // plain table with no check circle.
+                uiActions: tool.uiActions
             )
         }
     }

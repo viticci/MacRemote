@@ -120,7 +120,9 @@ final class AppModel {
     private static let confirmedFullDiskAccessSignatureKey = "MacRemote.confirmedFullDiskAccessSignature"
     private static let fullDiskAccessRelaunchPendingKey = "MacRemote.fullDiskAccessRelaunchPending"
     private static let catalogCategoryMigrationKey = "MacRemote.migration.catalogCategories.v1"
-    private static let catalogUIActionsMigrationKey = "MacRemote.migration.catalogUIActions.v1"
+    // v2: v1 ran before RemCTL Library presets carried uiActions, so it
+    // stamped nothing onto reminder tools. Re-run once with the fix.
+    private static let catalogUIActionsMigrationKey = "MacRemote.migration.catalogUIActions.v2"
     private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
     private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
     private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"

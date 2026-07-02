@@ -165,4 +165,31 @@ struct RemCTLToolCatalogTests {
             try RemCTLToolCatalog.arguments(for: "remctl.search", parameters: ["query": "hello\0world"])
         }
     }
+    @Test func reminderActionsTargetTheFlexibleAdapterByBasename() throws {
+        // Library-added reminder tools carry random custom.* ids, so the
+        // actions must resolve to the shared RemCTL flex adapter by basename,
+        // never by the built-in "remctl.run" id (which those installs lack).
+        let actions = RemCTLToolCatalog.reminderRowUIActions
+        #expect(!actions.isEmpty)
+        for action in actions {
+            #expect(action.toolID == nil, "\(action.id) must not hard-code an internal tool id")
+            #expect(action.targetExecutableBasename == "remctl")
+        }
+        #expect(actions.contains { $0.id == "complete" && $0.kind == .checkOff })
+        #expect(actions.contains { $0.id == "reschedule" && ($0.inputs?.isEmpty == false) })
+        #expect(actions.contains { $0.id == "delete" && $0.style == .destructive })
+    }
+
+    @Test func libraryRemCTLPresetsCarryReminderActions() throws {
+        // The bug: remCTLPresets mapped built-in tools but dropped uiActions,
+        // so preset-derived reminder tools rendered a plain table.
+        let presets = DefaultToolPresetCatalog.presets
+        guard let upcoming = presets.first(where: { $0.id == "preset.remctl.upcoming" }) else {
+            // remctl not installed on this machine — nothing to assert.
+            return
+        }
+        #expect(upcoming.uiActions?.contains { $0.id == "complete" } == true)
+        let draftTool = try upcoming.draft.makeTool(id: "custom.deadbeef")
+        #expect(draftTool.uiActions?.isEmpty == false, "uiActions survive preset → draft → tool")
+    }
 }

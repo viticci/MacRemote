@@ -53,7 +53,6 @@ struct AuroraExchangeUnderlay: View {
                         .float2(Float(urlFrame.width), Float(urlFrame.height))
                     ))
             }
-            .allowsHitTesting(false)
             .accessibilityHidden(true)
             .background(WindowReader(window: $hostWindow))
             .onChange(of: hostWindow) { _, window in
@@ -71,6 +70,10 @@ struct AuroraExchangeUnderlay: View {
                 try? await Task.sleep(for: .seconds(0.45))
                 withAnimation(.easeInOut(duration: 0.6)) { gain = 1 }
             }
+            // Outermost: covers the WindowReader background too, so the
+            // ornament (in an .overlay above the glass) never swallows taps
+            // meant for the copy button beneath it.
+            .allowsHitTesting(false)
         }
     }
 }
@@ -95,6 +98,10 @@ private struct WindowReader: NSViewRepresentable {
 
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("unused") }
+
+        // Belt-and-braces with SwiftUI's allowsHitTesting: this AppKit probe
+        // is purely an occlusion sensor and must never intercept a click.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
