@@ -78,7 +78,12 @@ const EPISODES = [
   { uuid: "92f82cef-d654-4e55-9723-09b0dfd632fd", url: "https://www.patreon.com/api/rss/u/example/e/147791572.mp3",
     published: "2026-01-09T08:00:00Z", duration: 3696, fileType: "audio/mpeg", title: "The Most Anticipated Games of 2026", size: "59136000",
     playingStatus: 2, playedUpTo: 300, starred: true, podcastUuid: "0e2b1031-e081-6ef1-8f7b-0266557711f5",
-    podcastTitle: "Remaster", episodeNumber: 104, author: "Relay" }
+    podcastTitle: "Remaster", episodeNumber: 104, author: "Relay" },
+  // up-next shape: `podcast` instead of podcastUuid, no podcastTitle —
+  // artwork must still resolve via the sourceKey fallback, subtitle absent.
+  { uuid: "c1419c77-aaaa-bbbb-cccc-000000000001", url: "https://example.com/thinking-hitch.mp3",
+    published: "2026-06-20T08:00:00Z", duration: 8340, title: "A Thinking Hitch",
+    playedUpTo: 0, podcast: "3ffe4519-f2f0-8e53-4051-f42dcc2fd1d9", alternateEnclosures: [] }
 ];
 
 const POCKET_UI_META = {
@@ -90,15 +95,14 @@ const POCKET_UI_META = {
   accent: "#f43e37",
   table: {
     columns: [
-      { key: "artwork", title: "", derive: "artwork", sourceKey: "podcastUuid", altKey: "podcastTitle",
+      { key: "artwork", title: "", derive: "artwork", sourceKey: ["podcastUuid", "podcast"], altKey: "podcastTitle",
         urlTemplate: "https://static.pocketcasts.com/discover/images/webp/200/{value}.webp" },
-      { key: "title", title: "Episode", primary: true },
-      { key: "podcastTitle", title: "Podcast" },
+      { key: "title", title: "Episode", primary: true, subtitleKey: "podcastTitle" },
       { key: "duration", title: "Duration", derive: "duration", sourceKey: "duration" },
       { key: "progress", title: "Played", derive: "progress", sourceKey: "playedUpTo", totalKey: "duration" },
       { key: "url", title: "Link", derive: "link", sourceKey: "url" }
     ],
-    hiddenColumns: ["uuid", "published", "fileType", "size", "podcastUuid", "playingStatus"]
+    hiddenColumns: ["uuid", "published", "fileType", "size", "podcastUuid", "podcast", "podcastTitle", "playingStatus"]
   },
   actions: [{
     id: "play_next", title: "Play Next", kind: "rowButton",
@@ -126,6 +130,22 @@ function envelope(overrides) {
 const FIXTURES = {
   table: { structuredContent: envelope({ stdout: JSON.stringify({ items: REMINDERS }) }), _meta: {"net.viticci.macremote/ui": UI_META} },
   podcasts: { structuredContent: envelope({ toolID: "preset.pocketctl.in_progress", toolName: "pocketctl_in_progress", stdout: JSON.stringify(EPISODES) }), _meta: {"net.viticci.macremote/ui": POCKET_UI_META} },
+  // pocketctl now: one live episode, `podcast` (not podcastUuid) carries the
+  // show uuid — exercises the card layout + sourceKey fallback.
+  nowcard: { structuredContent: envelope({ toolID: "preset.pocketctl.now", toolName: "pocketctl_now", stdout: JSON.stringify({
+    uuid: "f0fa0c5d-ce56-4079-9054-dcbe414aaee5",
+    title: "Unprecedented Weirdness",
+    url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/secure/upgradeplus626.mp3",
+    podcast: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Upgrade+ — Private to Federico Viticci",
+    published: "2026-06-29T21:00:00Z",
+    duration: 6213, playedUpTo: 4137, alternateEnclosures: []
+  }) }), _meta: {"net.viticci.macremote/ui": Object.assign({}, POCKET_UI_META, { toolTitle: "PocketCTL Now", toolName: "pocketctl_now", actions: [{
+    id: "play_next", title: "Play Next", kind: "rowButton",
+    toolName: "pocketctl_run", toolCapability: "destructive",
+    arguments: { args: ["play-next", "{uuid}"] }, requiredRowFields: ["uuid"]
+  }] }) } },
   actionfail: { structuredContent: envelope({ stdout: JSON.stringify({ items: REMINDERS }) }), _meta: {"net.viticci.macremote/ui": UI_META} },
   tree: { structuredContent: envelope({ stdout: JSON.stringify({ database: { path: "/tmp/db", reminders: 412, lists: 9 }, ok: true }) }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Stats", toolName: "remctl_stats", capability: "readOnly"}} },
   terminal: { structuredContent: envelope({ stdout: "Build settings:\n  [1mSDKROOT[0m = [32mMacOSX26.5.sdk[0m\n  [33mwarning:[0m 2 targets skipped\n[34mBuild complete![0m (14.2s)\n[38;2;200;40;40mtruecolor-test red[0m [38;5;46m256-green[0m still-[1mbold[0m" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Swift Build", toolName: "swift_cli", capability: "destructive"}} },

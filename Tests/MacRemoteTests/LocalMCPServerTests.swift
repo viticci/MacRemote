@@ -2246,15 +2246,19 @@ struct MCPUISupportTests {
         let columns = try #require(table["columns"] as? [[String: Any]])
         let byKey = Dictionary(uniqueKeysWithValues: columns.map { ($0["key"] as? String ?? "", $0) })
         #expect(byKey["artwork"]?["derive"] as? String == "artwork")
-        #expect(byKey["artwork"]?["sourceKey"] as? String == "podcastUuid")
+        // Fallback keys: up-next/now call the podcast uuid `podcast`.
+        #expect(byKey["artwork"]?["sourceKey"] as? [String] == ["podcastUuid", "podcast"])
         #expect((byKey["artwork"]?["urlTemplate"] as? String)?.hasPrefix("https://static.pocketcasts.com/") == true)
+        // Podcast name rides under the episode title, not as a column.
+        #expect(byKey["title"]?["subtitleKey"] as? String == "podcastTitle")
+        #expect(byKey["podcastTitle"] == nil)
         #expect(byKey["duration"]?["derive"] as? String == "duration")
         #expect(byKey["progress"]?["derive"] as? String == "progress")
         #expect(byKey["progress"]?["sourceKey"] as? String == "playedUpTo")
         #expect(byKey["progress"]?["totalKey"] as? String == "duration")
         #expect(byKey["url"]?["derive"] as? String == "link")
         let hidden = try #require(table["hiddenColumns"] as? [String])
-        for dropped in ["uuid", "published", "fileType", "size"] {
+        for dropped in ["uuid", "published", "fileType", "size", "podcast", "podcastTitle"] {
             #expect(hidden.contains(dropped), "\(dropped) should be hidden")
         }
     }

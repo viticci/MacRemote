@@ -990,17 +990,22 @@ final class LocalMCPServer: @unchecked Sendable {
             ]
         case .podcasts:
             return [
-                // Episode-shaped rows (up-next / in-progress / history).
-                // The widget drops curated columns whose source fields are
-                // absent and falls back to auto columns when too few
-                // survive, so podcast-shaped outputs (subscriptions,
-                // playlists) aren't forced into this episode layout.
+                // Episode-shaped rows (up-next / now / in-progress /
+                // history). The widget drops curated columns whose source
+                // fields are absent and falls back to auto columns when too
+                // few survive, so podcast-shaped outputs (subscriptions,
+                // playlists) aren't forced into this episode layout. A lone
+                // episode object (pocketctl now) renders as a card instead
+                // of a table. `sourceKey` arrays cover pocketctl's two
+                // spellings of the podcast uuid (`podcastUuid` vs
+                // `podcast`); the podcast name shows as a subtitle under
+                // the episode title, not its own column.
                 "columns": [
                     ["key": "artwork", "title": "", "derive": "artwork",
-                     "sourceKey": "podcastUuid", "altKey": "podcastTitle",
+                     "sourceKey": ["podcastUuid", "podcast"], "altKey": "podcastTitle",
                      "urlTemplate": podcastArtworkURLTemplate],
-                    ["key": "title", "title": "Episode", "primary": true],
-                    ["key": "podcastTitle", "title": "Podcast"],
+                    ["key": "title", "title": "Episode", "primary": true,
+                     "subtitleKey": "podcastTitle"],
                     ["key": "duration", "title": "Duration", "derive": "duration",
                      "sourceKey": "duration"],
                     ["key": "progress", "title": "Played", "derive": "progress",
@@ -1009,7 +1014,8 @@ final class LocalMCPServer: @unchecked Sendable {
                      "sourceKey": "url"]
                 ],
                 "hiddenColumns": ["uuid", "published", "fileType", "size",
-                                  "podcastUuid", "playingStatus", "episodeType",
+                                  "podcastUuid", "podcast", "podcastTitle",
+                                  "playingStatus", "episodeType",
                                   "episodeSeason", "isDeleted", "podcastSlug",
                                   "slug", "alternateEnclosures", "bookmarks"]
             ]

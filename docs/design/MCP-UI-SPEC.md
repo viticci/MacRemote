@@ -124,6 +124,7 @@ Adaptive states from the envelope:
 | stdout looks like | state |
 |---|---|
 | JSON array of objects, or object with exactly one array-of-objects value (`{"items": [...]}`) | sortable table, curated column order (id/title/name/list/due… first, all-null columns dropped, cap 8), check-off circles and row buttons per declared actions |
+| single JSON object whose primary curated field is present (e.g. `pocketctl now`) | episode card: 56px artwork, title + subtitle, meta line (duration · progress · link), action buttons |
 | other JSON object/array | collapsible key/value tree |
 | anything else | terminal panel with curated ANSI palette (SGR colors/bold/dim/italic; everything else stripped) |
 | empty + succeeded | friendly empty state |
@@ -151,6 +152,12 @@ tool's category server-side, `LocalMCPServer.widgetAccent`/`widgetTableHints`):
     artwork off the Pocket Casts CDN, hence the CSP resource domain).
   - `"link"` (`sourceKey`) — compact "Open ↗" pill (`target="_blank"
     rel="noopener"`) instead of the raw URL; only http(s) values render.
+  Every `sourceKey` may be a string or an array of fallback keys — commands
+  of the same CLI can spell the same fact differently (pocketctl up-next
+  calls the podcast uuid `podcast`, in-progress `podcastUuid`). A plain
+  column may carry `subtitleKey`: its value renders as a dim second line in
+  the cell (episode title over podcast name) and in the card, sorting stays
+  on the main value.
   A curated set keeps the trailing action buttons on-screen instead of
   scrolled off past raw columns. Curated specs whose source fields never
   appear in the rows are dropped, and if fewer than two survive the widget
@@ -190,11 +197,12 @@ initiates:
   advertisement, tool `_meta`, resource read + sandbox meta, unknown-uri
   error, action encoding with public names, stdout cap.
 - `Widget/test/harness.html`: a host simulator (fixtures: table, tree,
-  terminal, error, empty, truncated, habits, podcasts, actionfail;
+  terminal, error, empty, truncated, habits, podcasts, nowcard, actionfail;
   `?theme=dark`). Drive with Playwright: handshake, all states, check-off →
   recorded `tools/call` with substituted args → row completion, the podcasts
-  derived columns (artwork/duration/progress/link), the actionfail fixture's
-  visible Failed state, and host theme forcing.
+  derived columns (artwork/duration/progress/link) with subtitles, the
+  nowcard single-episode card with its action button, the actionfail
+  fixture's visible Failed state, and host theme forcing.
 
 ## Host compatibility
 

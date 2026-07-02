@@ -208,6 +208,21 @@ tr.mrw-row-done td { color: var(--text3); }
 }
 .mrw-check[data-state="done"] svg { opacity: 1; }
 
+/* title cell with a dim subtitle (episode title over podcast name) */
+.mrw-titlecell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mrw-titlecell-sub { font-size: 11px; color: var(--text2); font-weight: 400; }
+
+/* ════════ CARD state — a single curated row (e.g. now playing) ════════ */
+.mrw-episode { display: flex; gap: 14px; padding: 16px; align-items: flex-start; }
+.mrw-art.mrw-episode-art { width: 56px; height: 56px; border-radius: 10px; }
+.mrw-episode-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 7px; }
+.mrw-episode-title { font-size: 14px; font-weight: 600; letter-spacing: -.1px; }
+.mrw-episode-sub { font-size: 12px; color: var(--text2); margin-top: 1px; }
+.mrw-episode-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); flex-wrap: wrap; }
+.mrw-episode-dot { color: var(--text3); }
+.mrw-episode-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.mrw-episode-actions .mrw-inputform { padding: 0; flex-basis: 100%; }
+
 /* derived cells: artwork, duration, progress pie, compact link */
 .mrw-td-art { width: 40px; padding-right: 0 !important; }
 .mrw-art {
@@ -495,6 +510,7 @@ const MacRemoteWidget = (() => {
     try {
       const j = JSON.parse(out);
       if (tableRowsFrom(j)) return 'table';
+      if (cardRowFrom(j, p)) return 'card';
       if (j && typeof j === 'object') return 'tree';
     } catch (_) { /* not JSON — fall through to terminal */ }
     return 'terminal';
@@ -639,20 +655,31 @@ const MacRemoteWidget = (() => {
 
   // Derived cell renderers keyed by a column spec's `derive` field. Each
   // returns {value(row) -> node|string|null, sortValue(row), tdClass?}.
+  // `sourceKey` may be a string or an array of fallback keys — different
+  // commands of the same CLI name the same fact differently (pocketctl's
+  // up-next calls the podcast uuid `podcast`, in-progress `podcastUuid`).
   function derivedColumn(spec) {
+    const sources = [].concat(spec.sourceKey || []);
+    const pick = (row) => {
+      for (const k of sources) {
+        const v = row[k];
+        if (v !== null && v !== undefined && v !== '') return v;
+      }
+      return null;
+    };
     if (spec.derive === 'datetime') return {
-      value: (row) => formatWhen(row[spec.sourceKey], spec.allDayKey ? row[spec.allDayKey] : false),
-      sortValue: (row) => row[spec.sourceKey] || ''
+      value: (row) => formatWhen(pick(row), spec.allDayKey ? row[spec.allDayKey] : false),
+      sortValue: (row) => pick(row) || ''
     };
     if (spec.derive === 'duration') return {
-      value: (row) => formatSeconds(row[spec.sourceKey]),
-      sortValue: (row) => row[spec.sourceKey]
+      value: (row) => formatSeconds(pick(row)),
+      sortValue: (row) => pick(row)
     };
     if (spec.derive === 'artwork') return {
       tdClass: 'mrw-td-art',
       value: (row) => {
-        const v = row[spec.sourceKey];
-        if (v == null || v === '') return null;
+        const v = pick(row);
+        if (v == null) return null;
         const img = document.createElement('img');
         img.className = 'mrw-art';
         img.loading = 'lazy';
@@ -661,11 +688,11 @@ const MacRemoteWidget = (() => {
         img.addEventListener('error', () => { img.style.visibility = 'hidden'; });
         return img;
       },
-      sortValue: (row) => (spec.altKey && row[spec.altKey]) || row[spec.sourceKey] || ''
+      sortValue: (row) => (spec.altKey && row[spec.altKey]) || pick(row) || ''
     };
     if (spec.derive === 'progress') return {
       value: (row) => {
-        const played = row[spec.sourceKey], total = spec.totalKey ? row[spec.totalKey] : null;
+        const played = pick(row), total = spec.totalKey ? row[spec.totalKey] : null;
         if (typeof played !== 'number' || typeof total !== 'number' || total <= 0) return null;
         const pct = Math.max(0, Math.min(100, (played / total) * 100));
         const pie = el('span', 'mrw-pie');
@@ -676,13 +703,13 @@ const MacRemoteWidget = (() => {
         return box;
       },
       sortValue: (row) => {
-        const played = row[spec.sourceKey], total = spec.totalKey ? row[spec.totalKey] : null;
+        const played = pick(row), total = spec.totalKey ? row[spec.totalKey] : null;
         return (typeof played === 'number' && typeof total === 'number' && total > 0) ? played / total : null;
       }
     };
     if (spec.derive === 'link') return {
       value: (row) => {
-        const raw = row[spec.sourceKey];
+        const raw = pick(row);
         if (typeof raw !== 'string' || !/^https?:\/\//i.test(raw)) return null;
         const a = document.createElement('a');
         a.className = 'mrw-link';
@@ -691,7 +718,7 @@ const MacRemoteWidget = (() => {
         a.append(I.linkArrow(), 'Open');
         return a;
       },
-      sortValue: (row) => row[spec.sourceKey] || ''
+      sortValue: (row) => pick(row) || ''
     };
     return null;
   }
@@ -703,7 +730,8 @@ const MacRemoteWidget = (() => {
   // shape this curation was written for), fall back to auto columns.
   function columnSpecsFor(p, rows) {
     if (Array.isArray(p.columns) && p.columns.length) {
-      const hasData = (k) => k != null && rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== '');
+      const hasData = (keys) => [].concat(keys || [])
+        .some(k => rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== ''));
       const curated = p.columns
         .filter(spec => {
           const source = spec.derive ? spec.sourceKey : spec.key;
@@ -713,12 +741,29 @@ const MacRemoteWidget = (() => {
         .map((spec, i) => {
           const derived = spec.derive ? derivedColumn(spec) : null;
           if (spec.derive && !derived) return null; // unknown derive: skip
+          // subtitleKey renders a dim second line inside the cell (episode
+          // title over podcast name); sorting stays on the main value.
+          const subtitle = !spec.derive && spec.subtitleKey ? (row) => {
+            const v = row[spec.subtitleKey];
+            return v == null || v === '' ? null : String(v);
+          } : null;
+          const plainValue = (row) => {
+            const raw = row[spec.key];
+            const sub = subtitle && subtitle(row);
+            if (sub == null) return raw;
+            const wrap = el('span', 'mrw-titlecell');
+            wrap.append(el('span', null, raw == null ? '—' : String(raw)));
+            wrap.append(el('span', 'mrw-titlecell-sub', sub));
+            return wrap;
+          };
           return {
             key: spec.key, title: spec.title != null ? spec.title : prettyKey(spec.key),
             primary: spec.primary != null ? !!spec.primary : (!spec.derive && i === 0),
             isNumeric: !derived && rows.every(r => r[spec.key] == null || typeof r[spec.key] === 'number'),
             tdClass: derived ? derived.tdClass : null,
-            value: derived ? derived.value : (row) => row[spec.key],
+            subtitle: subtitle,
+            rawValue: derived ? derived.value : (row) => row[spec.key],
+            value: derived ? derived.value : plainValue,
             sortValue: derived ? derived.sortValue : (row) => row[spec.key]
           };
         })
@@ -844,48 +889,12 @@ const MacRemoteWidget = (() => {
           const td = el('td', 'mrw-td-actions');
           for (const act of buttonActions) {
             if (p.actionApplies && !p.actionApplies(act, row)) continue;
-            const b = el('button', 'mrw-rowbtn' + (act.style === 'destructive' ? ' mrw-destructive' : ''));
-            b.type = 'button';
-            b.dataset.state = rowSt[act.id] || '';
-            const label = () => {
-              b.textContent = '';
-              if (b.dataset.state === 'pending') { b.append(I.spinner(), act.label || 'Run'); }
-              else if (b.dataset.state === 'done') { b.append(I.checkTint(), act.doneLabel || 'Done'); }
-              else if (b.dataset.state === 'armed') { b.append('Confirm?'); }
-              else if (b.dataset.state === 'failed') { b.append('Failed'); }
-              else b.append(act.label || 'Run');
-            };
-            label();   // render the idle label immediately
-            const fire = (inputValues) => {
-              b.dataset.state = 'pending'; setRowState(row, act.id, 'pending'); label();
-              invoke(act.id, row, inputValues).then(() => {
-                b.dataset.state = 'done'; setRowState(row, act.id, 'done'); label();
-              }).catch((err) => {
-                // Show the failure instead of silently resetting; the
-                // tooltip carries stderr so the user can see why.
-                b.dataset.state = 'failed'; setRowState(row, act.id, ''); label();
-                b.title = actionFailureTitle(err, act.label || 'Run');
-                setTimeout(() => {
-                  if (b.dataset.state === 'failed') { b.dataset.state = ''; label(); }
-                }, 3500);
-              });
-            };
-            b.addEventListener('click', () => {
-              if (b.dataset.state === 'pending' || b.dataset.state === 'done') return;
-              if (act.inputs && act.inputs.length) { toggleInputForm(tr, act, row, fire); return; }
-              if (act.style === 'destructive') {
-                if (b.dataset.state !== 'armed') {
-                  b.dataset.state = 'armed'; label();
-                  setTimeout(() => {
-                    if (b.dataset.state === 'armed') { b.dataset.state = ''; label(); }
-                  }, 3500);
-                  return;
-                }
-                b.dataset.state = '';
-              }
-              fire();
-            });
-            td.append(b);
+            td.append(actionButton(act, {
+              initialState: rowSt[act.id] || '',
+              run: (values) => invoke(act.id, row, values),
+              onState: (s) => setRowState(row, act.id, s),
+              requestInputs: (fire) => toggleInputForm(tr, act, row, fire)
+            }));
           }
           tr.append(td);
         }
@@ -895,10 +904,6 @@ const MacRemoteWidget = (() => {
     function setRowState(row, actionId, s) {
       const cur = actionState.get(row.__mrwIdx) || {};
       cur[actionId] = s; actionState.set(row.__mrwIdx, cur);
-    }
-    function actionFailureTitle(err, actionTitle) {
-      const detail = err && err.message && err.message !== 'action failed' ? ' — ' + err.message : '';
-      return actionTitle + ' failed' + detail;
     }
     function invoke(actionId, row, inputValues) {
       const clean = { ...row };
@@ -913,38 +918,167 @@ const MacRemoteWidget = (() => {
       tbody.querySelectorAll('tr.mrw-inputrow').forEach(n => n.remove());
       const formTr = el('tr', 'mrw-inputrow');
       const td = el('td'); td.colSpan = 99;
-      const form = el('div', 'mrw-inputform');
-      const fields = {};
-      for (const inp of (act.inputs || [])) {
-        const wrap = el('label', 'mrw-inputlabel', inp.title);
-        const input = document.createElement('input');
-        input.className = 'mrw-input'; input.type = 'text';
-        input.placeholder = inp.placeholder || '';
-        if (inp.prefillField && row[inp.prefillField] != null) input.value = String(row[inp.prefillField]);
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
-        fields[inp.name] = input;
-        wrap.append(input); form.append(wrap);
-      }
-      const go = el('button', 'mrw-rowbtn'); go.type = 'button'; go.textContent = act.label || 'Apply';
-      const cancel = el('button', 'mrw-rowbtn'); cancel.type = 'button'; cancel.textContent = 'Cancel';
-      cancel.addEventListener('click', () => formTr.remove());
-      go.addEventListener('click', () => {
-        const values = {};
-        for (const k of Object.keys(fields)) { values[k] = fields[k].value; }
-        formTr.remove();
-        fire(values);
-      });
-      form.append(go, cancel);
-      td.append(form); formTr.append(td);
+      const built = buildInputForm(act, row, fire, () => formTr.remove());
+      td.append(built.form); formTr.append(td);
       tr.after(formTr);
-      const first = Object.values(fields)[0];
-      if (first) { first.focus(); }
+      built.focus();
     }
 
     paintRows();
     table.append(thead, tbody);
     wrap.append(table);
     return wrap;
+  }
+
+  /* ════════ shared action affordances (table rows + episode card) ════════ */
+  function actionFailureTitle(err, actionTitle) {
+    const detail = err && err.message && err.message !== 'action failed' ? ' — ' + err.message : '';
+    return actionTitle + ' failed' + detail;
+  }
+
+  /* One action button: idle → pending → done, destructive two-step arm,
+     visible Failed state with the reason in the tooltip (never a silent
+     reset), optional inline inputs collected before firing. */
+  function actionButton(act, opts) {
+    const b = el('button', 'mrw-rowbtn' + (act.style === 'destructive' ? ' mrw-destructive' : ''));
+    b.type = 'button';
+    b.dataset.state = opts.initialState || '';
+    const label = () => {
+      b.textContent = '';
+      if (b.dataset.state === 'pending') { b.append(I.spinner(), act.label || 'Run'); }
+      else if (b.dataset.state === 'done') { b.append(I.checkTint(), act.doneLabel || 'Done'); }
+      else if (b.dataset.state === 'armed') { b.append('Confirm?'); }
+      else if (b.dataset.state === 'failed') { b.append('Failed'); }
+      else b.append(act.label || 'Run');
+    };
+    label();
+    const fire = (inputValues) => {
+      b.dataset.state = 'pending';
+      if (opts.onState) opts.onState('pending');
+      label();
+      Promise.resolve(opts.run(inputValues || {})).then(() => {
+        b.dataset.state = 'done';
+        if (opts.onState) opts.onState('done');
+        label();
+      }).catch((err) => {
+        b.dataset.state = 'failed';
+        if (opts.onState) opts.onState('');
+        label();
+        b.title = actionFailureTitle(err, act.label || 'Run');
+        setTimeout(() => {
+          if (b.dataset.state === 'failed') { b.dataset.state = ''; label(); }
+        }, 3500);
+      });
+    };
+    b.addEventListener('click', () => {
+      if (b.dataset.state === 'pending' || b.dataset.state === 'done') return;
+      if (act.inputs && act.inputs.length && opts.requestInputs) { opts.requestInputs(fire); return; }
+      if (act.style === 'destructive') {
+        if (b.dataset.state !== 'armed') {
+          b.dataset.state = 'armed'; label();
+          setTimeout(() => {
+            if (b.dataset.state === 'armed') { b.dataset.state = ''; label(); }
+          }, 3500);
+          return;
+        }
+        b.dataset.state = '';
+      }
+      fire();
+    });
+    return b;
+  }
+
+  /* Inline input form (reschedule/edit): prefilled from the row, Enter or
+     the apply button fires, Cancel closes. The host (table/card) decides
+     where the form element lives. */
+  function buildInputForm(act, row, fire, close) {
+    const form = el('div', 'mrw-inputform');
+    const fields = {};
+    const go = el('button', 'mrw-rowbtn');
+    for (const inp of (act.inputs || [])) {
+      const wrap = el('label', 'mrw-inputlabel', inp.title);
+      const input = document.createElement('input');
+      input.className = 'mrw-input'; input.type = 'text';
+      input.placeholder = inp.placeholder || '';
+      if (inp.prefillField && row[inp.prefillField] != null) input.value = String(row[inp.prefillField]);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
+      fields[inp.name] = input;
+      wrap.append(input); form.append(wrap);
+    }
+    go.type = 'button'; go.textContent = act.label || 'Apply';
+    const cancel = el('button', 'mrw-rowbtn'); cancel.type = 'button'; cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => close());
+    go.addEventListener('click', () => {
+      const values = {};
+      for (const k of Object.keys(fields)) { values[k] = fields[k].value; }
+      close();
+      fire(values);
+    });
+    form.append(go, cancel);
+    return {
+      form,
+      focus: () => { const first = Object.values(fields)[0]; if (first) first.focus(); }
+    };
+  }
+
+  /* ════════ CARD state — one curated row rendered as an episode card ════════ */
+  // A lone object (e.g. "now playing") whose primary curated field is
+  // present gets the card treatment instead of the raw key/value tree.
+  function cardRowFrom(j, p) {
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+    if (!Array.isArray(p.columns) || !p.columns.length) return null;
+    const primary = p.columns.find(c => c.primary);
+    if (!primary || j[primary.key] == null || j[primary.key] === '') return null;
+    return j;
+  }
+
+  function renderCard(p, row) {
+    const specs = columnSpecsFor(p, [row]);
+    const art = specs.find(s => s.tdClass === 'mrw-td-art');
+    const primary = specs.find(s => s.primary) || specs[0];
+    const rest = specs.filter(s => s !== art && s !== primary);
+
+    const card = el('div', 'mrw-episode');
+    if (art) {
+      const img = art.value(row);
+      if (img && img.nodeType) { img.classList.add('mrw-episode-art'); card.append(img); }
+    }
+    const main = el('div', 'mrw-episode-main');
+    const titles = el('div', null);
+    const rawTitle = primary.rawValue ? primary.rawValue(row) : primary.value(row);
+    titles.append(el('div', 'mrw-episode-title', rawTitle == null ? '—' : String(rawTitle)));
+    const sub = primary.subtitle && primary.subtitle(row);
+    if (sub) titles.append(el('div', 'mrw-episode-sub', sub));
+    main.append(titles);
+
+    const meta = el('div', 'mrw-episode-meta');
+    for (const spec of rest) {
+      const v = spec.value(row);
+      if (v == null) continue;
+      if (meta.childNodes.length) meta.append(el('span', 'mrw-episode-dot', '·'));
+      meta.append(v.nodeType ? v : document.createTextNode(String(v)));
+    }
+    if (meta.childNodes.length) main.append(meta);
+
+    const acts = (p.rowActions || []).filter(a => !p.actionApplies || p.actionApplies(a, row));
+    if (acts.length && p.onAction) {
+      const box = el('div', 'mrw-episode-actions');
+      for (const act of acts) {
+        box.append(actionButton(act, {
+          run: (values) => Promise.resolve(p.onAction(act.id, { ...row }, values || {})),
+          requestInputs: (fire) => {
+            const existing = box.querySelector('.mrw-inputform');
+            if (existing) { existing.remove(); return; }
+            const built = buildInputForm(act, row, fire, () => built.form.remove());
+            box.append(built.form);
+            built.focus();
+          }
+        }));
+      }
+      main.append(box);
+    }
+    card.append(main);
+    return card;
   }
 
   /* ════════ TREE state ════════ */
@@ -1136,6 +1270,7 @@ const MacRemoteWidget = (() => {
 
     let body;
     if (state === 'table')      body = renderTable(p, tableRowsFrom(JSON.parse(p.stdout.trim())));
+    else if (state === 'card')  body = renderCard(p, cardRowFrom(JSON.parse(p.stdout.trim()), p));
     else if (state === 'tree')  body = renderTree(p, JSON.parse(p.stdout.trim()));
     else if (state === 'error') body = renderError(p);
     else if (state === 'empty') body = renderEmpty(p);
