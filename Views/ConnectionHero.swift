@@ -66,10 +66,14 @@ struct ConnectionHero: View {
                     captionLines
                 }
             }
-            .background {
-                // "Aurora Exchange" — one liquid light field under the whole
-                // glass group; the glass itself refracts it (GUIDELINES §3:
-                // a color layer, never a second glass surface).
+            .overlay {
+                // "Aurora Exchange" — one liquid light field over the whole
+                // glass group, masked in-shader to the union silhouette
+                // (GUIDELINES §3: a color layer, never a second glass
+                // surface). Rendering under the glass looked right on paper,
+                // but the frosted material crushed the field to invisibility;
+                // above the glass, the shader tempers its hot light in the
+                // URL text band instead.
                 if showsConduit {
                     AuroraExchangeUnderlay(
                         tint: StatusRole.ready.tint,

@@ -132,9 +132,17 @@ static inline half4 auroraUnion(float2 p, float time, half4 tint,
     half3 rgb = liquid * washA;
     half a = washA;
 
+    // The layer now composites ABOVE the glass, so hot light is tempered in
+    // the URL text band — the aurora wash stays, comet cores dim to keep the
+    // address effortlessly readable.
+    half inTextBand = half(smoothstep(bSize.y * 0.40, bSize.y * 0.24, abs(p.y - bC.y))) *
+                      half(step(bOrigin.x + bSize.y * 0.6, p.x)) *
+                      half(step(p.x, bOrigin.x + bSize.x - bSize.y * 1.3));
+    half hotGain = mix(0.8h, 0.34h, inTextBand);
+
     half3 hotColor = mix(mix(tint.rgb, liquid, 0.55h), half3(1.0h), saturate(comets * 0.65h));
-    rgb += hotColor * comets * 0.8h;
-    a = saturate(a + comets * 0.8h);
+    rgb += hotColor * comets * hotGain;
+    a = saturate(a + comets * hotGain);
 
     a = min(a * half(intensity), 0.85h) * mask;
     return half4(rgb * half(intensity) * mask, a);
@@ -153,6 +161,16 @@ half4 conduitLight(float2 position,
 {
     if (intensity <= 0.001f || color.a <= 0.0h) { return half4(0.0h); }
     float2 p = position - bounds.xy;
+    // Geometry fallback: if the host failed to measure frames, approximate the
+    // hero from the layer bounds (previewGrid proportions) — the ornament must
+    // degrade to slightly-off geometry, never to nothing.
+    if (aSize.x < 1.0f || bSize.x < 1.0f) {
+        float2 size = bounds.zw;
+        bSize = float2(size.x * 0.96, size.y * 0.34);
+        aSize = float2(size.x * 0.30, size.y * 0.34);
+        aOrigin = float2((size.x - aSize.x) * 0.5, size.y * 0.08);
+        bOrigin = float2((size.x - bSize.x) * 0.5, aOrigin.y + aSize.y + size.y * 0.10);
+    }
     half4 lit = auroraUnion(p, time, tint, intensity, flow, aOrigin, aSize, bOrigin, bSize);
     return half4(lit.rgb * color.a, lit.a * color.a);
 }
