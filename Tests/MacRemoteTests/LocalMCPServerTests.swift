@@ -1254,6 +1254,53 @@ struct LocalMCPServerTests {
         #expect(argsDescription.contains("add --private -f"))
         #expect(argsDescription.contains("section, list, group, smart-list, and template commands"))
         #expect(argsDescription.contains("ordinary due dates, recurrence, and EventKit alarms do not"))
+        // The adapter can run `upcoming N` too — its window arithmetic must
+        // be spelled out (N=1 already covers today AND tomorrow).
+        #expect(description.contains("`upcoming 1` returns today and tomorrow"))
+    }
+
+    @Test func remCTLUpcomingDescriptionExplainsDayWindowArithmetic() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = ToolDefinition(
+            id: "test.upcoming",
+            name: "Upcoming",
+            summary: "Return reminders due in the next N days.",
+            executablePath: "/usr/local/bin/remctl",
+            argumentPattern: ["--format", "json", "upcoming", "{days}"],
+            parameters: [
+                ToolParameter(
+                    name: "days",
+                    title: "Days",
+                    kind: .integer,
+                    required: false,
+                    defaultValue: "7",
+                    integerRange: 1...3650
+                )
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+        // remctl's window starts today and spans N further days; without
+        // this line models pass days=2 for "today and tomorrow" and get a
+        // third day in the widget.
+        #expect(description.contains("days=1 returns today and tomorrow"))
     }
 
     @Test func pocketCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {

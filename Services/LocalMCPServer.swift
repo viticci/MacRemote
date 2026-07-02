@@ -1086,6 +1086,7 @@ final class LocalMCPServer: @unchecked Sendable {
                 parts.append("For Codex, global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`; options after `exec` are parsed by the exec subcommand.")
             case "remctl":
                 parts.append("For RemCTL, pass the numeric `id` field from JSON results to commands such as `edit`, `info`, `done`, `delete`, `flag`, and `unflag`; do not pass the UUID embedded in `deepLink`.")
+                parts.append("`upcoming N` starts today and extends N further days: `upcoming 1` returns today and tomorrow, `upcoming 7` today plus the next week.")
                 parts.append("Use `--private` only for private Reminders metadata and private Reminders management surfaces: synced rich URL attachments, tag add/replace/remove, sections, shared-list assignment, subtasks, images, real flags, urgency, Early Reminders, location alarms, Groceries metadata, list appearance and pinning, list groups, smart lists, and templates. Do not use `--private` for normal due dates, recurrence, or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
             case "pocketctl":
                 parts.append("For PocketCTL, prefer `--json` for reads. Before queue, playlist, bookmark, archive, progress, or played-state writes, use the matching command with `--dry-run --json` unless the user explicitly asked to perform the write.")
@@ -1098,6 +1099,15 @@ final class LocalMCPServer: @unchecked Sendable {
             parts.append("This command has no model-supplied arguments.")
         } else {
             parts.append("Only the documented schema parameters are accepted.")
+        }
+
+        // remctl's `upcoming N` window starts today and spans N additional
+        // days (N=1 → today and tomorrow). Models reliably guess N=2 for
+        // "today and tomorrow" and get a third day, so spell the arithmetic
+        // out on every tool whose argv template carries the command.
+        if URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() == "remctl",
+           tool.argumentPattern.contains("upcoming") {
+            parts.append("The `days` window starts today and extends `days` further: days=1 returns today and tomorrow; days=7 returns today plus the next week.")
         }
 
         switch tool.capability {
