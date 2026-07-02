@@ -27,7 +27,7 @@ guard let fn = library.makeFunction(name: "previewGrid") else { fatalError("prev
 let pipeline = try device.makeComputePipelineState(function: fn)
 let queue = device.makeCommandQueue()!
 
-let width = 920, height = 120   // ~2x the on-screen pill
+let width = 920, height = 300   // ~2x the on-screen pill
 let desc = MTLTextureDescriptor.texture2DDescriptor(
     pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
 desc.usage = [.shaderWrite, .shaderRead]

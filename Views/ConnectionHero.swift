@@ -44,18 +44,42 @@ struct ConnectionHero: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isConfirmingCopy = false
     @State private var copyResetTask: Task<Void, Never>?
+    @State private var statusFrame: CGRect = .zero
+    @State private var urlFrame: CGRect = .zero
+
+    private static let heroSpace = "hero.glassGroup"
 
     var body: some View {
         VStack(spacing: isCompact ? Space.s3 : Space.s4) {
             GlassEffectContainer(spacing: Space.s6) {
                 VStack(spacing: isCompact ? Space.s2 : Space.s3) {
                     statusCapsule
+                        .onGeometryChange(for: CGRect.self) { proxy in
+                            proxy.frame(in: .named(Self.heroSpace))
+                        } action: { statusFrame = $0 }
                     if let urlText {
                         urlPill(urlText)
+                            .onGeometryChange(for: CGRect.self) { proxy in
+                                proxy.frame(in: .named(Self.heroSpace))
+                            } action: { urlFrame = $0 }
                     }
                     captionLines
                 }
             }
+            .background {
+                // "Aurora Exchange" — one liquid light field under the whole
+                // glass group; the glass itself refracts it (GUIDELINES §3:
+                // a color layer, never a second glass surface).
+                if showsConduit {
+                    AuroraExchangeUnderlay(
+                        tint: StatusRole.ready.tint,
+                        statusFrame: statusFrame,
+                        urlFrame: urlFrame
+                    )
+                    .transition(.opacity)
+                }
+            }
+            .coordinateSpace(name: Self.heroSpace)
             // Reduce Motion: no morph animation — states swap in place (crossfade-class).
             .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: state)
 
@@ -91,14 +115,6 @@ struct ConnectionHero: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.5), value: text)
                 .padding(.horizontal, isCompact ? Space.s4 : Space.s5)
                 .padding(.vertical, isCompact ? Space.s2 : Space.s3)
-                .background {
-                    // "Liquid Light Conduit" — a color layer between the glass
-                    // and the text, never a second glass surface (GUIDELINES §3).
-                    if showsConduit {
-                        ConduitLightLayer(tint: StatusRole.ready.tint)
-                            .transition(.opacity)
-                    }
-                }
                 .glassEffect(.regular.tint(glassTint), in: .capsule)
                 .glassEffectID("hero.url", in: glassNamespace)
                 .glassEffectUnion(id: "hero.urlGroup", namespace: glassNamespace)

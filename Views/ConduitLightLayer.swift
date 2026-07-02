@@ -1,16 +1,22 @@
 import AppKit
 import SwiftUI
 
-// MARK: - ConduitLightLayer (a color layer, NOT glass — the GUIDELINES §3 map is untouched)
+// MARK: - AuroraExchangeUnderlay (a color layer, NOT glass — GUIDELINES §3 untouched)
 
-/// "Liquid Light Conduit": counter-flowing fiber-optic tracers inside the hero
-/// URL capsule while the tunnel is public — outbound above the axis, inbound
-/// below, so the open tunnel visibly exchanges information both ways at once.
-/// Rendered by `conduitLight` in `Shaders/default.metallib`; the metallib is
-/// PREcompiled and committed (script/compile_shaders.sh — the CLT-only host
-/// has no Metal compiler, the runtime compiler validated the source).
-struct ConduitLightLayer: View {
+/// "Aurora Exchange": one liquid light field under the WHOLE hero glass group.
+/// The union silhouette (status pill + weld + URL capsule) is rebuilt in-shader
+/// as a smooth-min metaball from the two measured frames, and packet comets
+/// ride a closed circuit — along the URL capsule, up through the neck into
+/// "Public", around it, and back. The layer sits BEHIND the GlassEffectContainer,
+/// so the real Liquid Glass refracts the light: the liquidity is optical.
+/// Shader: `conduitLight` in the committed `Shaders/default.metallib`
+/// (script/compile_shaders.sh; script/render_shader_preview.swift previews it
+/// offscreen without launching the app).
+struct AuroraExchangeUnderlay: View {
     var tint: Color
+    /// Frames of the status pill and URL capsule in this layer's coordinate space.
+    var statusFrame: CGRect
+    var urlFrame: CGRect
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -24,23 +30,27 @@ struct ConduitLightLayer: View {
         Bundle.module.url(forResource: "default", withExtension: "metallib") != nil
 
     /// No ticks while occluded or under Reduce Motion. The time base is the
-    /// wrapped wall clock, so resuming lands tracers where live traffic
-    /// "would be" — the conduit never visibly rewinds after an occlusion nap.
+    /// wrapped wall clock, so resuming lands the field where live traffic
+    /// "would be" — it never visibly rewinds after an occlusion nap.
     private var paused: Bool { !isWindowVisible || reduceMotion }
 
     var body: some View {
-        if Self.isAvailable, !reduceTransparency {
+        if Self.isAvailable, !reduceTransparency, statusFrame.width > 1, urlFrame.width > 1 {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { context in
                 let t = Float(context.date.timeIntervalSinceReferenceDate
                     .truncatingRemainder(dividingBy: 120))        // seamless 120 s loop
-                Capsule()
-                    .fill(.white)   // alpha-only mask; the shader replaces the fill
+                Rectangle()
+                    .fill(.white)   // alpha carrier; the shader masks to the union SDF
                     .colorEffect(ShaderLibrary.bundle(.module).conduitLight(
                         .boundingRect,
                         .float(t),
                         .color(tint),
                         .float(Float(gain)),
-                        .float(reduceMotion ? 0 : 1)   // Reduce Motion: static tube only
+                        .float(reduceMotion ? 0 : 1),  // Reduce Motion: static field
+                        .float2(Float(statusFrame.minX), Float(statusFrame.minY)),
+                        .float2(Float(statusFrame.width), Float(statusFrame.height)),
+                        .float2(Float(urlFrame.minX), Float(urlFrame.minY)),
+                        .float2(Float(urlFrame.width), Float(urlFrame.height))
                     ))
             }
             .allowsHitTesting(false)

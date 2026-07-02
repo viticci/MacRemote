@@ -1,161 +1,187 @@
-// ConduitLight.metal — MacRemote "Aurora Exchange"
-// Attached via .colorEffect to a white-filled Capsule layered between the URL
-// pill's glassEffect and its text (ConnectionHero.urlPill, .publicRunning only).
-// The source view is a plain white capsule: its premultiplied alpha gives us the
-// capsule mask + antialiasing for free; the shader replaces the fill entirely.
+// ConduitLight.metal — MacRemote "Aurora Exchange" (union edition)
+// One light layer UNDER the whole hero glass group (status pill + weld + URL
+// capsule): the real Liquid Glass refracts this field, so the liquidity is
+// optical, not painted. The union silhouette is rebuilt in-shader as a
+// smooth-min metaball of the two capsules (the same math that shapes the
+// visible weld), and packet comets ride a closed circuit: along the URL
+// capsule, up through the neck into "Public", around it, and back down.
 //
-// Visual story: a living iridescent aurora fills the open tunnel — two hue
-// bands drifting in opposite directions (outbound/inbound), two bright glints
-// orbiting the capsule edge in opposite directions, and every few seconds a
-// white-cored comet crosses the width, alternating direction. Loud enough to
-// be unmistakably alive, glassy enough to belong to Liquid Glass.
-//
-// The core lives in auroraExchange() so the offscreen preview kernel
-// (previewGrid, used by script/render_shader_preview.swift and the tests)
+// The core lives in auroraUnion() so the offscreen preview kernel
+// (previewGrid, driven by script/render_shader_preview.swift and the tests)
 // renders EXACTLY what the app renders.
 //
-// All temporal frequencies are integer cycles per 120 s: the CPU clock wraps
-// with truncatingRemainder(dividingBy: 120) for a seamless loop.
+// Temporal frequencies are integer cycles per 120 s: the CPU clock wraps with
+// truncatingRemainder(dividingBy: 120) for a seamless loop.
 
 #include <metal_stdlib>
 using namespace metal;
 
-// Cheap smooth hue palette in the Apple-Intelligence family:
-// t in [0,1] → mint → cyan → azure → soft violet → mint.
+// Iridescent palette in the Apple-Intelligence family:
+// t → mint → cyan → azure → soft violet → mint.
 static inline half3 auroraPalette(float t) {
     float3 phase = float3(0.00, 0.10, 0.24);
     float3 c = 0.5 + 0.5 * cos(6.2831853 * (t + phase));
-    // Remap toward mint/cyan/azure/violet: bias green+blue up, red down.
     return half3(half(0.30 + 0.45 * c.x), half(0.68 + 0.30 * c.y), half(0.75 + 0.25 * c.z));
 }
 
-// A traveling comet: bright head, exponential tail, wrapping in [0,1].
-static inline half comet(float u, float head, float tail) {
-    float d = fract(head - u);
-    half body = half(exp(-d * (5.0 / tail))) * half(step(d, tail));
-    float hd = min(d, 1.0 - d);
-    half core = half(exp(-hd * hd * 1400.0));
-    return saturate(body * 0.8h + core);
+// SDF of a horizontal capsule given its bounding rect.
+static inline float sdCapsuleRect(float2 p, float2 origin, float2 size) {
+    float r = size.y * 0.5;
+    float2 a = origin + float2(r, r);
+    float2 b = origin + float2(size.x - r, r);
+    float2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+    return length(pa - ba * h) - r;
 }
 
-// Signed distance to a capsule of half-height r spanning [r, w-r] horizontally,
-// in a space where the box is w×1 with the capsule filling it. uv is (x*aspect, y).
-static inline float capsuleEdgeDistance(float2 p, float aspect) {
-    float r = 0.5;
-    float2 a = float2(r, 0.5);
-    float2 b = float2(aspect - r, 0.5);
-    float2 pa = p - a;
-    float2 ba = b - a;
-    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-    return length(pa - ba * h) - r;   // < 0 inside; 0 at the edge
+// Polynomial smooth min — the metaball weld between the two capsules.
+static inline float smin(float d1, float d2, float k) {
+    float h = clamp(0.5 + 0.5 * (d2 - d1) / k, 0.0, 1.0);
+    return mix(d2, d1, h) - k * h * (1.0 - h);
 }
 
-// The shared core: everything the eye sees, mask applied by the caller.
-// Returns premultiplied RGBA to composite over the glass.
-static inline half4 auroraExchange(float2 uv,      // 0…1 inside the capsule's bbox
-                                   float  aspect,  // width / height
-                                   float  time,
-                                   half4  tint,
-                                   float  intensity,
-                                   float  flow) {
-    float2 p = float2(uv.x * aspect, uv.y);
+// Piecewise circuit through both shapes: s ∈ [0,1) → point.
+// 0.00–0.42 along the URL capsule L→R · 0.42–0.54 up the neck ·
+// 0.54–0.84 across "Public" R→L · 0.84–1.00 back down the neck.
+static inline float2 circuitPoint(float s, float2 aC, float2 aHalf, float2 bC, float2 bHalf) {
+    s = fract(s);
+    float inset = 0.72;
+    if (s < 0.42) {
+        float t = s / 0.42;
+        return float2(bC.x + mix(-bHalf.x, bHalf.x, t) * inset, bC.y);
+    }
+    if (s < 0.54) {
+        float t = (s - 0.42) / 0.12;
+        return float2(mix(bC.x + bHalf.x * inset, aC.x + aHalf.x * inset, t),
+                      mix(bC.y, aC.y, t));
+    }
+    if (s < 0.84) {
+        float t = (s - 0.54) / 0.30;
+        return float2(aC.x + mix(aHalf.x, -aHalf.x, t) * inset, aC.y);
+    }
+    float t = (s - 0.84) / 0.16;
+    return float2(mix(aC.x - aHalf.x * inset, bC.x - bHalf.x * inset, t),
+                  mix(aC.y, bC.y, t));
+}
 
-    // ---- Interior aurora: two counter-drifting hue bands ----------------
-    // Band phase = horizontal position ± time, with a slow vertical tilt so
-    // the field feels volumetric rather than striped.
-    float driftA = time * (10.0 / 120.0);            // outbound, L→R
-    float driftB = time * ( 7.0 / 120.0);            // inbound,  R→L
-    float tilt = 0.18 * sin(uv.y * 3.1415926 + time * (6.2831853 * 3.0 / 120.0));
-    half3 bandA = auroraPalette(fract(uv.x * 1.4 - driftA + tilt));
-    half3 bandB = auroraPalette(fract((1.0 - uv.x) * 1.1 - driftB - tilt) + 0.45);
+// A comet at path position s with a fading 4-tap trail behind it.
+static inline half circuitComet(float2 p, float s, float dir, float radius,
+                                float2 aC, float2 aHalf, float2 bC, float2 bHalf) {
+    half glow = 0.0h;
+    for (int i = 0; i < 4; i++) {
+        float lag = float(i) * 0.018 * dir;
+        float2 c = circuitPoint(s - lag, aC, aHalf, bC, bHalf);
+        float d2 = dot(p - c, p - c);
+        half w = half(exp(-d2 / (radius * radius * (1.0 + float(i) * 0.5))));
+        glow += w * half(1.0 - float(i) * 0.22);
+    }
+    return saturate(glow);
+}
 
-    // Vertical envelope: aurora strongest above/below the text band; the
-    // midline stays calmer so the URL keeps effortless contrast.
-    float yc = uv.y * 2.0 - 1.0;                     // -1 … +1
-    half midCalm = half(0.55 + 0.45 * smoothstep(0.05, 0.45, yc * yc));
-    // Weights favor A on top, B below → counterflow is spatially legible.
-    half wA = half(0.5) + half(0.5) * half(clamp(-yc * 1.6, -1.0, 1.0));
-    half wB = 1.0h - wA;
+// The shared core. All coordinates in points within the layer's space.
+// rectA = status "Public" pill, rectB = URL capsule (incl. copy button).
+static inline half4 auroraUnion(float2 p, float time, half4 tint,
+                                float intensity, float flow,
+                                float2 aOrigin, float2 aSize,
+                                float2 bOrigin, float2 bSize) {
+    float2 aC = aOrigin + aSize * 0.5;
+    float2 bC = bOrigin + bSize * 0.5;
+    float2 aHalf = aSize * 0.5;
+    float2 bHalf = bSize * 0.5;
 
-    // Slow breath (4 cycles / 120 s): the whole field inhales/exhales.
-    half breath = 0.82h + 0.18h * half(sin(time * (6.2831853 * 4.0 / 120.0)));
+    // ---- Union silhouette (metaball weld, shrunk 1.5pt to stay under glass)
+    float dA = sdCapsuleRect(p, aOrigin, aSize);
+    float dB = sdCapsuleRect(p, bOrigin, bSize);
+    float d = smin(dA, dB, aSize.y * 0.55);
+    half mask = half(smoothstep(0.0, -1.5, d));             // 1 inside, soft edge
 
-    half3 aurora = (bandA * wA + bandB * wB);
-    half auroraA = 0.42h * midCalm * breath;         // wash alpha, calm at midline
+    if (mask <= 0.001h || intensity <= 0.001) { return half4(0.0h); }
 
-    // Static fallback under Reduce Motion: frozen field, no drift terms.
-    aurora = mix(auroraPalette(uv.x * 0.9) , aurora, half(flow));
-    auroraA = mix(0.26h * midCalm, auroraA, half(flow));
+    // ---- Liquid interior: domain-warped iridescence + depth glow ---------
+    float scale = 1.0 / max(bSize.y, 1.0);                  // ~capsule heights
+    float2 q = p * scale;
+    float tphase = time * (6.2831853 / 120.0);
+    // Two cheap warp octaves — the "liquid" curl.
+    float2 warp = float2(sin(q.y * 2.3 + tphase * 9.0) + 0.6 * sin(q.y * 5.1 - tphase * 15.0),
+                         sin(q.x * 1.7 - tphase * 7.0) + 0.6 * sin(q.x * 3.9 + tphase * 11.0));
+    float2 qw = q + warp * 0.35 * flow;
 
-    // ---- Edge runners: glints sweeping the top and bottom rims ----------
-    // Angle-space orbits collapse on a capsule this elongated (aspect ≈ 7.6),
-    // so the runners are parameterized by x directly: top rim runs L→R,
-    // bottom rim runs R→L — the counterflow hugs the silhouette.
-    float edge = capsuleEdgeDistance(p, aspect);
-    half rim = half(exp(-edge * edge * 260.0));      // soft band hugging the rim
-    half topSide = half(smoothstep(0.5, 0.35, uv.y));
-    half bottomSide = half(smoothstep(0.5, 0.65, uv.y));
-    half runTop = comet(uv.x,       time * (18.0 / 120.0),       0.22) * topSide;
-    half runBottom = comet(1.0 - uv.x, time * (13.0 / 120.0) + 0.4, 0.18) * bottomSide;
-    half edgeGlow = rim * (runTop + runBottom) * 1.15h * half(flow);
+    // Two counter-drifting hue fields, blended by depth. Small phase offset —
+    // large shifts push into murky violet-blue over the pale glass.
+    half3 fieldA = auroraPalette(fract(qw.x * 0.16 - time * (9.0 / 120.0)));
+    half3 fieldB = auroraPalette(fract(0.5 - qw.x * 0.12 + time * (6.0 / 120.0)) + 0.15);
+    half depth = half(clamp(-d * scale * 2.2, 0.0, 1.0));   // thick core glows most
+    half3 liquid = mix(fieldA, fieldB, half(0.5 + 0.5 * sin(qw.y * 2.0 + tphase * 5.0)));
 
-    // ---- Packet comets: a full-width crossing every ~5 s, alternating ---
-    // 24 crossings / 120 s; parity flips direction each crossing.
-    float crossing = time * (24.0 / 120.0);
-    float dir = step(0.5, fract(floor(crossing) * 0.5));   // 0 → L→R, 1 → R→L
-    float cu = mix(uv.x, 1.0 - uv.x, dir);
-    half lane = half(exp(-pow((uv.y - mix(0.36, 0.64, dir)) * 9.0, 2.0)));
-    half packet = comet(cu, fract(crossing), 0.22) * lane * 1.25h * half(flow);
+    // Caustic shimmer: interference of the warp octaves, sharpened.
+    float ca = sin(qw.x * 6.0 + tphase * 13.0) + sin(qw.y * 5.0 - tphase * 8.0);
+    half caustic = half(pow(clamp(0.5 + 0.5 * ca * 0.5, 0.0, 1.0), 6.0)) * 0.5h;
 
-    // ---- Composite --------------------------------------------------------
-    half3 rgb = aurora * auroraA;
-    half a = auroraA;
+    half breath = 0.86h + 0.14h * half(sin(tphase * 4.0));
+    half washA = (0.50h * depth + caustic * half(flow)) * breath;
 
-    // Edge + packet light runs hot: white core over tinted falloff.
-    half hot = saturate(edgeGlow + packet);
-    half3 hotColor = mix(mix(tint.rgb, auroraPalette(fract(uv.x + time * 0.05)), 0.5h),
-                         half3(1.0h), saturate(hot * 0.75h));
-    rgb += hotColor * hot * 0.62h;
-    a = saturate(a + hot * 0.62h);
+    // ---- Circuit comets: light that travels the whole form ---------------
+    float r = bSize.y * 0.18;
+    half comets = 0.0h;
+    comets += circuitComet(p, time * (10.0 / 120.0),         1.0, r, aC, aHalf, bC, bHalf);
+    comets += circuitComet(p, -time * (7.0 / 120.0) + 0.37, -1.0, r, aC, aHalf, bC, bHalf);
+    comets += circuitComet(p, time * (10.0 / 120.0) + 0.5,   1.0, r * 0.8, aC, aHalf, bC, bHalf) * 0.7h;
+    comets = saturate(comets) * half(flow);
 
-    // Ceiling: highlights may sing (≤ 0.72), but never white out the pill.
-    a = min(a * half(intensity), 0.72h);
-    return half4(rgb * half(intensity), a);
+    // ---- Composite (premultiplied) ----------------------------------------
+    half3 rgb = liquid * washA;
+    half a = washA;
+
+    half3 hotColor = mix(mix(tint.rgb, liquid, 0.55h), half3(1.0h), saturate(comets * 0.65h));
+    rgb += hotColor * comets * 0.8h;
+    a = saturate(a + comets * 0.8h);
+
+    a = min(a * half(intensity), 0.85h) * mask;
+    return half4(rgb * half(intensity) * mask, a);
 }
 
 [[ stitchable ]]
 half4 conduitLight(float2 position,
-                   half4  color,      // source pixel: white capsule mask (premultiplied)
-                   float4 bounds,     // pass .boundingRect
-                   float  time,       // seconds, wrapped at 120 on the CPU side
-                   half4  tint,       // semantic status color (.green for Public)
-                   float  intensity,  // 0…1 master gain — animate to 0 before pausing
-                   float  flow)       // 1 = animate; 0 = Reduce Motion (static aurora)
+                   half4  color,      // white full-bleed mask from the source view
+                   float4 bounds,
+                   float  time,       // wrapped at 120 s on the CPU side
+                   half4  tint,
+                   float  intensity,  // 0…1 master gain
+                   float  flow,       // 1 = animate; 0 = Reduce Motion (static field)
+                   float2 aOrigin, float2 aSize,   // status "Public" pill frame
+                   float2 bOrigin, float2 bSize)   // URL capsule frame
 {
     if (intensity <= 0.001f || color.a <= 0.0h) { return half4(0.0h); }
-    float2 size = max(bounds.zw, float2(1.0, 1.0));
-    float2 uv = (position - bounds.xy) / size;
-    half4 lit = auroraExchange(uv, size.x / size.y, time, tint, intensity, flow);
-    return half4(lit.rgb * color.a, lit.a * color.a);   // capsule mask + AA
+    float2 p = position - bounds.xy;
+    half4 lit = auroraUnion(p, time, tint, intensity, flow, aOrigin, aSize, bOrigin, bSize);
+    return half4(lit.rgb * color.a, lit.a * color.a);
 }
 
-// Offscreen preview: renders the same core into a texture so the shader can
-// be seen (and regression-tested) without launching the app. One thread per
-// pixel; the capsule mask is computed analytically.
+// Offscreen preview: same core, synthetic hero geometry, PNG-able.
 kernel void previewGrid(texture2d<half, access::write> out [[texture(0)]],
                         constant float& time [[buffer(0)]],
                         constant float4& tintIn [[buffer(1)]],
                         uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= out.get_width() || gid.y >= out.get_height()) { return; }
     float2 size = float2(out.get_width(), out.get_height());
-    float2 uv = (float2(gid) + 0.5) / size;
-    float aspect = size.x / size.y;
-    float mask = 1.0 - smoothstep(-0.01, 0.01, capsuleEdgeDistance(float2(uv.x * aspect, uv.y), aspect));
+    float2 p = float2(gid) + 0.5;
+
+    // Synthetic hero at preview scale: "Public" pill just above the URL bar
+    // (gap ≈ the real hero's — close enough for the metaball weld to form).
+    float2 bSize = float2(size.x * 0.86, size.y * 0.30);
+    float2 aSize = float2(size.x * 0.28, size.y * 0.30);
+    float2 aOrigin = float2((size.x - aSize.x) * 0.5, size.y * 0.14);
+    float2 bOrigin = float2((size.x - bSize.x) * 0.5, aOrigin.y + aSize.y + size.y * 0.08);
+
     half4 tint = half4(half(tintIn.x), half(tintIn.y), half(tintIn.z), half(tintIn.w));
-    half4 lit = auroraExchange(uv, aspect, time, tint, 1.0, 1.0);
-    // Composite over a light glass-green proxy so the PNG resembles the pill.
-    half3 bg = half3(0.86h, 0.93h, 0.87h);
+    half4 lit = auroraUnion(p, time, tint, 1.0, 1.0, aOrigin, aSize, bOrigin, bSize);
+
+    // Show the union silhouette as pale glass so the PNG reads like the hero.
+    float dA = sdCapsuleRect(p, aOrigin, aSize);
+    float dB = sdCapsuleRect(p, bOrigin, bSize);
+    float d = smin(dA, dB, aSize.y * 0.55);
+    half glass = half(smoothstep(1.0, -1.0, d));
+    half3 bg = mix(half3(0.93h, 0.95h, 0.93h), half3(0.85h, 0.92h, 0.86h), glass);
     half3 rgb = bg * (1.0h - lit.a) + lit.rgb;
-    half3 outside = half3(0.93h, 0.95h, 0.93h);
-    out.write(half4(mix(outside, rgb, half(mask)), 1.0h), gid);
+    out.write(half4(rgb, 1.0h), gid);
 }
