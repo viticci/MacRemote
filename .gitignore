@@ -3,3 +3,5 @@
 dist/*
 !dist/.gitkeep
 tmp-*.png
+__pycache__/
+*.pyc
