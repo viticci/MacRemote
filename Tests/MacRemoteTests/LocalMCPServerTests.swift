@@ -2063,11 +2063,13 @@ private func resourceURL(base: URL, headers: [String: String], instanceID: Strin
     return "\(base.absoluteString)/mcp/\(instanceID)"
 }
 
-// MARK: - MCP Apps (SEP-1865) universal widget
+// MARK: - MCP Apps (SEP-1865) selective widget
 
-/// The universal widget: one ui:// resource covers the whole catalog, hosts
-/// without the extension keep the mandated text fallback untouched, and
-/// declared UI actions ride CallToolResult._meta with public tool names.
+/// The selective widget: one ui:// resource covers every widget-eligible
+/// tool (curated categories only — reminders + podcasts), uncurated tools
+/// return plain results for the host's native rendering, hosts without the
+/// extension keep the mandated text fallback untouched, and declared UI
+/// actions ride CallToolResult._meta with public tool names.
 struct MCPUISupportTests {
     private func makeUITestServer() -> (LocalMCPServer, OAuthCoordinator) {
         let coordinator = OAuthCoordinator()
@@ -2124,9 +2126,25 @@ struct MCPUISupportTests {
             outputByteLimit: 1024 * 1024,
             category: .podcasts
         )
+        // A category with no curated presentation hints: must NOT link the
+        // widget — the host renders its own native display instead.
+        let plainTool = ToolDefinition(
+            id: "test.plain",
+            name: "Plain Utility",
+            summary: "Return uncurated output.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{value}"],
+            parameters: [
+                ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024 * 1024,
+            category: .utilities
+        )
         let server = LocalMCPServer(
             instanceID: "test-instance",
-            tools: [listTool, mutatorTool, podcastsTool],
+            tools: [listTool, mutatorTool, podcastsTool, plainTool],
             authCoordinator: coordinator,
             toolExecutor: FakeToolExecutor()
         )
@@ -2163,13 +2181,49 @@ struct MCPUISupportTests {
         #expect((capabilities["resources"] as? [String: Any]) != nil)
 
         let tools = try await toolsList(base: base, accessToken: token)
+        // The widget attaches selectively: only categories with curated
+        // presentation hints (reminders, podcasts). Plain categories keep
+        // the host's native rendering.
+        let eligibleNames: Set<String> = ["test_reminders", "test_podcasts"]
+        var seenEligible = 0
         for tool in tools {
-            let meta = try #require(tool["_meta"] as? [String: Any], "every tool links the widget")
-            let ui = try #require(meta["ui"] as? [String: Any])
-            #expect(ui["resourceUri"] as? String == "ui://macremote/output")
-            // Deprecated flat form rides along for hosts that still read it.
-            #expect(meta["ui/resourceUri"] as? String == "ui://macremote/output")
+            let name = try #require(tool["name"] as? String)
+            if eligibleNames.contains(name) {
+                seenEligible += 1
+                let meta = try #require(tool["_meta"] as? [String: Any], "\(name) links the widget")
+                let ui = try #require(meta["ui"] as? [String: Any])
+                #expect(ui["resourceUri"] as? String == "ui://macremote/output")
+                // Deprecated flat form rides along for hosts that still read it.
+                #expect(meta["ui/resourceUri"] as? String == "ui://macremote/output")
+            } else {
+                #expect(tool["_meta"] == nil, "\(name) must not link the widget")
+            }
         }
+        #expect(seenEligible == 2)
+    }
+
+    @Test func plainCategoryToolResultCarriesNoWidgetMeta() async throws {
+        let (server, coordinator) = makeUITestServer()
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "test_plain", "arguments": ["value": "x"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        // Fallback content stays for every tool; only the widget linkage
+        // and render hints are withheld from uncurated categories.
+        #expect((result["content"] as? [[String: Any]])?.first?["type"] as? String == "text")
+        #expect((result["structuredContent"] as? [String: Any]) != nil)
+        #expect(result["_meta"] == nil, "uncurated categories return plain results")
     }
 
     @Test func widgetResourceReadsBackWithSandboxMeta() async throws {
@@ -2350,6 +2404,9 @@ struct MCPUIActionTargetingTests {
             timeoutSeconds: 2,
             outputByteLimit: 1024,
             origin: .userDefined,
+            // Real preset-derived PocketCTL tools carry .podcasts — required
+            // for widget eligibility now that the widget attaches selectively.
+            category: .podcasts,
             uiActions: [
                 ToolUIAction(
                     id: "play_next",

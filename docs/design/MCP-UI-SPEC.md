@@ -1,10 +1,26 @@
-# MacRemote MCP UI Spec — the Universal Widget
+# MacRemote MCP UI Spec — the Selective Widget
 
 MacRemote implements the **MCP Apps extension (SEP-1865, spec 2026-01-26)**
-with a single universal widget that renders every tool's result. One resource
-covers the whole catalog because every tool — process adapters, Fixed
-Commands, and both MCP bridge flavors — returns the same ten-field envelope
-through `LocalMCPServer.structuredContent(for:)`.
+with one shared widget that attaches **selectively**: only tools whose
+category has curated presentation hints link it — RemCTL reminders and
+PocketCTL podcasts today. Every other tool returns the plain
+text/structured result and the host renders its own native display.
+
+**Why selective (decision 2026-07-02, supersedes the original
+render-everything design):** for uncurated output the widget degrades to a
+raw JSON/terminal dump, which is strictly worse than claude.ai's native
+tool rendering (observed with the X/Twitter search tools). The widget only
+earns its place where MacRemote curates the presentation — columns, cards,
+artwork, actions. Eligibility is derived, not listed:
+`LocalMCPServer.widgetEligible(category:)` returns true exactly when the
+category has an accent or table hints, so adding a curated category
+automatically opts it in. Declared `uiActions` on ineligible tools stay
+inert data until their category earns hints (habitctl's check-off is
+currently dormant for this reason).
+
+One widget still covers every eligible tool because all tools — process
+adapters, Fixed Commands, and both MCP bridge flavors — return the same
+ten-field envelope through `LocalMCPServer.structuredContent(for:)`.
 
 Decision log for this feature lives here; the adversarially-verified research
 that led to it is `docs/research/MCP-UI-REPORT.md`.
@@ -17,16 +33,19 @@ that led to it is `docs/research/MCP-UI-REPORT.md`.
   (`connectDomains` empty — no fetch/XHR; `resourceDomains` allows exactly
   `https://static.pocketcasts.com` for podcast artwork), and a
   `clipboardWrite` permission request.
-- **Tool linkage**: every `tools/list` entry carries
+- **Tool linkage**: `tools/list` entries for widget-eligible tools (see
+  above — reminders + podcasts categories) carry
   `"_meta": {"ui": {"resourceUri": "ui://macremote/output"}}` (SEP-1865
-  nested form). Hosts without the extension ignore `_meta` entirely.
+  nested form). All other tools carry no `_meta` at all. Hosts without the
+  extension ignore `_meta` entirely.
 - **Fallback is sacred**: `content[0].text` (the serialized envelope) and
   `structuredContent` are unchanged. Claude Code, Raycast, and every
   non-rendering client see exactly what they saw before this feature.
-- **Result hints**: `CallToolResult._meta["net.viticci.macremote/ui"]`
-  carries `{version, toolTitle, toolName (public), capability, category,
-  actions?}`. Internal tool ids never leave the server — action targets are
-  translated to public MCP names.
+- **Result hints**: for widget-eligible tools only,
+  `CallToolResult._meta["net.viticci.macremote/ui"]` carries `{version,
+  toolTitle, toolName (public), capability, category, actions?}`. Internal
+  tool ids never leave the server — action targets are translated to public
+  MCP names. Ineligible tools return results with no `_meta`.
 - **Payload cap**: envelope `stdout` is capped at 100k characters and
   `stderr` at 16k (`mcpStdoutCharacterLimit` / `mcpStderrCharacterLimit`)
   with truncation flags set, keeping every result far below the ~150k cliff
@@ -206,7 +225,8 @@ initiates:
 
 ## Host compatibility
 
-Renders on claude.ai web / Claude Desktop / Claude iOS (custom remote
-connectors), ChatGPT, VS Code, Goose, MCPJam et al. Claude Code ignores
-`_meta.ui` by design and keeps the text fallback. Debug flaky rendering with
-MCPJam before blaming a host.
+Eligible tools render on claude.ai web / Claude Desktop / Claude iOS
+(custom remote connectors), ChatGPT, VS Code, Goose, MCPJam et al. Claude
+Code ignores `_meta.ui` by design and keeps the text fallback. Ineligible
+tools render with each host's native tool display everywhere. Debug flaky
+rendering with MCPJam before blaming a host.

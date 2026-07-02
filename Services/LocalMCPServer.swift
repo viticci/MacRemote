@@ -842,11 +842,14 @@ final class LocalMCPServer: @unchecked Sendable {
         return String(decoding: data, as: UTF8.self)
     }
 
-    // MARK: - MCP Apps (SEP-1865) universal widget
+    // MARK: - MCP Apps (SEP-1865) selective widget
 
-    /// One adaptive widget renders every tool's uniform result envelope, so a
-    /// single resource covers the whole catalog. Hosts without the extension
-    /// ignore `_meta` and keep the mandated text fallback.
+    /// One adaptive widget renders the uniform result envelope for every
+    /// widget-eligible tool (see `widgetEligible(category:)` — categories
+    /// with curated presentation only), so a single resource covers all of
+    /// them. Ineligible tools return plain results and hosts render their
+    /// native display. Hosts without the extension ignore `_meta` and keep
+    /// the mandated text fallback.
     static let widgetResourceURI = "ui://macremote/output"
     static let widgetMIMEType = "text/html;profile=mcp-app"
     /// The `_meta` key on tools that links them to the widget (SEP-1865
@@ -914,11 +917,22 @@ final class LocalMCPServer: @unchecked Sendable {
         ])
     }
 
+    /// The widget attaches selectively, not universally: only tools whose
+    /// category has curated presentation hints (accent + table/card
+    /// curation) opt into MCP UI — RemCTL reminders and PocketCTL podcasts
+    /// today. Everything else returns the plain text/structured result so
+    /// hosts render their own native display, which beats a generic JSON
+    /// dump in the widget. Declared `uiActions` on ineligible tools are
+    /// inert data until their category earns hints.
+    static func widgetEligible(category: ToolCategory) -> Bool {
+        widgetAccent(for: category) != nil || widgetTableHints(for: category) != nil
+    }
+
     /// Render hints attached to CallToolResult._meta: declared actions with
     /// tool ids translated to public MCP names (the widget calls tools by
     /// public name through the host — same connection, same gating).
     private func resultUIMeta(for tool: ToolDefinition, tools: [ToolDefinition]) -> [String: Any]? {
-        guard widgetAvailable else { return nil }
+        guard widgetAvailable, Self.widgetEligible(category: tool.category) else { return nil }
         let publicNames = MCPToolNameMapper.publicNames(for: tools)
         var payload: [String: Any] = [
             "version": 1,
@@ -1050,7 +1064,7 @@ final class LocalMCPServer: @unchecked Sendable {
             "outputSchema": outputSchema(),
             "annotations": annotations(for: tool)
         ]
-        if widgetAvailable {
+        if widgetAvailable, Self.widgetEligible(category: tool.category) {
             // Both forms, like the official Apps SDK: the nested form is
             // normative, the flat form is the pre-GA key some hosts still
             // read. Belt and braces until the ecosystem settles.

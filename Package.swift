@@ -73,8 +73,9 @@ let package = Package(
             ],
             resources: [
                 .copy("Shaders/default.metallib"),
-                // Universal MCP Apps widget: one adaptive HTML document
-                // rendering every tool's result envelope (SEP-1865).
+                // MCP Apps widget (SEP-1865): one adaptive HTML document,
+                // linked selectively by curated categories (see
+                // docs/design/MCP-UI-SPEC.md).
                 .copy("Widget/MacRemoteWidget.html")
             ]
         ),

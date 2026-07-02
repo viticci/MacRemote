@@ -1,6 +1,8 @@
 # MCP UI mode for MacRemote
 
-**Research report — 2026-07-02.** All load-bearing claims below were adversarially verified against primary sources (spec text, Anthropic docs, GitHub issues, and the MacRemote repo itself); see the appendix.
+**Research report — 2026-07-02.** *Superseded in part, later the same day: the "bind the widget to every tool" recommendation shipped, then real use showed uncurated output (e.g. X/Twitter tool JSON) renders worse in the widget than in claude.ai's native display. The widget now attaches selectively — only categories with curated presentation (RemCTL reminders, PocketCTL podcasts). See docs/design/MCP-UI-SPEC.md for the current policy; the protocol research below remains accurate.*
+
+**Original framing:** All load-bearing claims below were adversarially verified against primary sources (spec text, Anthropic docs, GitHub issues, and the MacRemote repo itself); see the appendix.
 
 ---
 
