@@ -38,12 +38,31 @@ struct OAuthClientAuthenticationPolicy: Equatable, Sendable {
         )
     }
 
+    /// DCR/public clients allowed AND any explicitly-generated confidential
+    /// credentials honored — so a client that dynamically registers (Claude,
+    /// Raycast auto-flow) and a client handed a generated client_id/secret
+    /// (Raycast manual, generic) both authorize against the same endpoint.
+    static func dynamicPublicClients(honoring credentials: [OAuthConfidentialClientCredentials]) -> OAuthClientAuthenticationPolicy {
+        OAuthClientAuthenticationPolicy(
+            requiresConfidentialClient: false,
+            confidentialClients: credentials
+        )
+    }
+
     var supportsDynamicClientRegistration: Bool {
         !requiresConfidentialClient
     }
 
     var tokenEndpointAuthMethodsSupported: [String] {
-        requiresConfidentialClient ? ["client_secret_basic", "client_secret_post"] : ["none"]
+        if requiresConfidentialClient {
+            return ["client_secret_basic", "client_secret_post"]
+        }
+        if confidentialClients.isEmpty {
+            return ["none"]
+        }
+        // Dynamic public clients ("none") coexist with explicitly-generated
+        // secret-authenticated clients, so advertise both.
+        return ["none", "client_secret_basic", "client_secret_post"]
     }
 }
 

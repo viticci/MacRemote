@@ -1146,6 +1146,67 @@ struct OAuthCoordinatorTests {
         let reregisteredClientID = try #require(reregistered["client_id"] as? String)
         #expect(reregisteredClientID != first.clientID)
     }
+
+    @Test func generatedCredentialAuthorizesInNonSecretMode() throws {
+        // Raycast bug reproduction: a generated macremote-oauth-* credential
+        // used while the connector runs a non-secret (service-token-headers)
+        // access mode must authorize. Before the fix the policy dropped these
+        // credentials, so /authorize threw "Unknown client_id."
+        let defaults = try isolatedOAuthDefaults()
+        let coordinator = OAuthCoordinator(grantStore: OAuthGrantStore(userDefaults: defaults))
+        let issuer = "https://macremote.viticci.net"
+        let resource = "\(issuer)/mcp/abc123"
+        let clientID = "macremote-oauth-Zt7k2p9WqfLmN3xR8sVb"
+        let clientSecret = "generated-secret-abcdefghijklmnopqrstuvwxyz0123456789"
+        let redirectURI = "https://raycast.com/redirect/extension"
+        let verifier = "raycast-verifier-0123456789abcdef"
+
+        coordinator.updateClientAuthentication(
+            .dynamicPublicClients(honoring: [
+                OAuthConfidentialClientCredentials(clientID: clientID, clientSecret: clientSecret)
+            ])
+        )
+
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": redirectURI,
+                "scope": "mcp:tools",
+                "state": "raycast-state",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+        #expect(coordinator.approve(requestID: requestID))
+        let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "client_secret": clientSecret,
+            "redirect_uri": redirectURI,
+            "code": code,
+            "code_verifier": verifier,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        #expect((token["access_token"] as? String) != nil)
+    }
+
+    @Test func nonSecretPolicyHonorsCredentialsAndAdvertisesBothAuthMethods() {
+        let creds = [OAuthConfidentialClientCredentials(clientID: "macremote-oauth-x", clientSecret: "y")]
+        let hybrid = OAuthClientAuthenticationPolicy.dynamicPublicClients(honoring: creds)
+        #expect(hybrid.supportsDynamicClientRegistration)   // DCR still works
+        #expect(hybrid.confidentialClients.count == 1)      // generated creds honored
+        #expect(hybrid.tokenEndpointAuthMethodsSupported.contains("none"))
+        #expect(hybrid.tokenEndpointAuthMethodsSupported.contains("client_secret_post"))
+
+        let bare = OAuthClientAuthenticationPolicy.dynamicPublicClients(honoring: [])
+        #expect(bare.tokenEndpointAuthMethodsSupported == ["none"])
+    }
 }
 
 private func isolatedOAuthDefaults(

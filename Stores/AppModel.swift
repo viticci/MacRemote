@@ -1859,17 +1859,20 @@ final class AppModel {
     }
 
     private var currentOAuthClientAuthenticationPolicy: OAuthClientAuthenticationPolicy {
-        guard cloudflareDraft.accessMode.requiresOAuthClientSecret else {
-            return .dynamicPublicClients
+        let confidential = oauthClientCredentials.map {
+            OAuthConfidentialClientCredentials(
+                clientID: $0.clientID,
+                clientSecret: $0.clientSecret
+            )
         }
-        return .confidentialClientsRequired(
-            oauthClientCredentials.map {
-                OAuthConfidentialClientCredentials(
-                    clientID: $0.clientID,
-                    clientSecret: $0.clientSecret
-                )
-            }
-        )
+        guard cloudflareDraft.accessMode.requiresOAuthClientSecret else {
+            // Non-secret modes (Raycast service-token headers, generic) still
+            // register any generated credential so a pasted client_id
+            // authorizes — previously these creds were silently dropped,
+            // producing "Unknown client_id" at /authorize.
+            return .dynamicPublicClients(honoring: confidential)
+        }
+        return .confidentialClientsRequired(confidential)
     }
 
     var toolExposureSummary: ToolExposureSummary {
