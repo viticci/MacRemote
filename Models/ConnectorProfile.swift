@@ -29,10 +29,10 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
 
     var systemImage: String {
         switch self {
-        case .oauthClientSecret: "lock.badge.clock"
+        case .oauthClientSecret: "key.fill"
         case .macRemoteOAuthOnly: "person.badge.key"
         case .serviceTokenHeaders: "key.horizontal"
-        case .serviceTokenAuthorizationHeader: "key.viewfinder"
+        case .serviceTokenAuthorizationHeader: "key.card"
         }
     }
 
@@ -59,9 +59,9 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
     var detail: String {
         switch self {
         case .oauthClientSecret:
-            "MacRemote OAuth requires the generated client ID and secret, plus PKCE and host approval."
+            "MacRemote's own sign-in with the generated client ID and secret. New apps still need your approval to connect."
         case .macRemoteOAuthOnly:
-            "Compatibility mode for public dynamic OAuth clients. Use only when a client cannot send OAuth client credentials."
+            "Compatibility mode for apps that can't send a client ID and secret."
         case .serviceTokenHeaders:
             "Cloudflare Access service-token headers plus MacRemote OAuth."
         case .serviceTokenAuthorizationHeader:
@@ -128,7 +128,7 @@ enum ConnectorProviderProfile: String, CaseIterable, Identifiable, Sendable {
 
     var systemImage: String {
         switch self {
-        case .raycast: "sparkles"
+        case .raycast: "rays"
         case .claude: "bubble.left.and.bubble.right"
         case .notion: "square.grid.2x2"
         case .generic: "network"
@@ -196,12 +196,12 @@ enum ConnectorProviderProfile: String, CaseIterable, Identifiable, Sendable {
             case .notion:
                 "Paste MacRemote's OAuth client ID and secret into Notion."
             case .generic:
-                "Start with confidential OAuth; add Access only if the client sends headers."
+                "Start with OAuth Client Secret; add Access only if the app sends headers."
             }
         case .works:
-            "This works if the client sends the selected Access credential."
+            "Works if the app sends the selected Access credential."
         case .limited:
-            "Only works if the client can send this header and still complete OAuth."
+            "Works only if the app can send this header and still finish signing in."
         case .blocked:
             "Use \(recommendedAccessMode.title) for \(title)."
         }

@@ -1,8 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class BrrrServiceTests: XCTestCase {
-    func testJSONBodyUsesBrrrPayloadFields() throws {
+struct BrrrServiceTests {
+    @Test func jsonBodyUsesBrrrPayloadFields() throws {
         let body = try BrrrService.jsonBody(
             for: BrrrMessage(
                 title: "MacRemote",
@@ -10,15 +11,15 @@ final class BrrrServiceTests: XCTestCase {
                 threadID: "macremote-tunnel"
             )
         )
-        let text = try XCTUnwrap(String(data: body, encoding: .utf8))
+        let text = try #require(String(data: body, encoding: .utf8))
 
-        XCTAssertEqual(
-            text,
+        #expect(
+            text ==
             #"{"message":"Tunnel stopped","thread_id":"macremote-tunnel","title":"MacRemote"}"#
         )
     }
 
-    func testSendPostsToBrrrAPIWithAuthorizationHeader() async throws {
+    @Test func sendPostsToBrrrAPIWithAuthorizationHeader() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [BrrrURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -30,32 +31,30 @@ final class BrrrServiceTests: XCTestCase {
             using: BrrrSettings(isEnabled: true, webhookSecret: " br_usr_secret ")
         )
 
-        XCTAssertEqual(BrrrURLProtocolMock.requestPath(), "/v1/send")
-        XCTAssertEqual(BrrrURLProtocolMock.requestMethod(), "POST")
-        XCTAssertEqual(BrrrURLProtocolMock.requestHeader("Authorization"), "Bearer br_usr_secret")
-        XCTAssertEqual(BrrrURLProtocolMock.requestHeader("Content-Type"), "application/json; charset=utf-8")
-        XCTAssertEqual(BrrrURLProtocolMock.requestHeader("User-Agent"), "MacRemote/1.0")
-        XCTAssertEqual(
-            BrrrURLProtocolMock.requestBody(),
+        #expect(BrrrURLProtocolMock.requestPath() == "/v1/send")
+        #expect(BrrrURLProtocolMock.requestMethod() == "POST")
+        #expect(BrrrURLProtocolMock.requestHeader("Authorization") == "Bearer br_usr_secret")
+        #expect(BrrrURLProtocolMock.requestHeader("Content-Type") == "application/json; charset=utf-8")
+        #expect(BrrrURLProtocolMock.requestHeader("User-Agent") == "MacRemote/1.0")
+        #expect(
+            BrrrURLProtocolMock.requestBody() ==
             #"{"message":"Approval needed","thread_id":"macremote-approval","title":"MacRemote"}"#
         )
     }
 
-    func testSendRequiresConfiguredSettings() async {
+    @Test func sendRequiresConfiguredSettings() async {
         let service = BrrrService()
 
-        await XCTAssertThrowsErrorAsync(
+        await #expect(throws: BrrrServiceError.missingCredentials) {
             try await service.send(
                 BrrrMessage(title: "MacRemote", message: "Approval needed"),
                 using: BrrrSettings(isEnabled: true, webhookSecret: "")
             )
-        ) { error in
-            XCTAssertEqual(error as? BrrrServiceError, .missingCredentials)
         }
     }
 
     @MainActor
-    func testAppModelPersistsBrrrSettings() throws {
+    @Test func appModelPersistsBrrrSettings() throws {
         let defaults = try makeBrrrIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: brrrDefaultsSuiteName(defaults)) }
 
@@ -66,8 +65,8 @@ final class BrrrServiceTests: XCTestCase {
         )
 
         let reloaded = try makeBrrrAppModel(userDefaults: defaults)
-        XCTAssertEqual(
-            reloaded.brrrSettings,
+        #expect(
+            reloaded.brrrSettings ==
             BrrrSettings(isEnabled: true, webhookSecret: "br_usr_secret")
         )
     }
@@ -78,12 +77,11 @@ private struct NoopBrrrSender: BrrrSending {
 }
 
 private func makeBrrrIsolatedDefaults(
-    file: StaticString = #filePath,
-    line: UInt = #line
+    sourceLocation: SourceLocation = #_sourceLocation
 ) throws -> UserDefaults {
     let suiteName = "MacRemoteBrrrTests.\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suiteName) else {
-        XCTFail("Could not create isolated UserDefaults suite.", file: file, line: line)
+        Issue.record("Could not create isolated UserDefaults suite.", sourceLocation: sourceLocation)
         throw NSError(domain: "MacRemoteBrrrTests", code: 1)
     }
     defaults.set(suiteName, forKey: "MacRemoteBrrrTests.suiteName")
@@ -104,20 +102,6 @@ private func makeBrrrAppModel(userDefaults: UserDefaults) throws -> AppModel {
 
 private func brrrDefaultsSuiteName(_ defaults: UserDefaults) -> String {
     defaults.string(forKey: "MacRemoteBrrrTests.suiteName") ?? ""
-}
-
-private func XCTAssertThrowsErrorAsync<T>(
-    _ expression: @autoclosure () async throws -> T,
-    _ errorHandler: (Error) -> Void,
-    file: StaticString = #filePath,
-    line: UInt = #line
-) async {
-    do {
-        _ = try await expression()
-        XCTFail("Expected async expression to throw.", file: file, line: line)
-    } catch {
-        errorHandler(error)
-    }
 }
 
 private final class BrrrURLProtocolMock: URLProtocol, @unchecked Sendable {

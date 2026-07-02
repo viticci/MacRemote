@@ -1,8 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class ProcessRunnerTests: XCTestCase {
-    func testRunnerExecutesWithoutShell() async throws {
+struct ProcessRunnerTests {
+    @Test func runnerExecutesWithoutShell() async throws {
         let runner = ProcessRunner()
         let result = try await runner.run(
             executablePath: "/bin/echo",
@@ -11,13 +12,13 @@ final class ProcessRunnerTests: XCTestCase {
             outputByteLimit: 1024
         )
 
-        XCTAssertTrue(result.succeeded)
-        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "hello")
-        XCTAssertEqual(result.arguments, ["hello"])
-        XCTAssertEqual(result.executablePath, "/bin/echo")
+        #expect(result.succeeded)
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "hello")
+        #expect(result.arguments == ["hello"])
+        #expect(result.executablePath == "/bin/echo")
     }
 
-    func testRunnerAppliesExplicitEnvironment() async throws {
+    @Test func runnerAppliesExplicitEnvironment() async throws {
         let runner = ProcessRunner()
         let result = try await runner.run(
             executablePath: "/usr/bin/env",
@@ -27,13 +28,13 @@ final class ProcessRunnerTests: XCTestCase {
             environment: ["MACREMOTE_TEST_ENV": "present"]
         )
 
-        XCTAssertTrue(result.succeeded)
-        XCTAssertTrue(result.stdout.contains("MACREMOTE_TEST_ENV=present"))
-        XCTAssertFalse(result.stdout.contains("PATH="))
-        XCTAssertFalse(result.stdout.contains("ANTHROPIC_API_KEY="))
+        #expect(result.succeeded)
+        #expect(result.stdout.contains("MACREMOTE_TEST_ENV=present"))
+        #expect(result.stdout.contains("PATH=") == false)
+        #expect(result.stdout.contains("ANTHROPIC_API_KEY=") == false)
     }
 
-    func testRunnerWritesStandardInput() async throws {
+    @Test func runnerWritesStandardInput() async throws {
         let runner = ProcessRunner()
         let result = try await runner.run(
             executablePath: "/bin/cat",
@@ -43,7 +44,7 @@ final class ProcessRunnerTests: XCTestCase {
             standardInput: "hello stdin"
         )
 
-        XCTAssertTrue(result.succeeded)
-        XCTAssertEqual(result.stdout, "hello stdin")
+        #expect(result.succeeded)
+        #expect(result.stdout == "hello stdin")
     }
 }

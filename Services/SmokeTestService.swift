@@ -125,11 +125,11 @@ struct SmokeTestService: Sendable {
             if let marker = firstMatchingLine(in: result.stdout, prefixes: successPrefixes(for: mode)) {
                 return marker
             }
-            return "\(mode.title) completed successfully."
+            return "\(mode.displayTitle) completed successfully."
         }
 
         if result.timedOut {
-            return "\(mode.title) timed out after \(result.duration.formattedDuration)."
+            return "\(mode.displayTitle) timed out after \(result.duration.formattedDuration)."
         }
 
         if let stderr = firstMeaningfulLine(in: result.stderr) {
@@ -140,7 +140,7 @@ struct SmokeTestService: Sendable {
             return stdout
         }
 
-        return "\(mode.title) exited \(result.exitCode)."
+        return "\(mode.displayTitle) exited \(result.exitCode)."
     }
 
     static func proofMarkers(for result: CommandRunResult) -> [String] {

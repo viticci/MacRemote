@@ -4,7 +4,15 @@ set -euo pipefail
 MODE="${1:-run}"
 APP_NAME="MacRemote"
 BUNDLE_ID="com.macstories.MacRemote"
-MIN_SYSTEM_VERSION="14.0"
+MIN_SYSTEM_VERSION="26.0"
+
+# The default (27.0) CLT SDK cannot build this package (missing SwiftUIMacros
+# plugin — see docs/design/DESIGN-SPEC.md §8.1). Pin the 26.5 SDK when present,
+# unless the caller already chose one.
+PINNED_SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
+if [[ -z "${SDKROOT:-}" && -d "$PINNED_SDK" ]]; then
+  export SDKROOT="$PINNED_SDK"
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -122,9 +130,25 @@ else
   echo "Signed $APP_BUNDLE with stable local requirement: $STABLE_ADHOC_REQUIREMENT" >&2
 fi
 
+# The user-facing install lives in /Applications (what Spotlight/Dock resolve
+# and what TCC/Full Disk Access grants are keyed to). dist/ is only the build
+# product — installing over the same path preserves the permission grants.
+# A stale copy in ~/Applications splits TCC grants across two bundles, so
+# remove it if present.
+INSTALL_BUNDLE="/Applications/$APP_NAME.app"
+
+install_app() {
+  rm -rf "$HOME/Applications/$APP_NAME.app"
+  /usr/bin/ditto --rsrc "$APP_BUNDLE" "$INSTALL_BUNDLE.new"
+  rm -rf "$INSTALL_BUNDLE"
+  mv "$INSTALL_BUNDLE.new" "$INSTALL_BUNDLE"
+  echo "Installed $INSTALL_BUNDLE" >&2
+}
+
 open_app() {
+  install_app
   pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-  /usr/bin/open -n "$APP_BUNDLE"
+  /usr/bin/open -n "$INSTALL_BUNDLE"
 }
 
 case "$MODE" in

@@ -1,23 +1,24 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class PushoverServiceTests: XCTestCase {
-    func testFormBodyEscapesFields() throws {
+struct PushoverServiceTests {
+    @Test func formBodyEscapesFields() throws {
         let body = PushoverService.formBody([
             "token": "api token",
             "user": "user+key",
             "title": "MacRemote",
             "message": "Tunnel down & needs restart"
         ])
-        let text = try XCTUnwrap(String(data: body, encoding: .utf8))
+        let text = try #require(String(data: body, encoding: .utf8))
 
-        XCTAssertEqual(
-            text,
+        #expect(
+            text ==
             "message=Tunnel%20down%20%26%20needs%20restart&title=MacRemote&token=api%20token&user=user%2Bkey"
         )
     }
 
-    func testSendPostsToPushoverAPI() async throws {
+    @Test func sendPostsToPushoverAPI() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PushoverURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -32,33 +33,31 @@ final class PushoverServiceTests: XCTestCase {
             using: PushoverSettings(isEnabled: true, userKey: " user-key ", apiToken: " api-token ")
         )
 
-        XCTAssertEqual(PushoverURLProtocolMock.requestPath(), "/1/messages.json")
-        XCTAssertEqual(PushoverURLProtocolMock.requestMethod(), "POST")
-        XCTAssertEqual(
-            PushoverURLProtocolMock.requestHeader("Content-Type"),
+        #expect(PushoverURLProtocolMock.requestPath() == "/1/messages.json")
+        #expect(PushoverURLProtocolMock.requestMethod() == "POST")
+        #expect(
+            PushoverURLProtocolMock.requestHeader("Content-Type") ==
             "application/x-www-form-urlencoded; charset=utf-8"
         )
-        XCTAssertEqual(
-            PushoverURLProtocolMock.requestBody(),
+        #expect(
+            PushoverURLProtocolMock.requestBody() ==
             "message=Approval%20needed&title=MacRemote&token=api-token&user=user-key"
         )
     }
 
-    func testSendRequiresConfiguredSettings() async {
+    @Test func sendRequiresConfiguredSettings() async {
         let service = PushoverService()
 
-        await XCTAssertThrowsErrorAsync(
+        await #expect(throws: PushoverServiceError.missingCredentials) {
             try await service.send(
                 PushoverMessage(title: "MacRemote", message: "Approval needed"),
                 using: PushoverSettings(isEnabled: true, userKey: "", apiToken: "api-token")
             )
-        ) { error in
-            XCTAssertEqual(error as? PushoverServiceError, .missingCredentials)
         }
     }
 
     @MainActor
-    func testAppModelPersistsPushoverSettings() throws {
+    @Test func appModelPersistsPushoverSettings() throws {
         let defaults = try makePushoverIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: pushoverDefaultsSuiteName(defaults)) }
 
@@ -70,8 +69,8 @@ final class PushoverServiceTests: XCTestCase {
         )
 
         let reloaded = try makePushoverAppModel(userDefaults: defaults)
-        XCTAssertEqual(
-            reloaded.pushoverSettings,
+        #expect(
+            reloaded.pushoverSettings ==
             PushoverSettings(isEnabled: true, userKey: "user-key", apiToken: "api-token")
         )
     }
@@ -82,12 +81,11 @@ private struct NoopPushoverSender: PushoverSending {
 }
 
 private func makePushoverIsolatedDefaults(
-    file: StaticString = #filePath,
-    line: UInt = #line
+    sourceLocation: SourceLocation = #_sourceLocation
 ) throws -> UserDefaults {
     let suiteName = "MacRemotePushoverTests.\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suiteName) else {
-        XCTFail("Could not create isolated UserDefaults suite.", file: file, line: line)
+        Issue.record("Could not create isolated UserDefaults suite.", sourceLocation: sourceLocation)
         throw NSError(domain: "MacRemotePushoverTests", code: 1)
     }
     defaults.set(suiteName, forKey: "MacRemotePushoverTests.suiteName")
@@ -108,20 +106,6 @@ private func makePushoverAppModel(userDefaults: UserDefaults) throws -> AppModel
 
 private func pushoverDefaultsSuiteName(_ defaults: UserDefaults) -> String {
     defaults.string(forKey: "MacRemotePushoverTests.suiteName") ?? ""
-}
-
-private func XCTAssertThrowsErrorAsync<T>(
-    _ expression: @autoclosure () async throws -> T,
-    _ errorHandler: (Error) -> Void,
-    file: StaticString = #filePath,
-    line: UInt = #line
-) async {
-    do {
-        _ = try await expression()
-        XCTFail("Expected async expression to throw.", file: file, line: line)
-    } catch {
-        errorHandler(error)
-    }
 }
 
 private final class PushoverURLProtocolMock: URLProtocol, @unchecked Sendable {

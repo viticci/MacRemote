@@ -1,42 +1,43 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class SmokeTestServiceTests: XCTestCase {
-    func testPreflightArgumentsUseDirectScriptFlag() {
-        XCTAssertEqual(SmokeTestService.arguments(for: .preflight), ["--mcp-preflight-only"])
+struct SmokeTestServiceTests {
+    @Test func preflightArgumentsUseDirectScriptFlag() {
+        #expect(SmokeTestService.arguments(for: .preflight) == ["--mcp-preflight-only"])
     }
 
-    func testAnthropicArgumentsDoNotRequireShellExpansion() {
-        XCTAssertEqual(SmokeTestService.arguments(for: .anthropicAPI), [])
+    @Test func anthropicArgumentsDoNotRequireShellExpansion() {
+        #expect(SmokeTestService.arguments(for: .anthropicAPI) == [])
     }
 
-    func testPreflightCopyCommandUsesMCPURLOnly() throws {
-        let url = try XCTUnwrap(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
+    @Test func preflightCopyCommandUsesMCPURLOnly() throws {
+        let url = try #require(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
         let command = SmokeTestService.copyCommand(for: .preflight, mcpURL: url)
 
-        XCTAssertTrue(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
-        XCTAssertTrue(command.contains("--mcp-preflight-only"))
-        XCTAssertFalse(command.contains("ANTHROPIC_API_KEY"))
+        #expect(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
+        #expect(command.contains("--mcp-preflight-only"))
+        #expect(command.contains("ANTHROPIC_API_KEY") == false)
     }
 
-    func testAnthropicCopyCommandUsesPlaceholderWithoutLiteralSecret() throws {
-        let url = try XCTUnwrap(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
+    @Test func anthropicCopyCommandUsesPlaceholderWithoutLiteralSecret() throws {
+        let url = try #require(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
         let command = SmokeTestService.copyCommand(for: .anthropicAPI, mcpURL: url)
 
-        XCTAssertTrue(command.contains("ANTHROPIC_API_KEY=\"<key>\""))
-        XCTAssertTrue(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
-        XCTAssertFalse(command.contains("--mcp-preflight-only"))
+        #expect(command.contains("ANTHROPIC_API_KEY=\"<key>\""))
+        #expect(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
+        #expect(command.contains("--mcp-preflight-only") == false)
     }
 
-    func testCopyCommandCanTargetCustomSmokeTool() throws {
-        let url = try XCTUnwrap(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
+    @Test func copyCommandCanTargetCustomSmokeTool() throws {
+        let url = try #require(URL(string: "https://example.trycloudflare.com/mcp/abc123"))
         let command = SmokeTestService.copyCommand(for: .preflight, mcpURL: url, toolID: "custom.pocketctl")
 
-        XCTAssertTrue(command.contains("MACREMOTE_SMOKE_TOOL=\"custom.pocketctl\""))
-        XCTAssertTrue(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
+        #expect(command.contains("MACREMOTE_SMOKE_TOOL=\"custom.pocketctl\""))
+        #expect(command.contains("MACREMOTE_MCP_URL=\"https://example.trycloudflare.com/mcp/abc123\""))
     }
 
-    func testSummaryPrefersSuccessMarker() {
+    @Test func summaryPrefersSuccessMarker() {
         let result = CommandRunResult(
             executablePath: SmokeTestService.scriptPath,
             arguments: [],
@@ -49,10 +50,10 @@ final class SmokeTestServiceTests: XCTestCase {
             truncatedStderr: false
         )
 
-        XCTAssertEqual(SmokeTestService.summary(for: result, mode: .anthropicAPI), "smoke_test=passed")
+        #expect(SmokeTestService.summary(for: result, mode: .anthropicAPI) == "smoke_test=passed")
     }
 
-    func testSummaryDoesNotUseStdoutWhenStderrExplainsFailure() {
+    @Test func summaryDoesNotUseStdoutWhenStderrExplainsFailure() {
         let result = CommandRunResult(
             executablePath: SmokeTestService.scriptPath,
             arguments: [],
@@ -65,13 +66,13 @@ final class SmokeTestServiceTests: XCTestCase {
             truncatedStderr: false
         )
 
-        XCTAssertEqual(
-            SmokeTestService.summary(for: result, mode: .preflight),
+        #expect(
+            SmokeTestService.summary(for: result, mode: .preflight) ==
             "Missing --mcp-url or MACREMOTE_MCP_URL."
         )
     }
 
-    func testProofMarkersKeepOnlyRedactedStatusLines() {
+    @Test func proofMarkersKeepOnlyRedactedStatusLines() {
         let result = CommandRunResult(
             executablePath: SmokeTestService.scriptPath,
             arguments: [],
@@ -91,8 +92,8 @@ final class SmokeTestServiceTests: XCTestCase {
             truncatedStderr: false
         )
 
-        XCTAssertEqual(
-            SmokeTestService.proofMarkers(for: result),
+        #expect(
+            SmokeTestService.proofMarkers(for: result) ==
             [
                 "oauth_status=approved",
                 "mcp_url=https://example.trycloudflare.com/mcp/ab...",
@@ -103,8 +104,8 @@ final class SmokeTestServiceTests: XCTestCase {
         )
     }
 
-    func testProofRecordClipboardTextIsRedactedAndUseful() throws {
-        let date = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-06-24T00:00:00Z"))
+    @Test func proofRecordClipboardTextIsRedactedAndUseful() throws {
+        let date = try #require(ISO8601DateFormatter().date(from: "2026-06-24T00:00:00Z"))
         let record = SmokeProofRecord(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
             date: date,
@@ -120,11 +121,11 @@ final class SmokeTestServiceTests: XCTestCase {
 
         let text = record.clipboardText
 
-        XCTAssertTrue(text.contains("MacRemote Remote MCP Proof"))
-        XCTAssertTrue(text.contains("Mode: Anthropic API Smoke"))
-        XCTAssertTrue(text.contains("Status: Passed"))
-        XCTAssertTrue(text.contains("smoke_test=passed"))
-        XCTAssertFalse(text.localizedCaseInsensitiveContains("anthropic_api_key"))
-        XCTAssertFalse(text.localizedCaseInsensitiveContains("access_token"))
+        #expect(text.contains("MacRemote Remote MCP Proof"))
+        #expect(text.contains("Mode: Anthropic API Smoke"))
+        #expect(text.contains("Status: Passed"))
+        #expect(text.contains("smoke_test=passed"))
+        #expect(text.localizedCaseInsensitiveContains("anthropic_api_key") == false)
+        #expect(text.localizedCaseInsensitiveContains("access_token") == false)
     }
 }

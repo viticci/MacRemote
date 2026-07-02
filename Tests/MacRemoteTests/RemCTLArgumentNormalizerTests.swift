@@ -1,8 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class RemCTLArgumentNormalizerTests: XCTestCase {
-    func testResolvesReminderDeepLinkUUIDToNumericID() async throws {
+struct RemCTLArgumentNormalizerTests {
+    @Test func resolvesReminderDeepLinkUUIDToNumericID() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: [
@@ -13,17 +14,17 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
                 "--json"
             ]
         ) { uuid in
-            XCTAssertEqual(uuid, "4A0782C7-06B0-494A-B0BA-F399A270BCD4")
+            #expect(uuid == "4A0782C7-06B0-494A-B0BA-F399A270BCD4")
             return 23829
         }
 
-        XCTAssertEqual(
-            normalized,
+        #expect(
+            normalized ==
             ["edit", "23829", "-d", "2026-06-24T18:30:00", "--json"]
         )
     }
 
-    func testResolvesBareReminderUUIDToNumericID() async throws {
+    @Test func resolvesBareReminderUUIDToNumericID() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: [
@@ -35,13 +36,13 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
             ]
         ) { _ in 23829 }
 
-        XCTAssertEqual(
-            normalized,
+        #expect(
+            normalized ==
             ["edit", "23829", "-d", "2026-06-24T18:30:00", "--json"]
         )
     }
 
-    func testStripsPrivateForNormalDueAndAlarmEdits() async throws {
+    @Test func stripsPrivateForNormalDueAndAlarmEdits() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: [
@@ -56,8 +57,8 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
             ]
         ) { _ in nil }
 
-        XCTAssertEqual(
-            normalized,
+        #expect(
+            normalized ==
             [
                 "edit",
                 "23829",
@@ -70,7 +71,7 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
         )
     }
 
-    func testStripsPrivateForNormalAddFields() async throws {
+    @Test func stripsPrivateForNormalAddFields() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: [
@@ -87,8 +88,8 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
             ]
         ) { _ in nil }
 
-        XCTAssertEqual(
-            normalized,
+        #expect(
+            normalized ==
             [
                 "add",
                 "Draft column",
@@ -103,7 +104,7 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
         )
     }
 
-    func testKeepsPrivateForRemCTLPrivateMetadataArguments() async throws {
+    @Test func keepsPrivateForRemCTLPrivateMetadataArguments() async throws {
         let cases = [
             ["add", "Tagged", "--private", "-t", "work", "--json"],
             ["add", "Tagged", "--private", "--tags=work", "--json"],
@@ -139,54 +140,54 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
                 arguments: arguments
             ) { _ in nil }
 
-            XCTAssertEqual(normalized, arguments, "Failed to preserve --private for \(arguments)")
+            #expect(normalized == arguments, "Failed to preserve --private for \(arguments)")
         }
     }
 
-    func testKeepsPrivateForPrivateMetadataEdits() async throws {
+    @Test func keepsPrivateForPrivateMetadataEdits() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: ["edit", "23829", "--private", "--section", "NPC", "--json"]
         ) { _ in nil }
 
-        XCTAssertEqual(normalized, ["edit", "23829", "--private", "--section", "NPC", "--json"])
+        #expect(normalized == ["edit", "23829", "--private", "--section", "NPC", "--json"])
     }
 
-    func testKeepsPrivateForRichURLAttachmentEdits() async throws {
+    @Test func keepsPrivateForRichURLAttachmentEdits() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: ["edit", "23829", "--private", "--url", "https://example.com", "--json"]
         ) { _ in nil }
 
-        XCTAssertEqual(normalized, ["edit", "23829", "--private", "--url", "https://example.com", "--json"])
+        #expect(normalized == ["edit", "23829", "--private", "--url", "https://example.com", "--json"])
     }
 
-    func testKeepsPrivateForRichURLAttachmentAdds() async throws {
+    @Test func keepsPrivateForRichURLAttachmentAdds() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: ["add", "Research", "-l", "Projects", "--private", "--url=https://example.com", "--json"]
         ) { _ in nil }
 
-        XCTAssertEqual(normalized, ["add", "Research", "-l", "Projects", "--private", "--url=https://example.com", "--json"])
+        #expect(normalized == ["add", "Research", "-l", "Projects", "--private", "--url=https://example.com", "--json"])
     }
 
-    func testKeepsPrivateForRealFlagAdds() async throws {
+    @Test func keepsPrivateForRealFlagAdds() async throws {
         let normalizedShortFlag = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: ["add", "Flag me", "-l", "Projects", "--private", "-f", "--json"]
         ) { _ in nil }
 
-        XCTAssertEqual(normalizedShortFlag, ["add", "Flag me", "-l", "Projects", "--private", "-f", "--json"])
+        #expect(normalizedShortFlag == ["add", "Flag me", "-l", "Projects", "--private", "-f", "--json"])
 
         let normalizedLongFlag = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: remCTLAdapter(),
             arguments: ["add", "Flag me", "-l", "Projects", "--private", "--flag", "--json"]
         ) { _ in nil }
 
-        XCTAssertEqual(normalizedLongFlag, ["add", "Flag me", "-l", "Projects", "--private", "--flag", "--json"])
+        #expect(normalizedLongFlag == ["add", "Flag me", "-l", "Projects", "--private", "--flag", "--json"])
     }
 
-    func testKeepsPrivateForKnownPrivateMetadataFlagTokens() async throws {
+    @Test func keepsPrivateForKnownPrivateMetadataFlagTokens() async throws {
         let flags = [
             "-f",
             "-t",
@@ -224,14 +225,14 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
                 arguments: ["add", "Research", "--private", flag, "--json"]
             ) { _ in nil }
 
-            XCTAssertTrue(
+            #expect(
                 normalized.contains("--private"),
                 "`--private` should be preserved for \(flag)"
             )
         }
     }
 
-    func testKeepsPrivateForRemCTL13CommandsWhoseValuesLookLikeOldCommandNames() async throws {
+    @Test func keepsPrivateForRemCTL13CommandsWhoseValuesLookLikeOldCommandNames() async throws {
         let cases = [
             ["list-create", "add", "--private", "--symbol", "education3", "--json"],
             ["template-create", "edit", "--from-list", "Projects", "--private", "--json"],
@@ -246,20 +247,20 @@ final class RemCTLArgumentNormalizerTests: XCTestCase {
                 arguments: arguments
             ) { _ in nil }
 
-            XCTAssertEqual(normalized, arguments, "Failed to preserve --private for \(arguments)")
+            #expect(normalized == arguments, "Failed to preserve --private for \(arguments)")
         }
     }
 
-    func testLeavesOtherGenericCLIsUntouched() async throws {
+    @Test func leavesOtherGenericCLIsUntouched() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: codexAdapter(),
             arguments: ["exec", "4A0782C7-06B0-494A-B0BA-F399A270BCD4"]
         ) { _ in
-            XCTFail("Non-RemCTL tools should not resolve Reminders UUIDs.")
+            Issue.record("Non-RemCTL tools should not resolve Reminders UUIDs.")
             return nil
         }
 
-        XCTAssertEqual(normalized, ["exec", "4A0782C7-06B0-494A-B0BA-F399A270BCD4"])
+        #expect(normalized == ["exec", "4A0782C7-06B0-494A-B0BA-F399A270BCD4"])
     }
 
     private func remCTLAdapter() -> ToolDefinition {

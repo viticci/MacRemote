@@ -32,7 +32,7 @@ from typing import Any
 APP_NAME = "MacRemote"
 BUNDLE_ID = "com.macstories.MacRemote"
 LEGACY_REMCTL_PROFILE_KEY = "MacRemote.remCTLProfileEnabled"
-BLOCKED_EXECUTABLES = {"bash", "csh", "env", "fish", "sh", "tcsh", "zsh"}
+BLOCKED_EXECUTABLES = {"bash", "csh", "dash", "env", "fish", "ksh", "sh", "tcsh", "zsh"}
 VALID_CATEGORIES = {
     "reminders",
     "habits",
@@ -42,6 +42,7 @@ VALID_CATEGORIES = {
     "imageProcessing",
     "text",
     "developer",
+    "ai",
 }
 VALID_CAPABILITIES = {"readOnly", "write", "destructive"}
 PERMISSION_REQUIREMENT_ORDER = [
@@ -89,6 +90,7 @@ LEGACY_PRESET_ALIASES = {
     "remctl-run": "preset.remctl.run",
 }
 PRESET_SET_ALIASES = {
+    "ai": "set.ai",
     "all": "set.all_system_presets",
     "detected": "set.detected_clis",
     "developer": "set.developer",
@@ -125,8 +127,8 @@ def main() -> int:
 
     install_parser = subparsers.add_parser("install", help="Build dist/MacRemote.app.")
     install_parser.add_argument("--launch", action="store_true", help="Open the app after building.")
-    install_parser.add_argument("--copy-to-applications", action="store_true", help="Copy the app to ~/Applications.")
-    install_parser.add_argument("--force", action="store_true", help="Replace an existing ~/Applications copy.")
+    install_parser.add_argument("--copy-to-applications", action="store_true", help="Copy the app to /Applications.")
+    install_parser.add_argument("--force", action="store_true", help="Replace an existing /Applications copy.")
     install_parser.set_defaults(func=command_install)
 
     open_parser = subparsers.add_parser("open", help="Open the built app bundle.")
@@ -265,9 +267,11 @@ def command_install(args: argparse.Namespace) -> int:
 
     copied_to = None
     if args.copy_to_applications:
-        applications = Path.home() / "Applications"
+        applications = Path("/Applications")
         target = applications / f"{APP_NAME}.app"
-        applications.mkdir(parents=True, exist_ok=True)
+        stale_home_copy = Path.home() / "Applications" / f"{APP_NAME}.app"
+        if stale_home_copy.exists():
+            shutil.rmtree(stale_home_copy)
         if target.exists():
             if not args.force:
                 die(f"{target} already exists. Pass --force to replace it.")
@@ -1602,15 +1606,15 @@ def codex_presets() -> list[dict[str, Any]]:
         preset(
             "preset.developer.codex_read_only_exec",
             "Codex Read-Only Exec",
-            "Run Codex non-interactively in read-only mode with a model prompt.",
+            "Run Codex non-interactively with a prompt inside its read-only sandbox. The sandbox blocks file writes, but Codex still reads any local file its prompt asks for and sends context to the model, so calls require host approval.",
             executable,
             ["--ask-for-approval", "never", "--sandbox", "read-only", "exec", "--skip-git-repo-check", "{prompt}"],
             "destructive",
-            "developer",
+            "ai",
             60,
             2048,
         ),
-        direct_adapter("preset.developer.codex", "Codex CLI", "Run Codex by passing argv directly. Write-capable calls require per-call host approval.", executable, "developer", 60),
+        direct_adapter("preset.developer.codex", "Codex CLI", "Run Codex by passing argv directly. Write calls ask for approval on this Mac.", executable, "ai", 60),
     ]
 
 
@@ -1688,35 +1692,53 @@ def named_cli_presets() -> list[dict[str, Any]]:
         items.extend([
             preset("preset.peekaboo.permissions", "Peekaboo Permissions", "Return Peekaboo permission status as JSON.", executable, ["permissions", "status", "--json"], "readOnly", "utilities", 10, 512),
             preset("preset.peekaboo.apps", "Peekaboo Apps", "List running applications visible to Peekaboo as JSON.", executable, ["list", "apps", "--json"], "readOnly", "utilities", 10, 1024),
-            direct_adapter("preset.peekaboo.run", "Peekaboo CLI", "Run Peekaboo by passing argv directly. Use absolute paths; no shell expansion is performed.", executable, "utilities", 60, permissions=["screenRecording", "accessibility"]),
+            direct_adapter("preset.peekaboo.run", "Peekaboo CLI", "Run Peekaboo by passing argv directly to capture screenshots, list and inspect apps, windows, and UI elements, and drive clicks and keystrokes on this Mac's screen.", executable, "utilities", 60, permissions=["screenRecording", "accessibility"]),
         ])
     if executable := find_executable("spogo"):
         items.extend([
             preset("preset.spogo.status", "Spogo Status", "Return current Spotify playback status as JSON.", executable, ["status", "--json", "--no-input"], "readOnly", "utilities", 10, 1024),
             preset("preset.spogo.search_track", "Spogo Search Track", "Search Spotify tracks and return JSON results.", executable, ["search", "track", "{query}", "--json", "--no-input"], "readOnly", "utilities", 15, 1024),
-            direct_adapter("preset.spogo.run", "Spogo CLI", "Run Spogo by passing argv directly. Playback and library changes require host approval.", executable, "utilities", 30, permissions=["automation"]),
+            direct_adapter("preset.spogo.run", "Spogo CLI", "Run Spogo by passing argv directly. Playback and library changes ask for approval on this Mac.", executable, "utilities", 30, permissions=["automation"]),
         ])
     if executable := find_executable("summarize"):
         items.extend([
-            preset("preset.summarize.input", "Summarize Input", "Summarize a URL or local file path.", executable, ["{input}", "--format", "md"], "readOnly", "text", 60, 2048),
+            preset("preset.summarize.input", "Summarize Input", "Summarize a URL or local file path. Fetches the URL and sends content to the configured model API.", executable, ["{input}", "--format", "md"], "write", "text", 60, 2048),
             direct_adapter("preset.summarize.run", "Summarize CLI", "Run Summarize by passing argv directly for advanced extraction and transcript workflows.", executable, "text", 60),
         ])
     if executable := find_executable("gog"):
-        items.append(direct_adapter("preset.gog.run", "Gog CLI", "Run Gog by passing argv directly. Prefer --json, --dry-run, --no-input, and --gmail-no-send when applicable.", executable, "utilities", 45))
+        items.append(direct_adapter("preset.gog.run", "Gog CLI", "Run Gog, a Google Workspace CLI for Gmail, Calendar, Drive, and Contacts, by passing argv directly. Prefer `--json`, `--dry-run`, `--no-input`, and `--gmail-no-send` when applicable; sends and edits require host approval.", executable, "utilities", 45))
     if executable := find_executable("llm"):
         items.extend([
-            preset("preset.llm.prompt", "LLM Prompt", "Run Simon Willison's llm CLI with a prompt.", executable, ["prompt", "{prompt}"], "write", "developer", 60, 2048),
-            direct_adapter("preset.llm.run", "LLM CLI", "Run llm by passing argv directly for model, embedding, plugin, and log workflows.", executable, "developer", 60),
+            preset("preset.llm.prompt", "LLM Prompt", "Run Simon Willison's llm CLI with a prompt. Sends the prompt to the currently configured model API and logs the exchange to the local llm database.", executable, ["prompt", "{prompt}"], "write", "ai", 60, 2048),
+            direct_adapter("preset.llm.run", "LLM CLI", "Run llm by passing argv directly for model, embedding, plugin, and log workflows.", executable, "ai", 60),
         ])
+    if executable := find_executable("ollama"):
+        items.extend([
+            preset("preset.ollama.models", "Ollama Models", "List locally installed Ollama models.", executable, ["list"], "readOnly", "ai", 10, 1024),
+            direct_adapter("preset.ollama.run", "Ollama CLI", "Run Ollama by passing argv directly for local model workflows. `list`, `ps`, and `show` are read-only; `run {model} {prompt}` generates text locally; `pull` and `rm` change local model storage. Generation can be slow — keep prompts short.", executable, "ai", 60),
+        ])
+    if executable := find_executable("whisper-cli"):
+        items.extend([
+            preset("preset.whisper.transcribe", "Whisper Transcribe", "Transcribe a local audio file with whisper.cpp. Requires a GGML model path and a 16 kHz-friendly audio file; prints the transcript to stdout.", executable, ["-m", "{model}", "-f", "{audio}", "--no-prints"], "readOnly", "ai", 60, 2048),
+            direct_adapter("preset.whisper.run", "Whisper CLI", "Run whisper.cpp by passing argv directly for local audio transcription. Requires a GGML model path via `-m`; output flags such as `-otxt` write transcript files next to the input.", executable, "ai", 60),
+        ])
+    if executable := find_executable("pdftotext"):
+        items.append(preset("preset.pdftotext.extract", "PDF Extract Text", "Extract plain text from a PDF to stdout.", executable, ["{path}", "-"], "readOnly", "text", 30, 2048))
+    if executable := find_executable("pdfinfo"):
+        items.append(preset("preset.pdfinfo.info", "PDF Info", "Return page count, dimensions, and metadata for a PDF.", executable, ["{path}"], "readOnly", "text", 10, 512))
+    if executable := find_executable("tesseract"):
+        items.append(preset("preset.tesseract.ocr", "OCR Image", "Recognize text in an image with Tesseract OCR and print it to stdout.", executable, ["{image}", "stdout"], "readOnly", "imageProcessing", 60, 2048))
+    if executable := find_executable("trasher"):
+        items.append(preset("preset.trasher.trash", "Move To Trash", "Move a file or folder to the macOS Trash instead of deleting it permanently.", executable, ["{path}"], "write", "filesystem", 10, 256))
     if executable := find_executable("gh"):
         items.extend([
             preset("preset.gh.repo_view", "GitHub Repo View", "Return selected GitHub repository metadata as JSON.", executable, ["repo", "view", "{repository}", "--json", "nameWithOwner,description,url,isPrivate,defaultBranchRef"], "readOnly", "developer", 15, 1024),
-            direct_adapter("preset.gh.run", "GitHub CLI", "Run GitHub CLI by passing argv directly. Repository mutations require host approval.", executable, "developer", 45),
+            direct_adapter("preset.gh.run", "GitHub CLI", "Run GitHub CLI by passing argv directly. Repository mutations ask for approval on this Mac.", executable, "developer", 45),
         ])
     if executable := find_executable("jq"):
         items.extend([
-            preset("preset.jq.file", "JQ File", "Apply a jq filter to a JSON file.", executable, ["{filter}", "{path}"], "readOnly", "text", 10, 2048),
-            direct_adapter("preset.jq.run", "JQ CLI", "Run jq by passing argv directly.", executable, "text", 15, capability="readOnly"),
+            preset("preset.jq.file", "jq File", "Apply a jq filter to a JSON file.", executable, ["{filter}", "{path}"], "readOnly", "text", 10, 2048),
+            direct_adapter("preset.jq.run", "jq CLI", "Run jq by passing argv directly.", executable, "text", 15, capability="readOnly"),
         ])
     if executable := find_executable("rg"):
         items.extend([
@@ -1725,60 +1747,84 @@ def named_cli_presets() -> list[dict[str, Any]]:
         ])
     if executable := find_executable("yt-dlp"):
         items.extend([
-            preset("preset.ytdlp.metadata", "YT-DLP Metadata", "Return video metadata without downloading media.", executable, ["--dump-json", "--skip-download", "{url}"], "readOnly", "utilities", 30, 2048),
-            direct_adapter("preset.ytdlp.run", "YT-DLP CLI", "Run yt-dlp by passing argv directly. Downloads require host approval.", executable, "utilities", 60),
+            preset("preset.ytdlp.metadata", "yt-dlp Metadata", "Return video metadata as JSON without downloading media. Fetches the URL from this Mac.", executable, ["--dump-json", "--skip-download", "{url}"], "write", "imageProcessing", 30, 2048),
+            direct_adapter("preset.ytdlp.run", "yt-dlp CLI", "Run yt-dlp by passing argv directly. Downloads ask for approval on this Mac.", executable, "imageProcessing", 60),
         ])
     if executable := find_executable("ffprobe"):
         items.append(preset("preset.ffprobe.info", "FFprobe Media Info", "Return media stream and format metadata as JSON.", executable, ["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", "{path}"], "readOnly", "imageProcessing", 20, 2048))
     if executable := find_executable("ffmpeg"):
-        items.append(direct_adapter("preset.ffmpeg.run", "FFmpeg CLI", "Run FFmpeg by passing argv directly. Media conversion writes require host approval.", executable, "imageProcessing", 60))
+        items.append(direct_adapter("preset.ffmpeg.run", "FFmpeg CLI", "Run FFmpeg by passing argv directly. Media conversion writes ask for approval on this Mac.", executable, "imageProcessing", 60))
     if executable := find_executable("cloudflared"):
         items.extend([
             preset("preset.cloudflared.version", "Cloudflared Version", "Return the installed cloudflared version.", executable, ["version"], "readOnly", "utilities", 5, 64),
-            direct_adapter("preset.cloudflared.run", "Cloudflared CLI", "Run cloudflared by passing argv directly for tunnel and network workflows.", executable, "utilities", 60),
+            direct_adapter("preset.cloudflared.run", "Cloudflared CLI", "Run cloudflared by passing argv directly. Creating tunnels exposes local services to the internet and requires host approval; `tunnel list` and `version` are read-only.", executable, "utilities", 60),
         ])
     if executable := find_executable("tailscale"):
         items.extend([
             preset("preset.tailscale.status", "Tailscale Status", "Return Tailscale status as JSON.", executable, ["status", "--json"], "readOnly", "utilities", 10, 2048),
-            direct_adapter("preset.tailscale.run", "Tailscale CLI", "Run Tailscale by passing argv directly. Network state changes require host approval.", executable, "utilities", 30),
+            direct_adapter("preset.tailscale.run", "Tailscale CLI", "Run Tailscale by passing argv directly. Network state changes ask for approval on this Mac.", executable, "utilities", 30),
         ])
-    for executable_name, preset_id, name, summary, category in [
-        ("uv", "preset.uv.run", "UV CLI", "Run uv by passing argv directly for Python package and project workflows.", "developer"),
-        ("uvx", "preset.uvx.run", "UVX CLI", "Run uvx by passing argv directly for Python tool execution.", "developer"),
-        ("supabase", "preset.supabase.run", "Supabase CLI", "Run Supabase CLI by passing argv directly for local and hosted project workflows.", "developer"),
-        ("xcodegen", "preset.xcodegen.run", "XcodeGen CLI", "Run XcodeGen by passing argv directly. Project generation writes require host approval.", "developer"),
-        ("grok-session", "preset.grok_session.run", "Grok Session CLI", "Run grok-session by passing argv directly for local agent-session workflows.", "developer"),
-        ("cora", "preset.cora.run", "Cora CLI", "Run Cora by passing argv directly.", "developer"),
-        ("monologue", "preset.monologue.run", "Monologue CLI", "Run Monologue by passing argv directly.", "text"),
-        ("matter", "preset.matter.run", "Matter CLI", "Run Matter by passing argv directly for read-later workflows.", "text"),
-        ("spark", "preset.spark.run", "Spark CLI", "Run Spark by passing argv directly for email workflows.", "utilities"),
-        ("frames", "preset.frames.run", "Frames CLI", "Run Frames by passing argv directly for screenshot and media framing workflows.", "imageProcessing"),
-    ]:
-        if executable := find_executable(executable_name):
-            items.append(direct_adapter(preset_id, name, summary, executable, category, 60))
+    if executable := find_executable("uv"):
+        items.append(direct_adapter("preset.uv.run", "UV CLI", "Run uv by passing argv directly for Python package and project workflows.", executable, "developer", 60))
+    if executable := find_executable("uvx"):
+        items.append(direct_adapter("preset.uvx.run", "UVX CLI", "Run uvx by passing argv directly for Python tool execution.", executable, "developer", 60))
     if executable := find_executable("deno"):
         items.extend([
             preset("preset.deno.task_list", "Deno Task List", "List Deno tasks for a project directory.", executable, ["task", "--cwd", "{path}"], "readOnly", "developer", 10, 1024),
             direct_adapter("preset.deno.run", "Deno CLI", "Run Deno by passing argv directly for JavaScript and TypeScript workflows.", executable, "developer", 60),
         ])
+    if executable := find_executable("supabase"):
+        items.append(direct_adapter("preset.supabase.run", "Supabase CLI", "Run the Supabase CLI by passing argv directly for local and hosted project workflows. `status`, `projects list`, and `inspect` are read-only; migrations, deploys, and secrets commands modify projects.", executable, "developer", 60))
+    if executable := find_executable("xcodegen"):
+        items.append(direct_adapter("preset.xcodegen.run", "XcodeGen CLI", "Run XcodeGen by passing argv directly. Project generation writes ask for approval on this Mac.", executable, "developer", 60))
+    if executable := find_executable("grok-session"):
+        items.append(direct_adapter("preset.grok_session.run", "Grok Session CLI", "Run grok-session by passing argv directly to list, resume, and inspect saved Grok agent sessions.", executable, "developer", 60))
+    # No Cora preset (owner decision — unverifiable summary) and no Matter
+    # preset (deprecated; Readwise replaced it). Mirrors DefaultToolPresetCatalog.
+    if executable := find_executable("monologue"):
+        items.append(direct_adapter("preset.monologue.run", "Monologue CLI", "Run Monologue by passing argv directly to list, search, and read voice notes, transcripts, and summaries. Reads are safe; prefer JSON output.", executable, "text", 60))
+    if executable := find_executable("readwise"):
+        items.extend([
+            preset("preset.readwise.inbox", "Readwise Inbox", "List the Readwise Reader inbox as JSON.", executable, ["reader-list-documents", "--location", "new", "--json"], "readOnly", "text", 20, 1024),
+            direct_adapter("preset.readwise.run", "Readwise CLI", "Run the Readwise Reader CLI by passing argv directly for read-later documents and highlights. Prefer `--json`, `--limit`, and `--response-fields` for reads; `reader-list-documents`, `reader-search-documents`, and `readwise-list-highlights` are read-only, while create, move, tag, and bulk-edit commands modify the library.", executable, "text", 45),
+        ])
+    if executable := find_executable("spark"):
+        items.append(direct_adapter("preset.spark.run", "Spark CLI", "Query Spark email by passing argv directly: list and search emails, read threads and attachments, and check calendar events, availability, and contacts. The CLI is read-only — it cannot send, reply, or file mail — and requires Spark Desktop to be running.", executable, "utilities", 60))
+    if executable := find_executable("frames"):
+        items.append(direct_adapter("preset.frames.run", "Frames CLI", "Run Frames by passing argv directly to add Apple device bezels to screenshots. Writes framed images next to the originals.", executable, "imageProcessing", 60))
     return items
 
 
 def generic_cli_presets(existing: list[dict[str, Any]]) -> list[dict[str, Any]]:
     existing_ids = {item["id"] for item in existing}
     descriptors = [
-        ("claude", "preset.claude.run", "Claude Code", "Run Claude Code by passing argv directly. For remote MCP use, prefer non-interactive invocations such as `--print`, `--output-format json` or `--output-format stream-json`, explicit `--model`, `--permission-mode`, `--add-dir`, `--mcp-config`, and `--strict-mcp-config`; avoid bare interactive sessions and login flows unless the host Mac is attended.", "developer", "destructive", 60, []),
-        ("grok", "preset.grok.run", "Grok CLI", "Run Grok by passing argv directly for local agent workflows.", "developer", "destructive", 60, []),
+        ("claude", "preset.claude.run", "Claude Code", "Run Claude Code by passing argv directly. For remote MCP use, prefer non-interactive invocations such as `--print`, `--output-format json` or `--output-format stream-json`, explicit `--model`, `--permission-mode`, `--add-dir`, `--mcp-config`, and `--strict-mcp-config`; avoid bare interactive sessions and login flows unless this Mac is attended.", "ai", "destructive", 60, []),
+        ("grok", "preset.grok.run", "Grok CLI", "Run Grok by passing argv directly. Prefer non-interactive invocations with explicit output flags; avoid interactive sessions and login flows unless this Mac is attended.", "ai", "destructive", 60, []),
+        ("openclaw", "preset.openclaw.run", "OpenClaw CLI", "Run OpenClaw by passing argv directly for local agent gateway workflows. Prefer explicit subcommands and `--json` output; avoid interactive sessions and login flows unless this Mac is attended.", "developer", "destructive", 60, []),
+        ("lms", "preset.lms.run", "LM Studio CLI", "Run the LM Studio CLI by passing argv directly to list, load, and unload local models and query the local server. `ps` and `ls` are read-only.", "ai", "destructive", 60, []),
+        ("git", "preset.git.run", "Git CLI", "Run git by passing argv directly against local repositories, using `-C {repo}` to select the repository. `status`, `log`, `diff`, and `show` are read-only; `commit`, `push`, `reset`, `rebase`, and `clean` modify repositories or remotes.", "developer", "destructive", 45, []),
+        ("docker", "preset.docker.run", "Docker CLI", "Run Docker by passing argv directly for container workflows. Requires a running Docker or Colima daemon; `ps`, `images`, `inspect`, and `logs` are read-only, while `run`, `exec`, and `rm` create or modify containers.", "developer", "destructive", 60, []),
+        ("ipsw", "preset.ipsw.run", "IPSW CLI", "Run blacktop's ipsw by passing argv directly for IPSW/OTA firmware inspection and research. `info` and URL-listing commands are read-only; downloads and extractions write very large files.", "developer", "destructive", 60, []),
+        ("vercel", "preset.vercel.run", "Vercel CLI", "Run the Vercel CLI by passing argv directly for deploy, env, logs, and project workflows. `ls`, `inspect`, and `logs` are read-only; deploys and env writes change hosted projects.", "developer", "destructive", 60, []),
+        ("wrangler", "preset.wrangler.run", "Wrangler CLI", "Run the Wrangler CLI by passing argv directly for Cloudflare Workers deploy, env, logs, and project workflows. `list`, `tail`, and `versions list` are read-only; deploys and secret writes change hosted projects.", "developer", "destructive", 60, []),
+        ("go", "preset.go.run", "Go CLI", "Run the Go toolchain by passing argv directly for build, test, and module workflows.", "developer", "destructive", 60, []),
+        ("cargo", "preset.cargo.run", "Cargo CLI", "Run Cargo by passing argv directly for Rust build, test, and package workflows.", "developer", "destructive", 60, []),
+        ("defuddle", "preset.defuddle.run", "Defuddle", "Extract readable article content from a URL or local HTML file with Defuddle. Use `parse {url} --markdown` for Markdown output.", "text", "write", 45, []),
+        ("ntn", "preset.ntn.run", "Notion CLI", "Run ntn by passing argv directly to read and edit Notion pages and databases. Prefer `--json`; search and fetch commands are read-only, while page and database edits modify the workspace.", "text", "destructive", 45, []),
+        ("obsidian", "preset.obsidian.run", "Obsidian CLI", "Run the Obsidian CLI by passing argv directly to read, search, and edit notes in local vaults. Requires Obsidian to be installed; vault writes modify note files on disk.", "text", "destructive", 30, []),
+        ("pandoc", "preset.pandoc.run", "Pandoc CLI", "Convert documents between Markdown, HTML, DOCX, PDF, and more by passing argv directly; conversions write output files.", "text", "destructive", 60, []),
+        ("magick", "preset.magick.run", "ImageMagick CLI", "Run ImageMagick by passing argv directly for image conversion and editing; conversions write output files.", "imageProcessing", "destructive", 60, []),
+        ("exiftool", "preset.exiftool.run", "ExifTool CLI", "Read or edit EXIF/IPTC/XMP metadata in media files by passing argv directly. Reads are safe; write flags modify files in place.", "imageProcessing", "destructive", 60, []),
         ("swift", "preset.swift.run", "Swift CLI", "Run Swift by passing argv directly for package, build, and script workflows.", "developer", "destructive", 60, []),
-        ("xcodebuild", "preset.xcodebuild.run", "Xcodebuild CLI", "Run xcodebuild by passing argv directly for Apple platform build workflows.", "developer", "destructive", 60, []),
+        ("xcodebuild", "preset.xcodebuild.run", "xcodebuild CLI", "Run xcodebuild by passing argv directly for Apple platform build workflows.", "developer", "destructive", 60, []),
         ("node", "preset.node.run", "Node CLI", "Run Node.js by passing argv directly for JavaScript workflows.", "developer", "destructive", 60, []),
-        ("npm", "preset.npm.run", "NPM CLI", "Run npm by passing argv directly for package and script workflows.", "developer", "destructive", 60, []),
-        ("pnpm", "preset.pnpm.run", "PNPM CLI", "Run pnpm by passing argv directly for package and script workflows.", "developer", "destructive", 60, []),
+        ("npm", "preset.npm.run", "npm CLI", "Run npm by passing argv directly for package and script workflows.", "developer", "destructive", 60, []),
+        ("pnpm", "preset.pnpm.run", "pnpm CLI", "Run pnpm by passing argv directly for package and script workflows.", "developer", "destructive", 60, []),
         ("python3", "preset.python3.run", "Python 3 CLI", "Run Python 3 by passing argv directly for scripts and module workflows.", "developer", "destructive", 60, []),
         ("ruby", "preset.ruby.run", "Ruby CLI", "Run Ruby by passing argv directly for scripts and developer workflows.", "developer", "destructive", 60, []),
         ("perl", "preset.perl.run", "Perl CLI", "Run Perl by passing argv directly for scripts and text workflows.", "developer", "destructive", 60, []),
-        ("curl", "preset.curl.run", "Curl CLI", "Run curl by passing argv directly for HTTP workflows. Requests that send data require host approval.", "utilities", "destructive", 45, ["localNetwork"]),
-        ("rsync", "preset.rsync.run", "Rsync CLI", "Run rsync by passing argv directly for file transfer workflows.", "filesystem", "destructive", 60, []),
+        ("curl", "preset.curl.run", "Curl CLI", "Run curl by passing argv directly for HTTP requests. Every call requires host approval; requests can reach any host, so include the full URL and method in the argv for the approval prompt.", "utilities", "destructive", 45, ["localNetwork"]),
+        ("rsync", "preset.rsync.run", "Rsync CLI", "Run rsync by passing argv directly to copy or mirror files locally or to remote hosts. `--delete` and overwrites destroy data at the destination; every call requires host approval.", "filesystem", "destructive", 60, []),
         ("sqlite3", "preset.sqlite3.run", "SQLite CLI", "Run sqlite3 by passing argv directly for database inspection and mutation workflows.", "developer", "destructive", 60, []),
         ("shortcuts", "preset.shortcuts.run", "Shortcuts CLI", "Run Shortcuts by passing argv directly. Running shortcuts may trigger app, Automation, and data-access prompts.", "utilities", "destructive", 60, ["automation"]),
         ("osascript", "preset.osascript.run", "AppleScript CLI", "Run osascript by passing argv directly for AppleScript and JavaScript for Automation workflows.", "utilities", "destructive", 60, ["automation", "accessibility"]),
@@ -1807,33 +1853,38 @@ def preset_sets(available: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any
     sets = {
         "set.all_system_presets": {
             "name": "All System Presets",
-            "summary": "Install every available preset MacRemote detected on this Mac.",
+            "summary": "Install every preset MacRemote found on this Mac.",
             "presetIDs": list(available.keys()),
         },
         "set.detected_clis": {
-            "name": "Detected CLIs",
-            "summary": "Install one direct adapter for each detected command-line tool.",
+            "name": "Found on This Mac",
+            "summary": "Install one Flexible Command for each command-line tool found on this Mac.",
             "presetIDs": matching(lambda _preset_id, item: item.get("mode") == "cli"),
         },
         "set.reminders": {
             "name": "Reminders",
-            "summary": "Install the Reminders read tools plus the direct RemCTL adapter.",
+            "summary": "Install the Reminders read tools plus the flexible RemCTL command.",
             "presetIDs": matching(lambda _preset_id, item: item["category"] == "reminders"),
         },
         "set.habits": {
             "name": "Habits",
-            "summary": "Install Habitify inspection tools plus the direct HabitCTL adapter.",
+            "summary": "Install the Habitify read tools plus the flexible HabitCTL command.",
             "presetIDs": matching(lambda _preset_id, item: item["category"] == "habits"),
         },
         "set.podcasts": {
             "name": "Podcasts",
-            "summary": "Install Pocket Casts inspection tools plus the direct PocketCTL adapter.",
+            "summary": "Install the Pocket Casts read tools plus the flexible PocketCTL command.",
             "presetIDs": matching(lambda _preset_id, item: item["category"] == "podcasts"),
         },
         "set.steipete_openclaw": {
             "name": "Steipete / OpenClaw",
-            "summary": "Install presets for Peekaboo, Spogo, Summarize, and Gog when present.",
-            "presetIDs": matching(lambda preset_id, _item: preset_id.startswith(("preset.peekaboo.", "preset.spogo.", "preset.summarize.", "preset.gog."))),
+            "summary": "Install presets for Peekaboo, Spogo, Summarize, Gog, and OpenClaw when present.",
+            "presetIDs": matching(lambda preset_id, _item: preset_id.startswith(("preset.peekaboo.", "preset.spogo.", "preset.summarize.", "preset.gog.", "preset.openclaw."))),
+        },
+        "set.ai": {
+            "name": "AI & Agents",
+            "summary": "Install AI, agent, and local model CLIs.",
+            "presetIDs": matching(lambda _preset_id, item: item["category"] == "ai"),
         },
         "set.developer": {
             "name": "Developer",
@@ -1919,12 +1970,18 @@ def optional_cli_names() -> list[str]:
         "codex",
         "remctl",
         "pocketctl",
+        "habitctl",
         "peekaboo",
         "spogo",
         "summarize",
         "gog",
         "claude",
         "grok",
+        "grok-session",
+        "openclaw",
+        "lms",
+        "ollama",
+        "whisper-cli",
         "gh",
         "llm",
         "jq",
@@ -1936,9 +1993,20 @@ def optional_cli_names() -> list[str]:
         "uvx",
         "deno",
         "supabase",
-        "matter",
+        "monologue",
+        "readwise",
         "spark",
         "frames",
+        "pdftotext",
+        "pdfinfo",
+        "tesseract",
+        "trasher",
+        "defuddle",
+        "ntn",
+        "obsidian",
+        "pandoc",
+        "magick",
+        "exiftool",
     ]
 
 

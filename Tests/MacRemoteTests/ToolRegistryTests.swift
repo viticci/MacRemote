@@ -1,20 +1,20 @@
 import Foundation
-import XCTest
+import Testing
 @testable import MacRemote
 
-final class ToolRegistryTests: XCTestCase {
-    func testToolEnvironmentPrefersUserAndHomebrewBinsBeforeSystemBins() throws {
+struct ToolRegistryTests {
+    @Test func toolEnvironmentPrefersUserAndHomebrewBinsBeforeSystemBins() throws {
         let directories = ExecutableLocator.searchDirectories
-        let userBinIndex = try XCTUnwrap(directories.firstIndex(of: "\(ExecutableLocator.homeDirectory)/bin"))
-        let homebrewIndex = try XCTUnwrap(directories.firstIndex(of: "/opt/homebrew/bin"))
-        let systemIndex = try XCTUnwrap(directories.firstIndex(of: "/usr/bin"))
+        let userBinIndex = try #require(directories.firstIndex(of: "\(ExecutableLocator.homeDirectory)/bin"))
+        let homebrewIndex = try #require(directories.firstIndex(of: "/opt/homebrew/bin"))
+        let systemIndex = try #require(directories.firstIndex(of: "/usr/bin"))
 
-        XCTAssertLessThan(userBinIndex, systemIndex)
-        XCTAssertLessThan(homebrewIndex, systemIndex)
-        XCTAssertEqual(ExecutableLocator.toolEnvironment["PATH"], directories.joined(separator: ":"))
+        #expect(userBinIndex < systemIndex)
+        #expect(homebrewIndex < systemIndex)
+        #expect(ExecutableLocator.toolEnvironment["PATH"] == directories.joined(separator: ":"))
     }
 
-    func testDraftInfersStringParametersFromArgumentPlaceholders() throws {
+    @Test func draftInfersStringParametersFromArgumentPlaceholders() throws {
         var draft = ToolDefinitionDraft()
         draft.mode = .commandTemplate
         draft.name = "Echo"
@@ -26,33 +26,33 @@ final class ToolRegistryTests: XCTestCase {
         """
 
         let tool = try draft.makeTool(id: "custom.echo")
-        XCTAssertEqual(tool.argumentPattern, ["fixed", "{value}"])
-        XCTAssertEqual(tool.parameters.map(\.name), ["value"])
-        XCTAssertEqual(try ToolArgumentResolver.arguments(for: tool, stringParameters: ["value": "hello"]), ["fixed", "hello"])
+        #expect(tool.argumentPattern == ["fixed", "{value}"])
+        #expect(tool.parameters.map(\.name) == ["value"])
+        #expect(try ToolArgumentResolver.arguments(for: tool, stringParameters: ["value": "hello"]) == ["fixed", "hello"])
     }
 
-    func testDraftDefaultsToGenericCLIAdapterArguments() throws {
+    @Test func draftDefaultsToGenericCLIAdapterArguments() throws {
         var draft = ToolDefinitionDraft()
         draft.name = "Echo"
         draft.summary = "Generic echo adapter."
         draft.executablePath = "/bin/echo"
 
         let tool = try draft.makeTool(id: "custom.echo")
-        XCTAssertEqual(tool.argumentPattern, ["{args}"])
-        XCTAssertEqual(tool.parameters.first?.name, "args")
-        XCTAssertEqual(tool.parameters.first?.kind, .stringArray)
-        XCTAssertEqual(tool.parameters.map(\.name), ["args", "stdin"])
-        XCTAssertEqual(
+        #expect(tool.argumentPattern == ["{args}"])
+        #expect(tool.parameters.first?.name == "args")
+        #expect(tool.parameters.first?.kind == .stringArray)
+        #expect(tool.parameters.map(\.name) == ["args", "stdin"])
+        #expect(
             try ToolArgumentResolver.arguments(
                 for: tool,
                 parameters: ["args": .stringArray(["hello", "world"])]
-            ),
+            ) ==
             ["hello", "world"]
         )
-        XCTAssertEqual(tool.permissionRequirements, [])
+        #expect(tool.permissionRequirements == [])
     }
 
-    func testDraftCanRequireMacOSPrivacyServicesWithoutFullDiskAccess() throws {
+    @Test func draftCanRequireMacOSPrivacyServicesWithoutFullDiskAccess() throws {
         var draft = ToolDefinitionDraft()
         draft.name = "Screenshot"
         draft.summary = "Capture the screen."
@@ -61,10 +61,10 @@ final class ToolRegistryTests: XCTestCase {
 
         let tool = try draft.makeTool(id: "custom.screencapture")
 
-        XCTAssertEqual(tool.permissionRequirements, [.screenRecording, .automation])
+        #expect(tool.permissionRequirements == [.screenRecording, .automation])
     }
 
-    func testDraftUsesPracticalMaximumLengthsForCommonPlaceholders() throws {
+    @Test func draftUsesPracticalMaximumLengthsForCommonPlaceholders() throws {
         let parameters = try ToolDefinitionDraft.inferredParameters(from: [
             "{prompt}",
             "{path}",
@@ -75,13 +75,13 @@ final class ToolRegistryTests: XCTestCase {
             parameters.first { $0.name == name }?.maximumLength
         }
 
-        XCTAssertEqual(maximumLength(for: "prompt"), 4096)
-        XCTAssertEqual(maximumLength(for: "path"), 1024)
-        XCTAssertEqual(maximumLength(for: "query"), 512)
-        XCTAssertEqual(maximumLength(for: "value"), 256)
+        #expect(maximumLength(for: "prompt") == 4096)
+        #expect(maximumLength(for: "path") == 1024)
+        #expect(maximumLength(for: "query") == 512)
+        #expect(maximumLength(for: "value") == 256)
     }
 
-    func testDraftCanRequireFullDiskAccess() throws {
+    @Test func draftCanRequireFullDiskAccess() throws {
         var draft = ToolDefinitionDraft()
         draft.name = "Echo"
         draft.summary = "Generic echo adapter."
@@ -90,10 +90,10 @@ final class ToolRegistryTests: XCTestCase {
 
         let tool = try draft.makeTool(id: "custom.echo")
 
-        XCTAssertEqual(tool.permissionRequirements, [.fullDiskAccess])
+        #expect(tool.permissionRequirements == [.fullDiskAccess])
     }
 
-    func testShellExecutablesAreBlocked() throws {
+    @Test func shellExecutablesAreBlocked() throws {
         let tool = ToolDefinition(
             id: "custom.shell",
             name: "Shell",
@@ -107,12 +107,63 @@ final class ToolRegistryTests: XCTestCase {
             origin: .userDefined
         )
 
-        XCTAssertThrowsError(try ToolArgumentResolver.validate(tool)) { error in
-            XCTAssertEqual(error as? ToolValidationError, .blockedExecutable("/bin/sh"))
-        }
+        #expect(throws: ToolValidationError.blockedExecutable("/bin/sh")) { try ToolArgumentResolver.validate(tool) }
     }
 
-    func testStorePersistsOnlyUserDefinedTools() throws {
+    // R6/G1 — `dash` and `ksh` are in /etc/shells and must be Ring 0 like the rest.
+    @Test(arguments: ["/bin/dash", "/bin/ksh", "/usr/local/bin/DASH"])
+    func dashAndKshShellsAreBlocked(path: String) {
+        let tool = makeShellShapedTool(executablePath: path)
+        #expect(throws: ToolValidationError.blockedExecutable(path)) { try ToolArgumentResolver.validate(tool) }
+    }
+
+    // R6/G2 — an innocently named symlink resolving to a shell must not validate.
+    @Test func symlinkToShellIsBlockedByResolvedBasename() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let link = temporaryDirectory.appendingPathComponent("notes")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: "/bin/zsh"))
+
+        let tool = makeShellShapedTool(executablePath: link.path)
+        #expect(throws: ToolValidationError.blockedExecutable(link.path)) { try ToolArgumentResolver.validate(tool) }
+    }
+
+    // R6 — the same Ring-0 check guards the stdio-bridge command path.
+    @Test func stdioBridgeCommandSymlinkToShellIsBlocked() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let link = temporaryDirectory.appendingPathComponent("mcp-server")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: "/bin/bash"))
+
+        let tool = ToolDefinition(
+            id: "custom.bridge",
+            name: "Bridge",
+            summary: "Blocked stdio bridge.",
+            executablePath: "/",
+            argumentPattern: [],
+            parameters: [],
+            capability: .readOnly,
+            timeoutSeconds: 5,
+            outputByteLimit: 1024,
+            origin: .userDefined,
+            backend: .mcpStdioBridge,
+            mcpStdioBridge: MCPStdioBridgeConfiguration(
+                serverName: "Test",
+                command: link.path,
+                toolName: "tool"
+            )
+        )
+
+        #expect(throws: ToolValidationError.blockedExecutable(link.path)) { try ToolArgumentResolver.validate(tool) }
+    }
+
+    @Test func storePersistsOnlyUserDefinedTools() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let store = ToolRegistryStore(fileURL: temporaryDirectory.appendingPathComponent("tools.json"))
@@ -133,10 +184,10 @@ final class ToolRegistryTests: XCTestCase {
 
         try store.saveUserDefinedTools(RemCTLToolCatalog.builtInTools + [custom])
         let loaded = try store.loadUserDefinedTools()
-        XCTAssertEqual(loaded, [custom])
+        #expect(loaded == [custom])
     }
 
-    func testLegacyToolDefinitionDecodesWithDefaultOriginAndCategory() throws {
+    @Test func legacyToolDefinitionDecodesWithDefaultOriginAndCategory() throws {
         let data = """
         {
           "id": "custom.legacy",
@@ -152,14 +203,14 @@ final class ToolRegistryTests: XCTestCase {
         """.data(using: .utf8)!
 
         let tool = try JSONDecoder().decode(ToolDefinition.self, from: data)
-        XCTAssertEqual(tool.origin, .userDefined)
-        XCTAssertEqual(tool.category, .utilities)
-        XCTAssertEqual(tool.permissionRequirements, [])
-        XCTAssertEqual(tool.backend, .process)
-        XCTAssertNil(tool.mcpBridge)
+        #expect(tool.origin == .userDefined)
+        #expect(tool.category == .utilities)
+        #expect(tool.permissionRequirements == [])
+        #expect(tool.backend == .process)
+        #expect(tool.mcpBridge == nil)
     }
 
-    func testMCPBridgeToolValidationDoesNotRequireExecutable() throws {
+    @Test func mcpBridgeToolValidationDoesNotRequireExecutable() throws {
         let tool = ToolDefinition(
             id: "mcp.paste.search",
             name: "Paste Search",
@@ -189,12 +240,12 @@ final class ToolRegistryTests: XCTestCase {
             )
         )
 
-        XCTAssertNoThrow(try ToolArgumentResolver.validate(tool))
-        XCTAssertEqual(tool.preview, "http://127.0.0.1:39725/mcp → search")
-        XCTAssertTrue(tool.isMCPBridge)
+        #expect(throws: Never.self) { try ToolArgumentResolver.validate(tool) }
+        #expect(tool.preview == "http://127.0.0.1:39725/mcp → search")
+        #expect(tool.isMCPBridge)
     }
 
-    func testStorePersistsMCPBridgeTools() throws {
+    @Test func storePersistsMCPBridgeTools() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let store = ToolRegistryStore(fileURL: temporaryDirectory.appendingPathComponent("tools.json"))
@@ -232,54 +283,53 @@ final class ToolRegistryTests: XCTestCase {
         )
 
         try store.saveUserDefinedTools([tool])
-        XCTAssertEqual(try store.loadUserDefinedTools(), [tool])
+        #expect(try store.loadUserDefinedTools() == [tool])
     }
 
-    func testToolArgumentValuePreservesJSONNumbersForBridgeArguments() throws {
-        let value = try XCTUnwrap(ToolArgumentValue.fromJSONObject([
+    @Test func toolArgumentValuePreservesJSONNumbersForBridgeArguments() throws {
+        let value = try #require(ToolArgumentValue.fromJSONObject([
             "count": 2,
             "nested": ["enabled": true]
         ]))
-        let object = try XCTUnwrap(value.jsonValue.objectValue)
+        let object = try #require(value.jsonValue.objectValue)
 
-        XCTAssertEqual(object["count"], .number(2))
-        XCTAssertEqual(object["nested"], .object(["enabled": .bool(true)]))
+        #expect(object["count"] == .number(2))
+        #expect(object["nested"] == .object(["enabled": .bool(true)]))
     }
 
-    func testDefaultPresetsCreateValidUserDefinedTools() throws {
-        XCTAssertFalse(DefaultToolPresetCatalog.presets.isEmpty)
+    @Test func defaultPresetsCreateValidUserDefinedTools() throws {
+        #expect(DefaultToolPresetCatalog.presets.isEmpty == false)
 
         for preset in DefaultToolPresetCatalog.presets {
             let tool = try preset.draft.makeTool(id: preset.id)
-            XCTAssertEqual(tool.origin, .userDefined)
-            XCTAssertEqual(tool.category, preset.category)
-            XCTAssertEqual(tool.capability, preset.capability)
-            XCTAssertEqual(tool.permissionRequirements, preset.permissionRequirements)
+            #expect(tool.origin == .userDefined)
+            #expect(tool.category == preset.category)
+            #expect(tool.capability == preset.capability)
+            #expect(tool.permissionRequirements == preset.permissionRequirements)
         }
     }
 
-    func testPresetSetsReferenceValidAvailablePresets() {
+    @Test func presetSetsReferenceValidAvailablePresets() {
         let allPresetIDs = Set(DefaultToolPresetCatalog.presets.map(\.id))
         let allSystemSet = DefaultToolPresetCatalog.presetSets.first { $0.id == "set.all_system_presets" }
 
-        XCTAssertEqual(Set(allSystemSet?.presetIDs ?? []), allPresetIDs)
-        XCTAssertFalse(DefaultToolPresetCatalog.presetSets.isEmpty)
+        #expect(Set(allSystemSet?.presetIDs ?? []) == allPresetIDs)
+        #expect(DefaultToolPresetCatalog.presetSets.isEmpty == false)
         for presetSet in DefaultToolPresetCatalog.presetSets {
-            XCTAssertFalse(presetSet.presets.isEmpty)
-            XCTAssertTrue(presetSet.presetIDs.allSatisfy { allPresetIDs.contains($0) })
+            #expect(presetSet.presets.isEmpty == false)
+            #expect(presetSet.presetIDs.allSatisfy { allPresetIDs.contains($0) })
         }
     }
 
-    func testPocketCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
-        guard let executablePath = DefaultToolPresetCatalog.pocketCTLExecutablePath else {
-            throw XCTSkip("PocketCTL is not installed on this Mac.")
-        }
+    @Test(.enabled(if: DefaultToolPresetCatalog.pocketCTLExecutablePath != nil, "PocketCTL is not installed on this Mac."))
+    func pocketCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
+        let executablePath = try #require(DefaultToolPresetCatalog.pocketCTLExecutablePath)
 
         let presets = DefaultToolPresetCatalog.presets(in: .podcasts)
         let presetIDs = Set(presets.map(\.id))
-        XCTAssertFalse(presets.isEmpty)
-        XCTAssertTrue(presets.allSatisfy { $0.executablePath == executablePath })
-        XCTAssertTrue(presetIDs.isSuperset(of: [
+        #expect(presets.isEmpty == false)
+        #expect(presets.allSatisfy { $0.executablePath == executablePath })
+        #expect(presetIDs.isSuperset(of: [
             "preset.pocketctl.doctor",
             "preset.pocketctl.triage",
             "preset.pocketctl.now",
@@ -293,20 +343,19 @@ final class ToolRegistryTests: XCTestCase {
             "preset.pocketctl.show",
             "preset.pocketctl.run"
         ]))
-        XCTAssertTrue(presets.contains { $0.id == "preset.pocketctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
-        XCTAssertTrue(DefaultToolPresetCatalog.categories.contains(.podcasts))
+        #expect(presets.contains { $0.id == "preset.pocketctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
+        #expect(DefaultToolPresetCatalog.categories.contains(.podcasts))
     }
 
-    func testHabitCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
-        guard let executablePath = DefaultToolPresetCatalog.habitCTLExecutablePath else {
-            throw XCTSkip("HabitCTL is not installed on this Mac.")
-        }
+    @Test(.enabled(if: DefaultToolPresetCatalog.habitCTLExecutablePath != nil, "HabitCTL is not installed on this Mac."))
+    func habitCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
+        let executablePath = try #require(DefaultToolPresetCatalog.habitCTLExecutablePath)
 
         let presets = DefaultToolPresetCatalog.presets(in: .habits)
         let presetIDs = Set(presets.map(\.id))
-        XCTAssertFalse(presets.isEmpty)
-        XCTAssertTrue(presets.allSatisfy { $0.executablePath == executablePath })
-        XCTAssertTrue(presetIDs.isSuperset(of: [
+        #expect(presets.isEmpty == false)
+        #expect(presets.allSatisfy { $0.executablePath == executablePath })
+        #expect(presetIDs.isSuperset(of: [
             "preset.habitctl.doctor",
             "preset.habitctl.today",
             "preset.habitctl.journal",
@@ -318,68 +367,70 @@ final class ToolRegistryTests: XCTestCase {
             "preset.habitctl.areas",
             "preset.habitctl.run"
         ]))
-        XCTAssertTrue(presets.contains { $0.id == "preset.habitctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
-        XCTAssertTrue(DefaultToolPresetCatalog.categories.contains(.habits))
-        XCTAssertTrue(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.habitctl.run" })
+        #expect(presets.contains { $0.id == "preset.habitctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
+        #expect(DefaultToolPresetCatalog.categories.contains(.habits))
+        #expect(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.habitctl.run" })
     }
 
-    func testCodexPresetIsAvailableWhenExecutableIsInstalled() throws {
-        guard let executablePath = DefaultToolPresetCatalog.codexExecutablePath else {
-            throw XCTSkip("Codex is not installed on this Mac.")
-        }
+    @Test(.enabled(if: DefaultToolPresetCatalog.codexExecutablePath != nil, "Codex is not installed on this Mac."))
+    func codexPresetIsAvailableWhenExecutableIsInstalled() throws {
+        let executablePath = try #require(DefaultToolPresetCatalog.codexExecutablePath)
 
-        let presets = DefaultToolPresetCatalog.presets(in: .developer)
-        let readOnlyExec = try XCTUnwrap(presets.first { $0.id == "preset.developer.codex_read_only_exec" })
-        XCTAssertEqual(readOnlyExec.executablePath, executablePath)
-        XCTAssertEqual(readOnlyExec.mode, .commandTemplate)
-        XCTAssertLessThan(
-            try XCTUnwrap(readOnlyExec.argumentPattern.firstIndex(of: "--ask-for-approval")),
-            try XCTUnwrap(readOnlyExec.argumentPattern.firstIndex(of: "exec"))
-        )
+        // F20/DL-12: the Codex presets live in the AI & Agents category.
+        let presets = DefaultToolPresetCatalog.presets(in: .ai)
+        let readOnlyExec = try #require(presets.first { $0.id == "preset.developer.codex_read_only_exec" })
+        #expect(readOnlyExec.executablePath == executablePath)
+        #expect(readOnlyExec.mode == .commandTemplate)
+        let approvalFlagIndex = try #require(readOnlyExec.argumentPattern.firstIndex(of: "--ask-for-approval"))
+        let execIndex = try #require(readOnlyExec.argumentPattern.firstIndex(of: "exec"))
+        #expect(approvalFlagIndex < execIndex)
+        // F1: the summary must not claim the tool itself is read-only —
+        // capability stays `.destructive` and the copy explains why.
+        #expect(readOnlyExec.capability == .destructive)
+        #expect(readOnlyExec.summary.contains("read-only mode") == false)
+        #expect(readOnlyExec.summary.contains("host approval"))
 
-        XCTAssertTrue(presets.contains { preset in
+        #expect(presets.contains { preset in
             preset.id == "preset.developer.codex" &&
                 preset.executablePath == executablePath &&
                 preset.mode == .cliAdapter &&
                 preset.capability == .destructive
         })
-        XCTAssertEqual(DefaultToolPresetCatalog.preferredCategory, .developer)
-        XCTAssertTrue(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.developer.codex" })
+        #expect(DefaultToolPresetCatalog.preferredCategory == .ai)
+        #expect(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.developer.codex" })
     }
 
-    func testClaudeCodePresetUsesClaudeCLIWhenInstalled() throws {
-        guard let executablePath = ExecutableLocator.executablePath(named: "claude") else {
-            throw XCTSkip("Claude Code is not installed on this Mac.")
-        }
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "claude") != nil, "Claude Code is not installed on this Mac."))
+    func claudeCodePresetUsesClaudeCLIWhenInstalled() throws {
+        let executablePath = try #require(ExecutableLocator.executablePath(named: "claude"))
 
-        let preset = try XCTUnwrap(DefaultToolPresetCatalog.preset(id: "preset.claude.run"))
-        XCTAssertEqual(preset.name, "Claude Code")
-        XCTAssertEqual(preset.executablePath, executablePath)
-        XCTAssertEqual(preset.mode, .cliAdapter)
-        XCTAssertEqual(preset.capability, .destructive)
-        XCTAssertEqual(preset.timeoutSeconds, 60)
-        XCTAssertEqual(preset.outputLimitKB, 5120)
-        XCTAssertTrue(preset.summary.contains("--print"))
-        XCTAssertTrue(preset.summary.contains("--output-format"))
-        XCTAssertNil(DefaultToolPresetCatalog.preset(id: "preset.claude_session.run"))
+        let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.claude.run"))
+        #expect(preset.name == "Claude Code")
+        #expect(preset.executablePath == executablePath)
+        #expect(preset.mode == .cliAdapter)
+        #expect(preset.capability == .destructive)
+        #expect(preset.timeoutSeconds == 60)
+        #expect(preset.outputLimitKB == 5120)
+        #expect(preset.summary.contains("--print"))
+        #expect(preset.summary.contains("--output-format"))
+        #expect(DefaultToolPresetCatalog.preset(id: "preset.claude_session.run") == nil)
     }
 
-    func testRemCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
-        guard let executablePath = DefaultToolPresetCatalog.remCTLExecutablePath else {
-            throw XCTSkip("RemCTL is not installed on this Mac.")
-        }
+    @Test(.enabled(if: DefaultToolPresetCatalog.remCTLExecutablePath != nil, "RemCTL is not installed on this Mac."))
+    func remCTLPresetsAreAvailableWhenExecutableIsInstalled() throws {
+        let executablePath = try #require(DefaultToolPresetCatalog.remCTLExecutablePath)
 
         let presets = DefaultToolPresetCatalog.presets(in: .reminders)
-        XCTAssertEqual(presets.count, RemCTLToolCatalog.builtInTools.count)
-        XCTAssertTrue(presets.allSatisfy { $0.executablePath == executablePath })
-        XCTAssertTrue(presets.allSatisfy(\.requiresFullDiskAccess))
-        XCTAssertTrue(presets.allSatisfy { $0.permissionRequirements.contains(.reminders) })
-        XCTAssertTrue(presets.contains { $0.id == "preset.remctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
-        XCTAssertTrue(DefaultToolPresetCatalog.categories.contains(.reminders))
-        XCTAssertTrue(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.remctl.run" })
+        #expect(presets.count == RemCTLToolCatalog.builtInTools.count)
+        #expect(presets.allSatisfy { $0.executablePath == executablePath })
+        #expect(presets.allSatisfy { $0.requiresFullDiskAccess })
+        #expect(presets.allSatisfy { $0.permissionRequirements.contains(.reminders) })
+        #expect(presets.contains { $0.id == "preset.remctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
+        #expect(DefaultToolPresetCatalog.categories.contains(.reminders))
+        #expect(DefaultToolPresetCatalog.featuredPresets.contains { $0.id == "preset.remctl.run" })
     }
 
-    func testDetectedPopularCLIsAppearAsPresetsWhenInstalled() {
+    @Test func detectedPopularCLIsAppearAsPresetsWhenInstalled() {
         let expected: [(String, String)] = [
             ("peekaboo", "preset.peekaboo.run"),
             ("spogo", "preset.spogo.run"),
@@ -399,20 +450,25 @@ final class ToolRegistryTests: XCTestCase {
             ("supabase", "preset.supabase.run"),
             ("xcodegen", "preset.xcodegen.run"),
             ("grok-session", "preset.grok_session.run"),
-            ("cora", "preset.cora.run"),
             ("monologue", "preset.monologue.run"),
-            ("matter", "preset.matter.run"),
             ("spark", "preset.spark.run"),
             ("frames", "preset.frames.run"),
-            ("habitctl", "preset.habitctl.run")
+            ("habitctl", "preset.habitctl.run"),
+            ("readwise", "preset.readwise.run"),
+            ("ollama", "preset.ollama.run"),
+            ("whisper-cli", "preset.whisper.run"),
+            ("pdftotext", "preset.pdftotext.extract"),
+            ("pdfinfo", "preset.pdfinfo.info"),
+            ("tesseract", "preset.tesseract.ocr"),
+            ("trasher", "preset.trasher.trash")
         ]
 
         for (executable, presetID) in expected where ExecutableLocator.executablePath(named: executable) != nil {
-            XCTAssertNotNil(DefaultToolPresetCatalog.preset(id: presetID), "\(executable) should expose \(presetID)")
+            #expect(DefaultToolPresetCatalog.preset(id: presetID) != nil, "\(executable) should expose \(presetID)")
         }
     }
 
-    func testDetectedSystemCLIsAppearAsGenericAdaptersWhenInstalled() {
+    @Test func detectedSystemCLIsAppearAsGenericAdaptersWhenInstalled() {
         let expected: [(String, String)] = [
             ("claude", "preset.claude.run"),
             ("grok", "preset.grok.run"),
@@ -434,36 +490,51 @@ final class ToolRegistryTests: XCTestCase {
             ("mdfind", "preset.mdfind.run"),
             ("mdls", "preset.mdls.run"),
             ("qlmanage", "preset.qlmanage.run"),
-            ("textutil", "preset.textutil.run")
+            ("textutil", "preset.textutil.run"),
+            ("openclaw", "preset.openclaw.run"),
+            ("lms", "preset.lms.run"),
+            ("git", "preset.git.run"),
+            ("docker", "preset.docker.run"),
+            ("ipsw", "preset.ipsw.run"),
+            ("vercel", "preset.vercel.run"),
+            ("wrangler", "preset.wrangler.run"),
+            ("go", "preset.go.run"),
+            ("cargo", "preset.cargo.run"),
+            ("defuddle", "preset.defuddle.run"),
+            ("ntn", "preset.ntn.run"),
+            ("obsidian", "preset.obsidian.run"),
+            ("pandoc", "preset.pandoc.run"),
+            ("magick", "preset.magick.run"),
+            ("exiftool", "preset.exiftool.run")
         ]
 
         for (executable, presetID) in expected where ExecutableLocator.executablePath(named: executable) != nil {
             let preset = DefaultToolPresetCatalog.preset(id: presetID)
-            XCTAssertNotNil(preset, "\(executable) should expose \(presetID)")
-            XCTAssertEqual(preset?.mode, .cliAdapter)
+            #expect(preset != nil, "\(executable) should expose \(presetID)")
+            #expect(preset?.mode == .cliAdapter)
         }
     }
 
-    func testDetectedPrivacySensitiveCLIPresetsDeclareMacOSPermissions() throws {
+    @Test func detectedPrivacySensitiveCLIPresetsDeclareMacOSPermissions() throws {
         if ExecutableLocator.executablePath(named: "remctl") != nil {
-            let preset = try XCTUnwrap(DefaultToolPresetCatalog.preset(id: "preset.remctl.run"))
-            XCTAssertEqual(preset.permissionRequirements, [.fullDiskAccess, .reminders])
+            let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.remctl.run"))
+            #expect(preset.permissionRequirements == [.fullDiskAccess, .reminders])
         }
         if ExecutableLocator.executablePath(named: "peekaboo") != nil {
-            let preset = try XCTUnwrap(DefaultToolPresetCatalog.preset(id: "preset.peekaboo.run"))
-            XCTAssertEqual(preset.permissionRequirements, [.screenRecording, .accessibility])
+            let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.peekaboo.run"))
+            #expect(preset.permissionRequirements == [.screenRecording, .accessibility])
         }
         if ExecutableLocator.executablePath(named: "osascript") != nil {
-            let preset = try XCTUnwrap(DefaultToolPresetCatalog.preset(id: "preset.osascript.run"))
-            XCTAssertEqual(preset.permissionRequirements, [.accessibility, .automation])
+            let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.osascript.run"))
+            #expect(preset.permissionRequirements == [.accessibility, .automation])
         }
         if ExecutableLocator.executablePath(named: "screencapture") != nil {
-            let preset = try XCTUnwrap(DefaultToolPresetCatalog.preset(id: "preset.screencapture.run"))
-            XCTAssertEqual(preset.permissionRequirements, [.screenRecording])
+            let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.screencapture.run"))
+            #expect(preset.permissionRequirements == [.screenRecording])
         }
     }
 
-    func testBuildScriptIncludesCommonMacOSPrivacyUsageDescriptions() throws {
+    @Test func buildScriptIncludesCommonMacOSPrivacyUsageDescriptions() throws {
         let projectRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -486,14 +557,14 @@ final class ToolRegistryTests: XCTestCase {
         ]
 
         for key in expectedKeys {
-            XCTAssertTrue(contents.contains("<key>\(key)</key>"), "\(key) should be included in generated Info.plist")
+            #expect(contents.contains("<key>\(key)</key>"), "\(key) should be included in generated Info.plist")
         }
     }
 
     @MainActor
-    func testAppModelCanBulkAddPresetSetAndSkipExistingToolSignatures() throws {
+    @Test func appModelCanBulkAddPresetSetAndSkipExistingToolSignatures() throws {
         let suiteName = "MacRemoteTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let temporaryDirectory = FileManager.default.temporaryDirectory
@@ -514,37 +585,200 @@ final class ToolRegistryTests: XCTestCase {
             outputLimitKB: 64
         )
 
-        XCTAssertNil(model.addUserTools(from: [preset], sourceName: "Test Set"))
-        XCTAssertEqual(model.tools.count, 1)
-        XCTAssertEqual(model.tools.first?.name, "Echo Once")
+        #expect(model.addUserTools(from: [preset], sourceName: "Test Set") == nil)
+        #expect(model.tools.count == 1)
+        #expect(model.tools.first?.name == "Echo Once")
 
-        XCTAssertNotNil(model.addUserTools(from: [preset], sourceName: "Test Set"))
-        XCTAssertEqual(model.tools.count, 1)
+        #expect(model.addUserTools(from: [preset], sourceName: "Test Set") != nil)
+        #expect(model.tools.count == 1)
     }
 
-    func testFilesystemPresetsAvoidDestructiveCommands() {
+    @Test func filesystemPresetsAvoidDestructiveCommands() {
         let destructiveBasenames: Set<String> = ["rm", "rmdir", "unlink", "trash"]
         let filesystemPresets = DefaultToolPresetCatalog.presets(in: .filesystem)
 
-        XCTAssertFalse(filesystemPresets.isEmpty)
+        #expect(filesystemPresets.isEmpty == false)
         for preset in filesystemPresets {
-            XCTAssertFalse(destructiveBasenames.contains(URL(fileURLWithPath: preset.executablePath).lastPathComponent))
+            #expect(destructiveBasenames.contains(URL(fileURLWithPath: preset.executablePath).lastPathComponent) == false)
             if preset.mode == .commandTemplate {
-                XCTAssertEqual(preset.capability, .readOnly)
+                // Move To Trash is the one deliberate `.write` template
+                // (spec §6.1 #13 — it recoverably relocates, never deletes).
+                let expected: ToolCapability = preset.id == "preset.trasher.trash" ? .write : .readOnly
+                #expect(preset.capability == expected)
             } else {
-                XCTAssertEqual(preset.mode, .cliAdapter)
-                XCTAssertEqual(preset.argumentPattern, ["{args}"])
+                #expect(preset.mode == .cliAdapter)
+                #expect(preset.argumentPattern == ["{args}"])
             }
-            XCTAssertFalse(preset.argumentPattern.contains { argument in
+            #expect((preset.argumentPattern.contains { argument in
                 argument.localizedCaseInsensitiveContains("delete")
                     || argument.localizedCaseInsensitiveContains("remove")
-            })
+            }) == false)
         }
     }
 
-    func testClientToolPermissionStoreUsesStableTrustIDAcrossClientIDChurn() throws {
+    // DL-13 + owner decision: the deprecated Matter preset is gone and the
+    // unverifiable Cora preset never ships, regardless of what is installed.
+    @Test func retiredPresetsNeverAppear() {
+        #expect(DefaultToolPresetCatalog.preset(id: "preset.matter.run") == nil)
+        #expect(DefaultToolPresetCatalog.preset(id: "preset.cora.run") == nil)
+    }
+
+    // DL-14: URL-fetching templates must not be read-only — read-only skips the
+    // per-call approval that is the only exfiltration gate.
+    @Test func networkFetchingTemplatesRequireApproval() throws {
+        if ExecutableLocator.executablePath(named: "summarize") != nil {
+            let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.summarize.input"))
+            #expect(preset.capability == .write)
+        }
+        if ExecutableLocator.executablePath(named: "yt-dlp") != nil {
+            let metadata = try #require(DefaultToolPresetCatalog.preset(id: "preset.ytdlp.metadata"))
+            #expect(metadata.capability == .write)
+            #expect(metadata.name == "yt-dlp Metadata")
+            #expect(metadata.category == .imageProcessing)
+            let adapter = try #require(DefaultToolPresetCatalog.preset(id: "preset.ytdlp.run"))
+            #expect(adapter.name == "yt-dlp CLI")
+            #expect(adapter.category == .imageProcessing)
+        }
+    }
+
+    // F20/DL-12: the AI cluster presets carry the `.ai` category.
+    @Test func aiClusterPresetsUseAICategory() {
+        let aiExecutables = ["claude", "codex", "grok", "llm", "ollama", "lms", "whisper-cli"]
+        let aiPresetPrefixes = [
+            "preset.claude.", "preset.developer.codex", "preset.grok.",
+            "preset.llm.", "preset.ollama.", "preset.lms.", "preset.whisper."
+        ]
+
+        let aiPresets = DefaultToolPresetCatalog.presets.filter { preset in
+            aiPresetPrefixes.contains { preset.id.hasPrefix($0) }
+        }
+        for preset in aiPresets {
+            #expect(preset.category == .ai, "\(preset.id) should be in AI & Agents")
+        }
+
+        if aiExecutables.contains(where: { ExecutableLocator.executablePath(named: $0) != nil }) {
+            #expect(aiPresets.isEmpty == false)
+            #expect(DefaultToolPresetCatalog.categories.contains(.ai))
+            #expect(DefaultToolPresetCatalog.presetSets.contains { $0.id == "set.ai" })
+        }
+    }
+
+    // §6.4 written policy: no preset may wrap a Ring-1 executable (secrets
+    // managers, shells, privilege tools, package managers). The scanner and
+    // the catalog share `CLIRecommendationBlocklist` as the denylist source.
+    @Test func noPresetWrapsRingOneExecutable() {
+        for preset in DefaultToolPresetCatalog.presets {
+            let basename = URL(fileURLWithPath: preset.executablePath).lastPathComponent
+            #expect(
+                CLIRecommendationBlocklist.matches(
+                    basename,
+                    in: CLIRecommendationBlocklist.neverSuggestNames,
+                    prefixes: CLIRecommendationBlocklist.neverSuggestPrefixes
+                ) == false,
+                "\(preset.id) wraps Ring-1 executable \(basename)"
+            )
+        }
+    }
+
+    // §6.3 — the scanner's preset fold pass resolves candidates back to presets.
+    @Test func presetLookupsMatchExecutablePathAndBasename() throws {
+        let preset = try #require(DefaultToolPresetCatalog.presets.first)
+
+        let byPath = try #require(DefaultToolPresetCatalog.preset(matchingExecutablePath: preset.executablePath))
+        #expect(byPath.executablePath == preset.executablePath)
+
+        let basename = URL(fileURLWithPath: preset.executablePath).lastPathComponent
+        let byBasename = try #require(DefaultToolPresetCatalog.preset(matchingBasename: basename.uppercased()))
+        #expect(
+            URL(fileURLWithPath: byBasename.executablePath).lastPathComponent
+                .caseInsensitiveCompare(basename) == .orderedSame
+        )
+
+        #expect(DefaultToolPresetCatalog.preset(matchingExecutablePath: "/nonexistent/tool") == nil)
+        #expect(DefaultToolPresetCatalog.preset(matchingBasename: "definitely-not-a-preset") == nil)
+    }
+
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "readwise") != nil, "Readwise CLI is not installed on this Mac."))
+    func readwisePresetsReplaceMatter() throws {
+        let inbox = try #require(DefaultToolPresetCatalog.preset(id: "preset.readwise.inbox"))
+        #expect(inbox.argumentPattern == ["reader-list-documents", "--location", "new", "--json"])
+        #expect(inbox.capability == .readOnly)
+        #expect(inbox.category == .text)
+        #expect(inbox.timeoutSeconds == 20)
+        #expect(inbox.outputLimitKB == 1024)
+
+        let adapter = try #require(DefaultToolPresetCatalog.preset(id: "preset.readwise.run"))
+        #expect(adapter.mode == .cliAdapter)
+        #expect(adapter.capability == .destructive)
+        #expect(adapter.category == .text)
+        #expect(adapter.timeoutSeconds == 45)
+    }
+
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "whisper-cli") != nil, "whisper.cpp is not installed on this Mac."))
+    func whisperPresetsTranscribeLocally() throws {
+        let transcribe = try #require(DefaultToolPresetCatalog.preset(id: "preset.whisper.transcribe"))
+        #expect(transcribe.argumentPattern == ["-m", "{model}", "-f", "{audio}", "--no-prints"])
+        #expect(transcribe.capability == .readOnly)
+        #expect(transcribe.category == .ai)
+        #expect(transcribe.timeoutSeconds == 60)
+        #expect(transcribe.outputLimitKB == 2048)
+
+        let adapter = try #require(DefaultToolPresetCatalog.preset(id: "preset.whisper.run"))
+        #expect(adapter.mode == .cliAdapter)
+        #expect(adapter.category == .ai)
+    }
+
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "trasher") != nil, "trasher is not installed on this Mac."))
+    func moveToTrashPresetIsRecoverableWrite() throws {
+        let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.trasher.trash"))
+        #expect(preset.name == "Move To Trash")
+        #expect(preset.argumentPattern == ["{path}"])
+        #expect(preset.capability == .write)
+        #expect(preset.category == .filesystem)
+        #expect(preset.timeoutSeconds == 10)
+    }
+
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "pdftotext") != nil, "Poppler is not installed on this Mac."))
+    func pdfReadPresetsAreReadOnlyTemplates() throws {
+        let extract = try #require(DefaultToolPresetCatalog.preset(id: "preset.pdftotext.extract"))
+        #expect(extract.argumentPattern == ["{path}", "-"])
+        #expect(extract.capability == .readOnly)
+        #expect(extract.category == .text)
+
+        if ExecutableLocator.executablePath(named: "pdfinfo") != nil {
+            let info = try #require(DefaultToolPresetCatalog.preset(id: "preset.pdfinfo.info"))
+            #expect(info.argumentPattern == ["{path}"])
+            #expect(info.capability == .readOnly)
+        }
+    }
+
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "tesseract") != nil, "Tesseract is not installed on this Mac."))
+    func ocrPresetIsReadOnlyMediaTemplate() throws {
+        let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.tesseract.ocr"))
+        #expect(preset.argumentPattern == ["{image}", "stdout"])
+        #expect(preset.capability == .readOnly)
+        #expect(preset.category == .imageProcessing)
+    }
+
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "openclaw") != nil, "OpenClaw is not installed on this Mac."))
+    func steipeteSetIncludesOpenClaw() throws {
+        let set = try #require(DefaultToolPresetCatalog.presetSets.first { $0.id == "set.steipete_openclaw" })
+        #expect(set.presetIDs.contains("preset.openclaw.run"))
+    }
+
+    // F2: the curl summary must not understate approval or reach.
+    @Test(.enabled(if: ExecutableLocator.executablePath(named: "curl") != nil, "curl is not installed on this Mac."))
+    func curlSummaryStatesApprovalAndReach() throws {
+        let preset = try #require(DefaultToolPresetCatalog.preset(id: "preset.curl.run"))
+        #expect(preset.capability == .destructive)
+        #expect(preset.summary.contains("Every call requires host approval"))
+        #expect(preset.summary.contains("any host"))
+        #expect(preset.permissionRequirements == [.localNetwork])
+    }
+
+    @Test func clientToolPermissionStoreUsesStableTrustIDAcrossClientIDChurn() throws {
         let suiteName = "MacRemoteTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = ClientToolPermissionStore(userDefaults: defaults)
 
@@ -555,15 +789,30 @@ final class ToolRegistryTests: XCTestCase {
             toolID: "preset.remctl.run"
         )
 
-        XCTAssertTrue(store.isAllowed(
+        #expect(store.isAllowed(
             clientID: "macremote-client-new",
             clientTrustID: "macremote-trust-codex",
             toolID: "preset.remctl.run"
         ))
-        XCTAssertFalse(store.isAllowed(
+        #expect(store.isAllowed(
             clientID: "macremote-client-new",
             clientTrustID: "macremote-trust-other",
             toolID: "preset.remctl.run"
-        ))
+        ) == false)
     }
+}
+
+private func makeShellShapedTool(executablePath: String) -> ToolDefinition {
+    ToolDefinition(
+        id: "custom.shell-shaped",
+        name: "Shell Shaped",
+        summary: "Blocked.",
+        executablePath: executablePath,
+        argumentPattern: [],
+        parameters: [],
+        capability: .readOnly,
+        timeoutSeconds: 5,
+        outputByteLimit: 1024,
+        origin: .userDefined
+    )
 }

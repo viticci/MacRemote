@@ -8,8 +8,8 @@ enum ToolAdapterMode: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .cliAdapter: "CLI Adapter"
-        case .commandTemplate: "Command Template"
+        case .cliAdapter: "Flexible Command"
+        case .commandTemplate: "Fixed Command"
         }
     }
 }
@@ -26,6 +26,7 @@ struct ToolDefinitionDraft: Equatable {
     var outputLimitKB: Int = 512
     var requiresFullDiskAccess = false
     var permissionRequirements: [ToolPermissionRequirement] = []
+    var provenance: ToolProvenance?
 
     var argumentPattern: [String] {
         if mode == .cliAdapter {
@@ -53,7 +54,8 @@ struct ToolDefinitionDraft: Equatable {
             category: category,
             permissionRequirements: ToolPermissionRequirement.normalized(
                 permissionRequirements + (requiresFullDiskAccess ? [.fullDiskAccess] : [])
-            )
+            ),
+            provenance: provenance
         )
         try ToolArgumentResolver.validate(tool)
         return tool

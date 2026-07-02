@@ -1,68 +1,71 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class CloudflareServiceTests: XCTestCase {
-    func testHostnameNormalizesSubdomain() throws {
-        XCTAssertEqual(
-            try CloudflareService.hostname(subdomain: "  MacRemote-Home  ", zoneName: "viticci.net"),
+// CloudflareURLProtocolMock keeps install()/requestedPaths() state in class-level
+// statics shared by every test below, so the suite must run serially (XCTest's
+// serial-by-class runner hid this; Swift Testing runs tests in parallel by default).
+@Suite(.serialized)
+struct CloudflareServiceTests {
+    @Test func hostnameNormalizesSubdomain() throws {
+        #expect(
+            try CloudflareService.hostname(subdomain: "  MacRemote-Home  ", zoneName: "viticci.net") ==
             "macremote-home.viticci.net"
         )
     }
 
-    func testHostnameRejectsInvalidSubdomain() {
-        XCTAssertThrowsError(try CloudflareService.hostname(subdomain: "-macremote", zoneName: "viticci.net")) { error in
-            XCTAssertEqual(error as? CloudflareServiceError, .invalidSubdomain)
-        }
-        XCTAssertFalse(CloudflareService.isValidSubdomain("macremote_iphone"))
-        XCTAssertFalse(CloudflareService.isValidSubdomain("macremote-"))
-        XCTAssertFalse(CloudflareService.isValidSubdomain(""))
+    @Test func hostnameRejectsInvalidSubdomain() {
+        #expect(throws: CloudflareServiceError.invalidSubdomain) { try CloudflareService.hostname(subdomain: "-macremote", zoneName: "viticci.net") }
+        #expect(CloudflareService.isValidSubdomain("macremote_iphone") == false)
+        #expect(CloudflareService.isValidSubdomain("macremote-") == false)
+        #expect(CloudflareService.isValidSubdomain("") == false)
     }
 
-    func testTunnelNameIsStableAndDNSSafe() {
-        XCTAssertEqual(
-            CloudflareService.tunnelName(hostname: "macremote.home.viticci.net"),
+    @Test func tunnelNameIsStableAndDNSSafe() {
+        #expect(
+            CloudflareService.tunnelName(hostname: "macremote.home.viticci.net") ==
             "macremote-macremote-home-viticci-net"
         )
     }
 
-    func testAccessApplicationDomainProtectsOnlyMCPPath() {
-        XCTAssertEqual(
-            CloudflareService.accessApplicationDomain(hostname: "macremote.viticci.net"),
+    @Test func accessApplicationDomainProtectsOnlyMCPPath() {
+        #expect(
+            CloudflareService.accessApplicationDomain(hostname: "macremote.viticci.net") ==
             "macremote.viticci.net/mcp*"
         )
     }
 
-    func testStandardHeadersJSONUsesCloudflareAccessHeaderNames() throws {
+    @Test func standardHeadersJSONUsesCloudflareAccessHeaderNames() throws {
         let credentials = CloudflareAccessCredentials(
             clientID: "client-id",
             clientSecret: "client-secret"
         )
-        let data = try XCTUnwrap(credentials.standardHeadersJSON.data(using: .utf8))
-        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+        let data = try #require(credentials.standardHeadersJSON.data(using: .utf8))
+        let decoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
 
-        XCTAssertEqual(decoded["CF-Access-Client-Id"], "client-id")
-        XCTAssertEqual(decoded["CF-Access-Client-Secret"], "client-secret")
-        XCTAssertNil(decoded["Authorization"])
+        #expect(decoded["CF-Access-Client-Id"] == "client-id")
+        #expect(decoded["CF-Access-Client-Secret"] == "client-secret")
+        #expect(decoded["Authorization"] == nil)
     }
 
-    func testSingleHeaderJSONUsesCloudflareSingleHeaderPayload() throws {
+    @Test func singleHeaderJSONUsesCloudflareSingleHeaderPayload() throws {
         let credentials = CloudflareAccessCredentials(
             clientID: "client-id",
             clientSecret: "client-secret"
         )
-        let data = try XCTUnwrap(credentials.singleHeaderJSON.data(using: .utf8))
-        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
-        let headerValue = try XCTUnwrap(decoded["CF-Access-Service-Token"])
-        let headerData = try XCTUnwrap(headerValue.data(using: .utf8))
-        let headerPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: headerData) as? [String: String])
+        let data = try #require(credentials.singleHeaderJSON.data(using: .utf8))
+        let decoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
+        let headerValue = try #require(decoded["CF-Access-Service-Token"])
+        let headerData = try #require(headerValue.data(using: .utf8))
+        let headerPayload = try #require(JSONSerialization.jsonObject(with: headerData) as? [String: String])
 
-        XCTAssertEqual(headerPayload["cf-access-client-id"], "client-id")
-        XCTAssertEqual(headerPayload["cf-access-client-secret"], "client-secret")
-        XCTAssertNil(decoded["CF-Access-Client-Id"])
-        XCTAssertNil(decoded["Authorization"])
+        #expect(headerPayload["cf-access-client-id"] == "client-id")
+        #expect(headerPayload["cf-access-client-secret"] == "client-secret")
+        #expect(decoded["CF-Access-Client-Id"] == nil)
+        #expect(decoded["Authorization"] == nil)
     }
 
-    func testDeployCustomDomainUsesZoneScopedAccessEndpoints() async throws {
+    @Test func deployCustomDomainUsesZoneScopedAccessEndpoints() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -120,18 +123,18 @@ final class CloudflareServiceTests: XCTestCase {
         )
 
         let requests = CloudflareURLProtocolMock.requestedPaths()
-        XCTAssertEqual(deployment.hostname, hostname)
-        XCTAssertEqual(deployment.accessCredentials?.clientID, "client-id")
-        XCTAssertTrue(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/apps") })
-        XCTAssertTrue(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/service_tokens") })
-        XCTAssertTrue(requests.contains("POST /zones/zone-id/access/apps"))
-        XCTAssertTrue(requests.contains("POST /zones/zone-id/access/service_tokens"))
-        XCTAssertTrue(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/apps/app-id/policies") })
-        XCTAssertTrue(requests.contains("POST /zones/zone-id/access/apps/app-id/policies"))
-        XCTAssertFalse(requests.contains { $0.contains("/accounts/account-id/access") })
+        #expect(deployment.hostname == hostname)
+        #expect(deployment.accessCredentials?.clientID == "client-id")
+        #expect(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/apps") })
+        #expect(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/service_tokens") })
+        #expect(requests.contains("POST /zones/zone-id/access/apps"))
+        #expect(requests.contains("POST /zones/zone-id/access/service_tokens"))
+        #expect(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/apps/app-id/policies") })
+        #expect(requests.contains("POST /zones/zone-id/access/apps/app-id/policies"))
+        #expect((requests.contains { $0.contains("/accounts/account-id/access") }) == false)
     }
 
-    func testDeployCustomDomainCanConfigureSingleCloudflareAccessHeader() async throws {
+    @Test func deployCustomDomainCanConfigureSingleCloudflareAccessHeader() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -188,13 +191,13 @@ final class CloudflareServiceTests: XCTestCase {
             apiToken: "test-token"
         )
 
-        let appBody = try XCTUnwrap(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/access/apps"])
-        XCTAssertEqual(appBody["read_service_tokens_from_header"] as? String, "CF-Access-Service-Token")
-        XCTAssertEqual(deployment.accessMode, .serviceTokenAuthorizationHeader)
-        XCTAssertTrue(deployment.accessCredentials?.singleHeaderJSON.contains("\"CF-Access-Service-Token\"") == true)
+        let appBody = try #require(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/access/apps"])
+        #expect(appBody["read_service_tokens_from_header"] as? String == "CF-Access-Service-Token")
+        #expect(deployment.accessMode == .serviceTokenAuthorizationHeader)
+        #expect(deployment.accessCredentials?.singleHeaderJSON.contains("\"CF-Access-Service-Token\"") == true)
     }
 
-    func testDeployCustomDomainUsesNextFreePolicyPrecedence() async throws {
+    @Test func deployCustomDomainUsesNextFreePolicyPrecedence() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -257,11 +260,11 @@ final class CloudflareServiceTests: XCTestCase {
             apiToken: "test-token"
         )
 
-        let policyBody = try XCTUnwrap(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/access/apps/app-id/policies"])
-        XCTAssertEqual(policyBody["precedence"] as? Int, 2)
+        let policyBody = try #require(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/access/apps/app-id/policies"])
+        #expect(policyBody["precedence"] as? Int == 2)
     }
 
-    func testDeployCustomDomainUpdatesExistingMacRemotePolicy() async throws {
+    @Test func deployCustomDomainUpdatesExistingMacRemotePolicy() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -324,14 +327,14 @@ final class CloudflareServiceTests: XCTestCase {
             apiToken: "test-token"
         )
 
-        let policyBody = try XCTUnwrap(CloudflareURLProtocolMock.requestBodies()["PUT /zones/zone-id/access/apps/app-id/policies/macremote-policy-id"])
-        XCTAssertEqual(policyBody["precedence"] as? Int, 1)
-        let include = try XCTUnwrap(policyBody["include"] as? [[String: [String: String]]])
-        XCTAssertEqual(include.first?["service_token"]?["token_id"], "new-service-token-id")
-        XCTAssertFalse(CloudflareURLProtocolMock.requestedPaths().contains("POST /zones/zone-id/access/apps/app-id/policies"))
+        let policyBody = try #require(CloudflareURLProtocolMock.requestBodies()["PUT /zones/zone-id/access/apps/app-id/policies/macremote-policy-id"])
+        #expect(policyBody["precedence"] as? Int == 1)
+        let include = try #require(policyBody["include"] as? [[String: [String: String]]])
+        #expect(include.first?["service_token"]?["token_id"] == "new-service-token-id")
+        #expect(CloudflareURLProtocolMock.requestedPaths().contains("POST /zones/zone-id/access/apps/app-id/policies") == false)
     }
 
-    func testDeployCustomDomainMigratesLegacyWholeHostAccessApplication() async throws {
+    @Test func deployCustomDomainMigratesLegacyWholeHostAccessApplication() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -405,12 +408,11 @@ final class CloudflareServiceTests: XCTestCase {
             apiToken: "test-token"
         )
 
-        XCTAssertTrue(
-            CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id")
-        )
+        #expect(
+            CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id"))
     }
 
-    func testDeployCustomDomainMigratesLegacyMCPWildcardAccessApplication() async throws {
+    @Test func deployCustomDomainMigratesLegacyMCPWildcardAccessApplication() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -484,15 +486,13 @@ final class CloudflareServiceTests: XCTestCase {
             apiToken: "test-token"
         )
 
-        XCTAssertTrue(
-            CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id")
-        )
-        XCTAssertFalse(
-            CloudflareURLProtocolMock.requestedPaths().contains("POST /zones/zone-id/access/apps")
-        )
+        #expect(
+            CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id"))
+        #expect(
+            CloudflareURLProtocolMock.requestedPaths().contains("POST /zones/zone-id/access/apps") == false)
     }
 
-    func testDeployCustomDomainOAuthOnlyDeletesExistingMacRemoteAccessApplication() async throws {
+    @Test func deployCustomDomainOAuthOnlyDeletesExistingMacRemoteAccessApplication() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -547,13 +547,13 @@ final class CloudflareServiceTests: XCTestCase {
         )
 
         let requests = CloudflareURLProtocolMock.requestedPaths()
-        XCTAssertNil(deployment.accessCredentials)
-        XCTAssertTrue(requests.contains("DELETE /zones/zone-id/access/apps/access-app-id"))
-        XCTAssertFalse(requests.contains("POST /zones/zone-id/access/service_tokens"))
-        XCTAssertFalse(requests.contains { $0.contains("/policies") })
+        #expect(deployment.accessCredentials == nil)
+        #expect(requests.contains("DELETE /zones/zone-id/access/apps/access-app-id"))
+        #expect(requests.contains("POST /zones/zone-id/access/service_tokens") == false)
+        #expect((requests.contains { $0.contains("/policies") }) == false)
     }
 
-    func testDeployCustomDomainOAuthOnlyRejectsNonMacRemoteAccessApplication() async throws {
+    @Test func deployCustomDomainOAuthOnlyRejectsNonMacRemoteAccessApplication() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -590,32 +590,32 @@ final class CloudflareServiceTests: XCTestCase {
                 accessMode: .macRemoteOAuthOnly,
                 apiToken: "test-token"
             )
-            XCTFail("Expected deployment to reject the existing non-MacRemote Access application.")
+            Issue.record("Expected deployment to reject the existing non-MacRemote Access application.")
         } catch {
-            XCTAssertEqual(error as? CloudflareServiceError, .existingAccessApplication(hostname))
+            #expect(error as? CloudflareServiceError == .existingAccessApplication(hostname))
         }
 
         let requests = CloudflareURLProtocolMock.requestedPaths()
-        XCTAssertFalse(requests.contains { $0.contains("/configurations") })
-        XCTAssertFalse(requests.contains { $0.hasPrefix("DELETE ") })
+        #expect((requests.contains { $0.contains("/configurations") }) == false)
+        #expect((requests.contains { $0.hasPrefix("DELETE ") }) == false)
     }
 
-    func testWranglerOAuthTokenProviderParsesQuotedToken() {
+    @Test func wranglerOAuthTokenProviderParsesQuotedToken() {
         let config = """
         expiration_time = "2026-06-25T12:00:00Z"
         oauth_token = "abc.def.ghi" # refreshed by wrangler
         refresh_token = 'refresh-value'
         """
 
-        XCTAssertEqual(
-            WranglerOAuthTokenProvider.value(named: "oauth_token", in: config),
+        #expect(
+            WranglerOAuthTokenProvider.value(named: "oauth_token", in: config) ==
             "abc.def.ghi"
         )
-        XCTAssertEqual(
-            WranglerOAuthTokenProvider.value(named: "refresh_token", in: config),
+        #expect(
+            WranglerOAuthTokenProvider.value(named: "refresh_token", in: config) ==
             "refresh-value"
         )
-        XCTAssertNil(WranglerOAuthTokenProvider.value(named: "missing", in: config))
+        #expect(WranglerOAuthTokenProvider.value(named: "missing", in: config) == nil)
     }
 }
 

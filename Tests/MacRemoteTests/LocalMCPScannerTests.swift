@@ -1,9 +1,9 @@
 import Foundation
-import XCTest
+import Testing
 @testable import MacRemote
 
-final class LocalMCPScannerTests: XCTestCase {
-    func testScansClaudeExtensionProbesToolsAndBuildsBridgeDefinitions() async throws {
+struct LocalMCPScannerTests {
+    @Test func scansClaudeExtensionProbesToolsAndBuildsBridgeDefinitions() async throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: home) }
@@ -56,30 +56,30 @@ final class LocalMCPScannerTests: XCTestCase {
             executablePath: { _ in nil }
         )
         let candidates = await scanner.scan(includeRemote: false, probe: true)
-        let candidate = try XCTUnwrap(candidates.first)
+        let candidate = try #require(candidates.first)
 
-        XCTAssertEqual(candidate.id, "claude_extension.paste")
-        XCTAssertEqual(candidate.displayName, "Paste")
-        XCTAssertTrue(candidate.bridgeable)
-        XCTAssertEqual(candidate.probe?.serverInfo.title, "Paste")
-        XCTAssertEqual(candidate.probe?.tools.map(\.name), ["search", "create_item"])
+        #expect(candidate.id == "claude_extension.paste")
+        #expect(candidate.displayName == "Paste")
+        #expect(candidate.bridgeable)
+        #expect(candidate.probe?.serverInfo.title == "Paste")
+        #expect(candidate.probe?.tools.map(\.name) == ["search", "create_item"])
 
         let requests = LocalMCPScannerURLProtocolMock.requests()
-        XCTAssertEqual(requests.map(\.method), ["initialize", "notifications/initialized", "tools/list"])
-        XCTAssertEqual(requests[0].headers["Authorization"], "Bearer secret-token")
-        XCTAssertEqual(requests[2].headers["Mcp-Session-Id"], "session-1")
+        #expect(requests.map(\.method) == ["initialize", "notifications/initialized", "tools/list"])
+        #expect(requests[0].headers["Authorization"] == "Bearer secret-token")
+        #expect(requests[2].headers["Mcp-Session-Id"] == "session-1")
 
         let tools = try scanner.bridgeTools(for: candidate)
-        XCTAssertEqual(tools.count, 2)
-        XCTAssertEqual(tools[0].backend, .mcpHTTPBridge)
-        XCTAssertEqual(tools[0].mcpBridge?.serverURL, "http://127.0.0.1:39725/mcp")
-        XCTAssertEqual(tools[0].mcpBridge?.headers.first?.value, nil)
-        XCTAssertEqual(tools[0].mcpBridge?.headers.first?.valueSource?.keyPath, ["server", "mcp_config", "env", "MCP_TOKEN"])
-        XCTAssertEqual(tools[0].capability, .readOnly)
-        XCTAssertEqual(tools[1].capability, .write)
+        #expect(tools.count == 2)
+        #expect(tools[0].backend == .mcpHTTPBridge)
+        #expect(tools[0].mcpBridge?.serverURL == "http://127.0.0.1:39725/mcp")
+        #expect(tools[0].mcpBridge?.headers.first?.value == nil)
+        #expect(tools[0].mcpBridge?.headers.first?.valueSource?.keyPath == ["server", "mcp_config", "env", "MCP_TOKEN"])
+        #expect(tools[0].capability == .readOnly)
+        #expect(tools[1].capability == .write)
     }
 
-    func testScansCodexStdioServerProbesToolsAndBuildsBridgeDefinitions() async throws {
+    @Test func scansCodexStdioServerProbesToolsAndBuildsBridgeDefinitions() async throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: home) }
@@ -108,36 +108,36 @@ final class LocalMCPScannerTests: XCTestCase {
         )
 
         let candidates = await scanner.scan(includeRemote: false, probe: true)
-        let candidate = try XCTUnwrap(candidates.first)
+        let candidate = try #require(candidates.first)
 
-        XCTAssertEqual(candidate.id, "codex.mock_stdio")
-        XCTAssertEqual(candidate.transport, .stdio)
-        XCTAssertTrue(candidate.bridgeable)
-        XCTAssertNil(candidate.probeError)
-        XCTAssertEqual(candidate.probe?.serverInfo.name, "mock-stdio")
-        XCTAssertEqual(candidate.probe?.tools.map(\.name), ["echo"])
+        #expect(candidate.id == "codex.mock_stdio")
+        #expect(candidate.transport == .stdio)
+        #expect(candidate.bridgeable)
+        #expect(candidate.probeError == nil)
+        #expect(candidate.probe?.serverInfo.name == "mock-stdio")
+        #expect(candidate.probe?.tools.map(\.name) == ["echo"])
 
         let tools = try scanner.bridgeTools(for: candidate)
-        let tool = try XCTUnwrap(tools.first)
-        XCTAssertEqual(tool.backend, .mcpStdioBridge)
-        XCTAssertEqual(tool.mcpStdioBridge?.command, serverURL.path)
-        XCTAssertEqual(tool.mcpStdioBridge?.args, ["--fixture"])
-        XCTAssertEqual(tool.mcpStdioBridge?.startupTimeoutSeconds, 30)
-        XCTAssertEqual(tool.mcpStdioBridge?.environment.first?.value, nil)
-        XCTAssertEqual(tool.mcpStdioBridge?.environment.first?.valueSource?.kind, .tomlFile)
-        XCTAssertEqual(tool.mcpStdioBridge?.environment.first?.valueSource?.keyPath, ["mcp_servers", "mock_stdio", "env", "MOCK_SECRET"])
+        let tool = try #require(tools.first)
+        #expect(tool.backend == .mcpStdioBridge)
+        #expect(tool.mcpStdioBridge?.command == serverURL.path)
+        #expect(tool.mcpStdioBridge?.args == ["--fixture"])
+        #expect(tool.mcpStdioBridge?.startupTimeoutSeconds == 30)
+        #expect(tool.mcpStdioBridge?.environment.first?.value == nil)
+        #expect(tool.mcpStdioBridge?.environment.first?.valueSource?.kind == .tomlFile)
+        #expect(tool.mcpStdioBridge?.environment.first?.valueSource?.keyPath == ["mcp_servers", "mock_stdio", "env", "MOCK_SECRET"])
 
         let client = MCPStdioBridgeClient(environment: ExecutableLocator.toolEnvironment)
         let outcome = try await client.call(tool: tool, parameters: [
             "query": .string("hello")
         ])
 
-        XCTAssertTrue(outcome.succeeded, outcome.stderr)
-        XCTAssertTrue(outcome.stdout.contains(#""secret":"from-toml""#), outcome.stdout)
-        XCTAssertTrue(outcome.stdout.contains(#""query":"hello""#), outcome.stdout)
+        #expect(outcome.succeeded, Comment(rawValue: outcome.stderr))
+        #expect(outcome.stdout.contains(#""secret":"from-toml""#), Comment(rawValue: outcome.stdout))
+        #expect(outcome.stdout.contains(#""query":"hello""#), Comment(rawValue: outcome.stdout))
     }
 
-    func testScansCodexStdioAuthProfilesAsSeparateBridges() async throws {
+    @Test func scansCodexStdioAuthProfilesAsSeparateBridges() async throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: home) }
@@ -179,27 +179,27 @@ final class LocalMCPScannerTests: XCTestCase {
         )
 
         let candidates = await scanner.scan(includeRemote: false, probe: true)
-        XCTAssertEqual(candidates.map(\.id).sorted(), ["codex.account_user", "codex.public_search"])
+        #expect(candidates.map(\.id).sorted() == ["codex.account_user", "codex.public_search"])
 
-        let publicProfile = try XCTUnwrap(candidates.first { $0.displayName == "public-search" })
-        XCTAssertEqual(publicProfile.transport, .stdio)
-        XCTAssertEqual(publicProfile.probe?.tools.map(\.name), ["search_public_records"])
+        let publicProfile = try #require(candidates.first { $0.displayName == "public-search" })
+        #expect(publicProfile.transport == .stdio)
+        #expect(publicProfile.probe?.tools.map(\.name) == ["search_public_records"])
 
-        let accountProfile = try XCTUnwrap(candidates.first { $0.displayName == "account-user" })
-        XCTAssertEqual(accountProfile.transport, .stdio)
-        XCTAssertEqual(accountProfile.startupTimeoutSeconds, 300)
-        XCTAssertEqual(accountProfile.probe?.tools.map(\.name), ["get_account_bookmarks"])
+        let accountProfile = try #require(candidates.first { $0.displayName == "account-user" })
+        #expect(accountProfile.transport == .stdio)
+        #expect(accountProfile.startupTimeoutSeconds == 300)
+        #expect(accountProfile.probe?.tools.map(\.name) == ["get_account_bookmarks"])
 
-        let accountTool = try XCTUnwrap(scanner.bridgeTools(for: accountProfile).first)
-        XCTAssertEqual(accountTool.backend, .mcpStdioBridge)
-        XCTAssertEqual(accountTool.mcpStdioBridge?.serverName, "account-user")
-        XCTAssertEqual(accountTool.mcpStdioBridge?.command, accountURL.path)
-        XCTAssertEqual(accountTool.mcpStdioBridge?.startupTimeoutSeconds, 300)
-        XCTAssertEqual(accountTool.mcpStdioBridge?.toolName, "get_account_bookmarks")
-        XCTAssertNoThrow(try ToolArgumentResolver.validate(accountTool))
+        let accountTool = try #require(scanner.bridgeTools(for: accountProfile).first)
+        #expect(accountTool.backend == .mcpStdioBridge)
+        #expect(accountTool.mcpStdioBridge?.serverName == "account-user")
+        #expect(accountTool.mcpStdioBridge?.command == accountURL.path)
+        #expect(accountTool.mcpStdioBridge?.startupTimeoutSeconds == 300)
+        #expect(accountTool.mcpStdioBridge?.toolName == "get_account_bookmarks")
+        #expect(throws: Never.self) { try ToolArgumentResolver.validate(accountTool) }
     }
 
-    func testJSONServersFallbackPreservesEnvironmentKeyPath() async throws {
+    @Test func jsonServersFallbackPreservesEnvironmentKeyPath() async throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: home) }
@@ -230,12 +230,12 @@ final class LocalMCPScannerTests: XCTestCase {
 
         let scanner = LocalMCPScanner(homeDirectory: home, executablePath: { _ in nil })
         let candidates = await scanner.scan(includeRemote: false, probe: false)
-        let candidate = try XCTUnwrap(candidates.first)
+        let candidate = try #require(candidates.first)
 
-        XCTAssertEqual(candidate.id, "cursor.profile_one")
-        XCTAssertEqual(candidate.environment.first?.value, nil)
-        XCTAssertEqual(candidate.environment.first?.valueSource?.kind, .jsonFile)
-        XCTAssertEqual(candidate.environment.first?.valueSource?.keyPath, ["servers", "profile-one", "env", "PROFILE_TOKEN"])
+        #expect(candidate.id == "cursor.profile_one")
+        #expect(candidate.environment.first?.value == nil)
+        #expect(candidate.environment.first?.valueSource?.kind == .jsonFile)
+        #expect(candidate.environment.first?.valueSource?.keyPath == ["servers", "profile-one", "env", "PROFILE_TOKEN"])
     }
 
     private static let mockStdioMCPServer = """

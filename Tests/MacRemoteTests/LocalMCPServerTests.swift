@@ -1,9 +1,15 @@
 import Foundation
-import XCTest
+import Testing
 @testable import MacRemote
 
-final class LocalMCPServerTests: XCTestCase {
-    func testPublicHealthDoesNotDiscloseInstanceOrToolSurface() async throws {
+// Every test here binds its own 127.0.0.1 listener on a port chosen by a
+// probe-then-bind scan, so concurrently running tests can race the probe and
+// end up talking to another test's server (XCTest ran these serially; Swift
+// Testing is parallel by default). Serialize the suite to keep one live
+// server at a time.
+@Suite(.serialized)
+struct LocalMCPServerTests {
+    @Test func publicHealthDoesNotDiscloseInstanceOrToolSurface() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -35,21 +41,21 @@ final class LocalMCPServerTests: XCTestCase {
         try await waitForServerReady(base: base)
 
         let localHealth = try await getJSON(url: base.appendingPathComponent("health"))
-        XCTAssertEqual(localHealth.json["ok"] as? Bool, true)
-        XCTAssertEqual(localHealth.json["public_metadata"] as? Bool, false)
-        XCTAssertEqual(localHealth.json["instance_id"] as? String, "test-instance")
-        XCTAssertEqual(localHealth.json["tool_count"] as? Int, 1)
-        XCTAssertEqual(localHealth.json["tool_profile"] as? String, "custom-cli")
+        #expect(localHealth.json["ok"] as? Bool == true)
+        #expect(localHealth.json["public_metadata"] as? Bool == false)
+        #expect(localHealth.json["instance_id"] as? String == "test-instance")
+        #expect(localHealth.json["tool_count"] as? Int == 1)
+        #expect(localHealth.json["tool_profile"] as? String == "custom-cli")
 
         let publicHealth = try await getJSON(url: base.appendingPathComponent("health"), headers: forwardedHeaders)
-        XCTAssertEqual(publicHealth.json["ok"] as? Bool, true)
-        XCTAssertEqual(publicHealth.json["public_metadata"] as? Bool, true)
-        XCTAssertNil(publicHealth.json["instance_id"])
-        XCTAssertNil(publicHealth.json["tool_count"])
-        XCTAssertNil(publicHealth.json["tool_profile"])
+        #expect(publicHealth.json["ok"] as? Bool == true)
+        #expect(publicHealth.json["public_metadata"] as? Bool == true)
+        #expect(publicHealth.json["instance_id"] == nil)
+        #expect(publicHealth.json["tool_count"] == nil)
+        #expect(publicHealth.json["tool_profile"] == nil)
     }
 
-    func testIconEndpointsServePublicAssets() async throws {
+    @Test func iconEndpointsServePublicAssets() async throws {
         let server = LocalMCPServer(
             instanceID: "test-instance",
             tools: [],
@@ -63,22 +69,34 @@ final class LocalMCPServerTests: XCTestCase {
         try await waitForServerReady(base: base)
 
         let connectorIcon = try await getWithHeaders(url: base.appendingPathComponent("macremote-icon.png"))
-        XCTAssertEqual(connectorIcon.statusCode, 200)
-        XCTAssertEqual(Data(connectorIcon.data.prefix(8)), Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
-        XCTAssertEqual(headerValue(connectorIcon.headers, named: "Content-Type"), "image/png")
+        #expect(connectorIcon.statusCode == 200)
+        #expect(Data(connectorIcon.data.prefix(8)) == Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        #expect(headerValue(connectorIcon.headers, named: "Content-Type") == "image/png")
 
         let faviconPNG = try await getWithHeaders(url: base.appendingPathComponent("favicon.png"))
-        XCTAssertEqual(faviconPNG.statusCode, 200)
-        XCTAssertEqual(Data(faviconPNG.data.prefix(8)), Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
-        XCTAssertEqual(headerValue(faviconPNG.headers, named: "Content-Type"), "image/png")
+        #expect(faviconPNG.statusCode == 200)
+        #expect(Data(faviconPNG.data.prefix(8)) == Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        #expect(headerValue(faviconPNG.headers, named: "Content-Type") == "image/png")
 
         let faviconICO = try await getWithHeaders(url: base.appendingPathComponent("favicon.ico"))
-        XCTAssertEqual(faviconICO.statusCode, 200)
-        XCTAssertEqual(Data(faviconICO.data.prefix(4)), Data([0x00, 0x00, 0x01, 0x00]))
-        XCTAssertEqual(headerValue(faviconICO.headers, named: "Content-Type"), "image/x-icon")
+        #expect(faviconICO.statusCode == 200)
+        #expect(Data(faviconICO.data.prefix(4)) == Data([0x00, 0x00, 0x01, 0x00]))
+        #expect(headerValue(faviconICO.headers, named: "Content-Type") == "image/x-icon")
+
+        let connectorIcon128 = try await getWithHeaders(url: base.appendingPathComponent("macremote-icon-128.png"))
+        #expect(connectorIcon128.statusCode == 200)
+        #expect(Data(connectorIcon128.data.prefix(8)) == Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        #expect(headerValue(connectorIcon128.headers, named: "Content-Type") == "image/png")
+
+        let landing = try await getWithHeaders(url: base)
+        #expect(landing.statusCode == 200)
+        #expect(headerValue(landing.headers, named: "Content-Type") == "text/html; charset=utf-8")
+        let landingHTML = try #require(String(data: landing.data, encoding: .utf8))
+        #expect(landingHTML.contains("<link rel=\"icon\" href=\"/favicon.ico\""))
+        #expect(landingHTML.contains("MacRemote"))
     }
 
-    func testPublicOAuthRegistrationIsRateLimitedButLoopbackIsNot() async throws {
+    @Test func publicOAuthRegistrationIsRateLimitedButLoopbackIsNot() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -118,7 +136,7 @@ final class LocalMCPServerTests: XCTestCase {
                     "scope": "mcp:tools"
                 ]
             )
-            XCTAssertEqual(response.statusCode, 201)
+            #expect(response.statusCode == 201)
         }
 
         let limited = try await postJSON(
@@ -130,9 +148,9 @@ final class LocalMCPServerTests: XCTestCase {
                 "scope": "mcp:tools"
             ]
         )
-        XCTAssertEqual(limited.statusCode, 429)
-        XCTAssertEqual(limited.json["error"] as? String, "rate_limited")
-        XCTAssertNotNil(headerValue(limited.headers, named: "Retry-After"))
+        #expect(limited.statusCode == 429)
+        #expect(limited.json["error"] as? String == "rate_limited")
+        #expect(headerValue(limited.headers, named: "Retry-After") != nil)
 
         let loopback = try await postJSON(
             url: base.appendingPathComponent("register"),
@@ -142,10 +160,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "scope": "mcp:tools"
             ]
         )
-        XCTAssertEqual(loopback.statusCode, 201)
+        #expect(loopback.statusCode == 201)
     }
 
-    func testForwardedHTTPSHostIsUsedForOAuthMetadata() async throws {
+    @Test func forwardedHTTPSHostIsUsedForOAuthMetadata() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -179,35 +197,35 @@ final class LocalMCPServerTests: XCTestCase {
             url: base.appendingPathComponent(".well-known/oauth-protected-resource"),
             headers: forwardedHeaders
         )
-        XCTAssertEqual(protectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp")
-        XCTAssertEqual(protectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
-        XCTAssertEqual(protectedResource.json["mcp_protocol_version"] as? String, "2025-11-25")
+        #expect(protectedResource.json["resource"] as? String == "https://macremote-test.trycloudflare.com/mcp")
+        #expect(protectedResource.json["authorization_servers"] as? [String] == ["https://macremote-test.trycloudflare.com"])
+        #expect(protectedResource.json["mcp_protocol_version"] as? String == "2025-11-25")
 
         let aliasProtectedResource = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-protected-resource/mcp"),
             headers: forwardedHeaders
         )
-        XCTAssertEqual(aliasProtectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp")
-        XCTAssertEqual(aliasProtectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
+        #expect(aliasProtectedResource.json["resource"] as? String == "https://macremote-test.trycloudflare.com/mcp")
+        #expect(aliasProtectedResource.json["authorization_servers"] as? [String] == ["https://macremote-test.trycloudflare.com"])
 
         let pathProtectedResource = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-protected-resource/mcp/test-instance"),
             headers: forwardedHeaders
         )
-        XCTAssertEqual(pathProtectedResource.json["resource"] as? String, "https://macremote-test.trycloudflare.com/mcp")
-        XCTAssertEqual(pathProtectedResource.json["authorization_servers"] as? [String], ["https://macremote-test.trycloudflare.com"])
+        #expect(pathProtectedResource.json["resource"] as? String == "https://macremote-test.trycloudflare.com/mcp")
+        #expect(pathProtectedResource.json["authorization_servers"] as? [String] == ["https://macremote-test.trycloudflare.com"])
 
         let authorizationServer = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-authorization-server"),
             headers: forwardedHeaders
         )
-        XCTAssertEqual(authorizationServer.json["issuer"] as? String, "https://macremote-test.trycloudflare.com")
-        XCTAssertEqual(authorizationServer.json["registration_endpoint"] as? String, "https://macremote-test.trycloudflare.com/register")
-        XCTAssertEqual(authorizationServer.json["resource_indicators_supported"] as? Bool, true)
-        XCTAssertEqual(authorizationServer.json["token_endpoint_auth_methods_supported"] as? [String], ["none"])
+        #expect(authorizationServer.json["issuer"] as? String == "https://macremote-test.trycloudflare.com")
+        #expect(authorizationServer.json["registration_endpoint"] as? String == "https://macremote-test.trycloudflare.com/register")
+        #expect(authorizationServer.json["resource_indicators_supported"] as? Bool == true)
+        #expect(authorizationServer.json["token_endpoint_auth_methods_supported"] as? [String] == ["none"])
     }
 
-    func testConfidentialOAuthMetadataOmitsDynamicRegistration() async throws {
+    @Test func confidentialOAuthMetadataOmitsDynamicRegistration() async throws {
         let coordinator = OAuthCoordinator(
             clientAuthentication: .confidentialClientRequired(
                 OAuthConfidentialClientCredentials(
@@ -231,9 +249,9 @@ final class LocalMCPServerTests: XCTestCase {
         let authorizationServer = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-authorization-server")
         )
-        XCTAssertNil(authorizationServer.json["registration_endpoint"])
-        XCTAssertEqual(
-            authorizationServer.json["token_endpoint_auth_methods_supported"] as? [String],
+        #expect(authorizationServer.json["registration_endpoint"] == nil)
+        #expect(
+            authorizationServer.json["token_endpoint_auth_methods_supported"] as? [String] ==
             ["client_secret_basic", "client_secret_post"]
         )
 
@@ -245,11 +263,11 @@ final class LocalMCPServerTests: XCTestCase {
                 "scope": "mcp:tools"
             ]
         )
-        XCTAssertEqual(registration.statusCode, 400)
-        XCTAssertEqual(registration.json["error"] as? String, "invalid_request")
+        #expect(registration.statusCode == 400)
+        #expect(registration.json["error"] as? String == "invalid_request")
     }
 
-    func testOAuthProtectedMCPToolFlowOverHTTP() async throws {
+    @Test func oAuthProtectedMCPToolFlowOverHTTP() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -290,10 +308,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(noAuth.statusCode, 401)
-        let challenge = try XCTUnwrap(headerValue(noAuth.headers, named: "WWW-Authenticate"))
-        XCTAssertTrue(challenge.contains("resource_metadata=\"http://127.0.0.1:\(port)/.well-known/oauth-protected-resource/mcp\""))
-        XCTAssertTrue(challenge.contains("scope=\"mcp:tools\""))
+        #expect(noAuth.statusCode == 401)
+        let challenge = try #require(headerValue(noAuth.headers, named: "WWW-Authenticate"))
+        #expect(challenge.contains("resource_metadata=\"http://127.0.0.1:\(port)/.well-known/oauth-protected-resource/mcp\""))
+        #expect(challenge.contains("scope=\"mcp:tools\""))
 
         let invalidOrigin = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -304,7 +322,7 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(invalidOrigin.statusCode, 403)
+        #expect(invalidOrigin.statusCode == 403)
 
         let unsupportedProtocol = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -315,10 +333,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(unsupportedProtocol.statusCode, 400)
+        #expect(unsupportedProtocol.statusCode == 400)
 
         let getMCP = try await get(url: base.appendingPathComponent("mcp/test-instance"))
-        XCTAssertEqual(getMCP.statusCode, 405)
+        #expect(getMCP.statusCode == 405)
 
         let verifier = "server-flow-verifier"
         let registered = try await postJSON(
@@ -329,8 +347,8 @@ final class LocalMCPServerTests: XCTestCase {
                 "scope": "mcp:tools"
             ]
         )
-        XCTAssertEqual(registered.statusCode, 201)
-        let clientID = try XCTUnwrap(registered.json["client_id"] as? String)
+        #expect(registered.statusCode == 201)
+        let clientID = try #require(registered.json["client_id"] as? String)
 
         var authorize = URLComponents(url: base.appendingPathComponent("authorize"), resolvingAgainstBaseURL: false)!
         authorize.queryItems = [
@@ -342,17 +360,17 @@ final class LocalMCPServerTests: XCTestCase {
             URLQueryItem(name: "code_challenge", value: OAuthCoordinator.pkceChallenge(for: verifier)),
             URLQueryItem(name: "code_challenge_method", value: "S256")
         ]
-        let authorizationPage = try await get(url: try XCTUnwrap(authorize.url))
-        XCTAssertEqual(authorizationPage.statusCode, 200)
+        let authorizationPage = try await get(url: try #require(authorize.url))
+        #expect(authorizationPage.statusCode == 200)
 
-        let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
-        XCTAssertTrue(server.approveAuthorizationRequest(id: requestID))
+        let requestID = try #require(coordinator.approvalSnapshot().first?.id)
+        #expect(server.approveAuthorizationRequest(id: requestID))
 
         var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
         statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
-        let status = try await getJSON(url: try XCTUnwrap(statusURL.url))
-        let redirectURI = try XCTUnwrap(status.json["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let status = try await getJSON(url: try #require(statusURL.url))
+        let redirectURI = try #require(status.json["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
         let token = try await postForm(
             url: base.appendingPathComponent("token"),
@@ -364,8 +382,8 @@ final class LocalMCPServerTests: XCTestCase {
                 "code_verifier": verifier
             ]
         )
-        XCTAssertEqual(token.statusCode, 200)
-        let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
+        #expect(token.statusCode == 200)
+        let accessToken = try #require(token.json["access_token"] as? String)
 
         let initialize = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -385,16 +403,24 @@ final class LocalMCPServerTests: XCTestCase {
                 ]
             ]
         )
-        XCTAssertEqual(initialize.statusCode, 200)
-        let initializeResult = try XCTUnwrap(initialize.json["result"] as? [String: Any])
-        let serverInfo = try XCTUnwrap(initializeResult["serverInfo"] as? [String: Any])
-        XCTAssertEqual(serverInfo["name"] as? String, "MacRemote")
-        XCTAssertEqual(serverInfo["title"] as? String, "MacRemote")
-        let icons = try XCTUnwrap(serverInfo["icons"] as? [[String: Any]])
-        let icon = try XCTUnwrap(icons.first)
-        XCTAssertEqual(icon["src"] as? String, "http://127.0.0.1:\(port)/macremote-icon.png")
-        XCTAssertEqual(icon["mimeType"] as? String, "image/png")
-        XCTAssertEqual(icon["sizes"] as? [String], ["512x512"])
+        #expect(initialize.statusCode == 200)
+        let initializeResult = try #require(initialize.json["result"] as? [String: Any])
+        let serverInfo = try #require(initializeResult["serverInfo"] as? [String: Any])
+        #expect(serverInfo["name"] as? String == "MacRemote")
+        #expect(serverInfo["title"] as? String == "MacRemote")
+        #expect(serverInfo["websiteUrl"] as? String == "http://127.0.0.1:\(port)")
+        #expect((serverInfo["description"] as? String) != nil)
+        let icons = try #require(serverInfo["icons"] as? [[String: Any]])
+        #expect(icons.count == 3)
+        let icon128 = try #require(icons.first)
+        #expect(icon128["src"] as? String == "http://127.0.0.1:\(port)/macremote-icon-128.png")
+        #expect(icon128["mimeType"] as? String == "image/png")
+        #expect(icon128["sizes"] as? [String] == ["128x128"])
+        #expect(icons[1]["src"] as? String == "http://127.0.0.1:\(port)/macremote-icon.png")
+        #expect(icons[1]["sizes"] as? [String] == ["512x512"])
+        let dataIcon = try #require(icons.last)
+        #expect((dataIcon["src"] as? String)?.hasPrefix("data:image/png;base64,") == true)
+        #expect(dataIcon["sizes"] as? [String] == ["64x64"])
 
         let toolsList = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -406,28 +432,28 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(toolsList.statusCode, 200)
-        let toolsResult = try XCTUnwrap(toolsList.json["result"] as? [String: Any])
-        let tools = try XCTUnwrap(toolsResult["tools"] as? [[String: Any]])
-        let listedTool = try XCTUnwrap(tools.first)
-        XCTAssertEqual(listedTool["name"] as? String, "test_echo")
-        XCTAssertEqual(listedTool["title"] as? String, "Echo")
-        let description = try XCTUnwrap(listedTool["description"] as? String)
-        XCTAssertTrue(description.contains("Echo a test value."))
-        XCTAssertTrue(description.contains("Only the documented schema parameters are accepted."))
-        XCTAssertTrue(description.contains("Read-only"))
-        XCTAssertNotNil(listedTool["outputSchema"] as? [String: Any])
-        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
-        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
-        let valueSchema = try XCTUnwrap(properties["value"] as? [String: Any])
-        XCTAssertEqual(valueSchema["title"] as? String, "Value")
-        XCTAssertEqual(valueSchema["description"] as? String, "Value")
-        XCTAssertEqual(valueSchema["maxLength"] as? Int, 64)
-        let annotations = try XCTUnwrap(listedTool["annotations"] as? [String: Any])
-        XCTAssertEqual(annotations["readOnlyHint"] as? Bool, true)
-        XCTAssertEqual(annotations["destructiveHint"] as? Bool, false)
-        XCTAssertEqual(annotations["idempotentHint"] as? Bool, true)
-        XCTAssertEqual(annotations["openWorldHint"] as? Bool, false)
+        #expect(toolsList.statusCode == 200)
+        let toolsResult = try #require(toolsList.json["result"] as? [String: Any])
+        let tools = try #require(toolsResult["tools"] as? [[String: Any]])
+        let listedTool = try #require(tools.first)
+        #expect(listedTool["name"] as? String == "test_echo")
+        #expect(listedTool["title"] as? String == "Echo")
+        let description = try #require(listedTool["description"] as? String)
+        #expect(description.contains("Echo a test value."))
+        #expect(description.contains("Only the documented schema parameters are accepted."))
+        #expect(description.contains("Read-only"))
+        #expect((listedTool["outputSchema"] as? [String: Any]) != nil)
+        let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
+        let properties = try #require(inputSchema["properties"] as? [String: Any])
+        let valueSchema = try #require(properties["value"] as? [String: Any])
+        #expect(valueSchema["title"] as? String == "Value")
+        #expect(valueSchema["description"] as? String == "Value")
+        #expect(valueSchema["maxLength"] as? Int == 64)
+        let annotations = try #require(listedTool["annotations"] as? [String: Any])
+        #expect(annotations["readOnlyHint"] as? Bool == true)
+        #expect(annotations["destructiveHint"] as? Bool == false)
+        #expect(annotations["idempotentHint"] as? Bool == true)
+        #expect(annotations["openWorldHint"] as? Bool == false)
 
         let toolCall = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -445,15 +471,15 @@ final class LocalMCPServerTests: XCTestCase {
                 ]
             ]
         )
-        XCTAssertEqual(toolCall.statusCode, 200)
-        let callResult = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
-        let structuredContent = try XCTUnwrap(callResult["structuredContent"] as? [String: Any])
-        XCTAssertEqual(structuredContent["toolID"] as? String, "test.echo")
-        XCTAssertEqual(structuredContent["stdout"] as? String, "echo:hello")
-        XCTAssertEqual(structuredContent["succeeded"] as? Bool, true)
-        let content = try XCTUnwrap(callResult["content"] as? [[String: Any]])
-        let text = try XCTUnwrap(content.first?["text"] as? String)
-        XCTAssertTrue(text.contains("\"stdout\":\"echo:hello\""))
+        #expect(toolCall.statusCode == 200)
+        let callResult = try #require(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try #require(callResult["structuredContent"] as? [String: Any])
+        #expect(structuredContent["toolID"] as? String == "test.echo")
+        #expect(structuredContent["stdout"] as? String == "echo:hello")
+        #expect(structuredContent["succeeded"] as? Bool == true)
+        let content = try #require(callResult["content"] as? [[String: Any]])
+        let text = try #require(content.first?["text"] as? String)
+        #expect(text.contains("\"stdout\":\"echo:hello\""))
 
         let legacyMCPPath = try await postJSON(
             url: base.appendingPathComponent("mcp"),
@@ -464,10 +490,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(legacyMCPPath.statusCode, 200)
+        #expect(legacyMCPPath.statusCode == 200)
     }
 
-    func testTokenEndpointAcceptsPublicClientCodeExchangeWithoutRepeatedRedirectURI() async throws {
+    @Test func tokenEndpointAcceptsPublicClientCodeExchangeWithoutRepeatedRedirectURI() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -503,8 +529,8 @@ final class LocalMCPServerTests: XCTestCase {
                 "scope": "mcp:tools"
             ]
         )
-        XCTAssertEqual(registered.statusCode, 201)
-        let clientID = try XCTUnwrap(registered.json["client_id"] as? String)
+        #expect(registered.statusCode == 201)
+        let clientID = try #require(registered.json["client_id"] as? String)
 
         var authorize = URLComponents(url: base.appendingPathComponent("authorize"), resolvingAgainstBaseURL: false)!
         authorize.queryItems = [
@@ -516,17 +542,17 @@ final class LocalMCPServerTests: XCTestCase {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "resource", value: "\(resource)/")
         ]
-        let authorizationPage = try await get(url: try XCTUnwrap(authorize.url))
-        XCTAssertEqual(authorizationPage.statusCode, 200)
+        let authorizationPage = try await get(url: try #require(authorize.url))
+        #expect(authorizationPage.statusCode == 200)
 
-        let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
-        XCTAssertTrue(server.approveAuthorizationRequest(id: requestID))
+        let requestID = try #require(coordinator.approvalSnapshot().first?.id)
+        #expect(server.approveAuthorizationRequest(id: requestID))
 
         var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
         statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
-        let status = try await getJSON(url: try XCTUnwrap(statusURL.url))
-        let redirectURI = try XCTUnwrap(status.json["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let status = try await getJSON(url: try #require(statusURL.url))
+        let redirectURI = try #require(status.json["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
         let token = try await postForm(
             url: base.appendingPathComponent("token"),
@@ -538,10 +564,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "resource": "\(resource)/"
             ]
         )
-        XCTAssertEqual(token.statusCode, 200)
-        XCTAssertEqual(token.json["resource"] as? String, resource)
+        #expect(token.statusCode == 200)
+        #expect(token.json["resource"] as? String == resource)
 
-        let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
+        let accessToken = try #require(token.json["access_token"] as? String)
         let toolsList = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
             bearerToken: accessToken,
@@ -552,10 +578,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(toolsList.statusCode, 200)
+        #expect(toolsList.statusCode == 200)
     }
 
-    func testConfidentialOAuthFlowAcceptsClientSecretBasic() async throws {
+    @Test func confidentialOAuthFlowAcceptsClientSecretBasic() async throws {
         let credentials = OAuthConfidentialClientCredentials(
             clientID: "macremote-oauth-confidential",
             clientSecret: "correct-secret"
@@ -601,17 +627,17 @@ final class LocalMCPServerTests: XCTestCase {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "resource", value: resource)
         ]
-        let authorizationPage = try await get(url: try XCTUnwrap(authorize.url))
-        XCTAssertEqual(authorizationPage.statusCode, 200)
+        let authorizationPage = try await get(url: try #require(authorize.url))
+        #expect(authorizationPage.statusCode == 200)
 
-        let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
-        XCTAssertTrue(server.approveAuthorizationRequest(id: requestID))
+        let requestID = try #require(coordinator.approvalSnapshot().first?.id)
+        #expect(server.approveAuthorizationRequest(id: requestID))
 
         var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
         statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
-        let status = try await getJSON(url: try XCTUnwrap(statusURL.url))
-        let redirect = try XCTUnwrap(status.json["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let status = try await getJSON(url: try #require(statusURL.url))
+        let redirect = try #require(status.json["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
         let missingSecret = try await postForm(
             url: base.appendingPathComponent("token"),
@@ -624,8 +650,8 @@ final class LocalMCPServerTests: XCTestCase {
                 "resource": resource
             ]
         )
-        XCTAssertEqual(missingSecret.statusCode, 401)
-        XCTAssertEqual(missingSecret.json["error"] as? String, "invalid_client")
+        #expect(missingSecret.statusCode == 401)
+        #expect(missingSecret.json["error"] as? String == "invalid_client")
 
         let token = try await postForm(
             url: base.appendingPathComponent("token"),
@@ -643,10 +669,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "resource": resource
             ]
         )
-        XCTAssertEqual(token.statusCode, 200)
-        let accessToken = try XCTUnwrap(token.json["access_token"] as? String)
-        let refreshToken = try XCTUnwrap(token.json["refresh_token"] as? String)
-        XCTAssertEqual(coordinator.connectedClientSnapshot().first?.redirectURIs, [redirectURI])
+        #expect(token.statusCode == 200)
+        let accessToken = try #require(token.json["access_token"] as? String)
+        let refreshToken = try #require(token.json["refresh_token"] as? String)
+        #expect(coordinator.connectedClientSnapshot().first?.redirectURIs == [redirectURI])
 
         let refreshWithoutSecret = try await postForm(
             url: base.appendingPathComponent("token"),
@@ -656,8 +682,8 @@ final class LocalMCPServerTests: XCTestCase {
                 "resource": resource
             ]
         )
-        XCTAssertEqual(refreshWithoutSecret.statusCode, 401)
-        XCTAssertEqual(refreshWithoutSecret.json["error"] as? String, "invalid_client")
+        #expect(refreshWithoutSecret.statusCode == 401)
+        #expect(refreshWithoutSecret.json["error"] as? String == "invalid_client")
 
         let toolsList = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -669,10 +695,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(toolsList.statusCode, 200)
+        #expect(toolsList.statusCode == 200)
     }
 
-    func testDottedToolNamesRemainCallableForExistingClients() async throws {
+    @Test func dottedToolNamesRemainCallableForExistingClients() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -723,14 +749,14 @@ final class LocalMCPServerTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(toolCall.statusCode, 200)
-        let callResult = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
-        let structuredContent = try XCTUnwrap(callResult["structuredContent"] as? [String: Any])
-        XCTAssertEqual(structuredContent["toolID"] as? String, "test.echo")
-        XCTAssertEqual(structuredContent["stdout"] as? String, "echo:legacy")
+        #expect(toolCall.statusCode == 200)
+        let callResult = try #require(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try #require(callResult["structuredContent"] as? [String: Any])
+        #expect(structuredContent["toolID"] as? String == "test.echo")
+        #expect(structuredContent["stdout"] as? String == "echo:legacy")
     }
 
-    func testPublicForwardedMCPAliasRequiresBearerAndUsesSameGrant() async throws {
+    @Test func publicForwardedMCPAliasRequiresBearerAndUsesSameGrant() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -769,11 +795,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(unauthenticatedPublicAlias.statusCode, 401)
-        XCTAssertTrue(
+        #expect(unauthenticatedPublicAlias.statusCode == 401)
+        #expect(
             headerValue(unauthenticatedPublicAlias.headers, named: "WWW-Authenticate")?
-                .contains("resource_metadata=\"https://macremote-test.trycloudflare.com/.well-known/oauth-protected-resource/mcp\"") == true
-        )
+                .contains("resource_metadata=\"https://macremote-test.trycloudflare.com/.well-known/oauth-protected-resource/mcp\"") == true)
 
         let accessToken = try await authorizedAccessToken(
             base: base,
@@ -793,7 +818,7 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(lowercaseBearer.statusCode, 200)
+        #expect(lowercaseBearer.statusCode == 200)
 
         let authenticatedPublicAlias = try await postJSON(
             url: base.appendingPathComponent("mcp"),
@@ -805,7 +830,7 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(authenticatedPublicAlias.statusCode, 200)
+        #expect(authenticatedPublicAlias.statusCode == 200)
 
         let instancePublicPath = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -817,10 +842,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(instancePublicPath.statusCode, 200)
+        #expect(instancePublicPath.statusCode == 200)
     }
 
-    func testPublicHostCannotBeDowngradedBySpoofedForwardedHeaders() async throws {
+    @Test func publicHostCannotBeDowngradedBySpoofedForwardedHeaders() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -852,15 +877,15 @@ final class LocalMCPServerTests: XCTestCase {
         try await waitForServerReady(base: base)
 
         let publicHealth = try await getJSON(url: base.appendingPathComponent("health"), headers: spoofedHeaders)
-        XCTAssertEqual(publicHealth.json["public_metadata"] as? Bool, true)
-        XCTAssertNil(publicHealth.json["instance_id"])
-        XCTAssertNil(publicHealth.json["tool_count"])
+        #expect(publicHealth.json["public_metadata"] as? Bool == true)
+        #expect(publicHealth.json["instance_id"] == nil)
+        #expect(publicHealth.json["tool_count"] == nil)
 
         let authorizationServer = try await getJSON(
             url: base.appendingPathComponent(".well-known/oauth-authorization-server"),
             headers: spoofedHeaders
         )
-        XCTAssertEqual(authorizationServer.json["issuer"] as? String, "https://macremote-test.trycloudflare.com")
+        #expect(authorizationServer.json["issuer"] as? String == "https://macremote-test.trycloudflare.com")
 
         let legacyPublicPath = try await postJSON(
             url: base.appendingPathComponent("mcp"),
@@ -871,10 +896,10 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "ping"
             ]
         )
-        XCTAssertEqual(legacyPublicPath.statusCode, 401)
+        #expect(legacyPublicPath.statusCode == 401)
     }
 
-    func testForwardedIssuerBindsBearerTokenToOrigin() async throws {
+    @Test func forwardedIssuerBindsBearerTokenToOrigin() async throws {
         let coordinator = OAuthCoordinator()
         let server = LocalMCPServer(
             instanceID: "test-instance",
@@ -926,7 +951,7 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(authorized.statusCode, 200)
+        #expect(authorized.statusCode == 200)
 
         let replayed = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -938,13 +963,12 @@ final class LocalMCPServerTests: XCTestCase {
                 "method": "tools/list"
             ]
         )
-        XCTAssertEqual(replayed.statusCode, 401)
+        #expect(replayed.statusCode == 401)
     }
 
-    func testMCPRunsInstalledPocketCTLReadOnlyCommand() async throws {
-        guard let pocketCTLPath = DefaultToolPresetCatalog.pocketCTLExecutablePath else {
-            throw XCTSkip("PocketCTL is not installed on this Mac.")
-        }
+    @Test(.enabled(if: DefaultToolPresetCatalog.pocketCTLExecutablePath != nil, "PocketCTL is not installed on this Mac."))
+    func mcpRunsInstalledPocketCTLReadOnlyCommand() async throws {
+        let pocketCTLPath = try #require(DefaultToolPresetCatalog.pocketCTLExecutablePath)
 
         let tool = ToolDefinition(
             id: "pocketctl.whoami",
@@ -978,8 +1002,8 @@ final class LocalMCPServerTests: XCTestCase {
         let base = URL(string: "http://127.0.0.1:\(port)")!
         try await waitForServerReady(base: base)
         let health = try await getJSON(url: base.appendingPathComponent("health"))
-        XCTAssertEqual(health.json["tool_profile"] as? String, "pocketctl-cli")
-        XCTAssertEqual(health.json["tool_count"] as? Int, 1)
+        #expect(health.json["tool_profile"] as? String == "pocketctl-cli")
+        #expect(health.json["tool_count"] as? Int == 1)
 
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
@@ -997,18 +1021,18 @@ final class LocalMCPServerTests: XCTestCase {
                 ]
             ]
         )
-        XCTAssertEqual(toolCall.statusCode, 200)
+        #expect(toolCall.statusCode == 200)
 
-        let callResult = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
-        let structuredContent = try XCTUnwrap(callResult["structuredContent"] as? [String: Any])
-        XCTAssertEqual(structuredContent["succeeded"] as? Bool, true)
-        XCTAssertEqual(structuredContent["exitCode"] as? Int, 0)
-        let stdout = try XCTUnwrap(structuredContent["stdout"] as? String)
-        XCTAssertTrue(stdout.contains("\"email\""))
-        XCTAssertTrue(stdout.contains("\"user_uuid\""))
+        let callResult = try #require(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try #require(callResult["structuredContent"] as? [String: Any])
+        #expect(structuredContent["succeeded"] as? Bool == true)
+        #expect(structuredContent["exitCode"] as? Int == 0)
+        let stdout = try #require(structuredContent["stdout"] as? String)
+        #expect(stdout.contains("\"email\""))
+        #expect(stdout.contains("\"user_uuid\""))
     }
 
-    func testGenericCLIAdapterDescriptionExplainsDirectArgvSemantics() async throws {
+    @Test func genericCLIAdapterDescriptionExplainsDirectArgvSemantics() async throws {
         let coordinator = OAuthCoordinator()
         let tool = ToolDefinition(
             id: "test.codex",
@@ -1049,24 +1073,24 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
-        let listedTool = try XCTUnwrap(tools.first)
-        let description = try XCTUnwrap(listedTool["description"] as? String)
-        XCTAssertTrue(description.contains("without a shell"))
-        XCTAssertTrue(description.contains("do not use `~`"))
-        XCTAssertTrue(description.contains("global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`"))
-        XCTAssertTrue(description.contains("May require macOS privacy permission for Screen Recording, Accessibility"))
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+        #expect(description.contains("without a shell"))
+        #expect(description.contains("do not use `~`"))
+        #expect(description.contains("global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`"))
+        #expect(description.contains("May require macOS privacy permission for Screen Recording, Accessibility"))
 
-        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
-        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
-        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
-        XCTAssertTrue((argsSchema["description"] as? String)?.contains("No shell is used") == true)
+        let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
+        let properties = try #require(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try #require(properties["args"] as? [String: Any])
+        #expect((argsSchema["description"] as? String)?.contains("No shell is used") == true)
 
-        let annotations = try XCTUnwrap(listedTool["annotations"] as? [String: Any])
-        XCTAssertEqual(annotations["openWorldHint"] as? Bool, true)
-        XCTAssertEqual(annotations["idempotentHint"] as? Bool, false)
+        let annotations = try #require(listedTool["annotations"] as? [String: Any])
+        #expect(annotations["openWorldHint"] as? Bool == true)
+        #expect(annotations["idempotentHint"] as? Bool == false)
     }
 
-    func testClaudeCLIAdapterDescriptionExplainsMCPFriendlyInvocation() async throws {
+    @Test func claudeCLIAdapterDescriptionExplainsMCPFriendlyInvocation() async throws {
         let coordinator = OAuthCoordinator()
         let tool = ToolDefinition(
             id: "test.claude",
@@ -1106,16 +1130,78 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
-        let listedTool = try XCTUnwrap(tools.first)
-        let description = try XCTUnwrap(listedTool["description"] as? String)
-        XCTAssertTrue(description.contains("non-interactive MCP-safe calls"))
-        XCTAssertTrue(description.contains("`--print`"))
-        XCTAssertTrue(description.contains("`--output-format text`, `json`, or `stream-json`"))
-        XCTAssertTrue(description.contains("`--mcp-config`"))
-        XCTAssertTrue(description.contains("Avoid bare interactive sessions"))
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+        #expect(description.contains("non-interactive MCP-safe calls"))
+        #expect(description.contains("`--print`"))
+        #expect(description.contains("`--output-format text`, `json`, or `stream-json`"))
+        #expect(description.contains("`--mcp-config`"))
+        #expect(description.contains("Avoid bare interactive sessions"))
     }
 
-    func testRemCTLCLIAdapterDescriptionExplainsNumericIDsAndPrivateFlag() async throws {
+    // DL-10/R10 snapshot: a harvested publisher summary composes LAST, quoted and
+    // provenance-labeled, after every piece of MacRemote's product-authored text.
+    @Test func harvestedSummaryComposesLastWithProvenanceFrame() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = makeScannedAdapterTool(
+            summary: "Search tool like grep and The Silver Searcher",
+            summaryIsHarvested: true,
+            summaryOrigin: "Homebrew"
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+
+        #expect(description == [
+            "Pass exact argv items as the `args` array; optional `stdin` is sent to standard input.",
+            "MacRemote launches the executable directly without a shell: do not use `~`, `$HOME`, pipes, redirection, globs, command substitution, or environment assignments. Use absolute paths and separate every flag/value into its own argv item.",
+            "Destructive or broad CLI access: requires host approval before execution.",
+            "Publisher's description (Homebrew, unverified): \"Search tool like grep and The Silver Searcher\""
+        ].joined(separator: " "))
+    }
+
+    @Test func userEditedSummaryComposesFirstWithoutFrame() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = makeScannedAdapterTool(
+            summary: "My own words about ripgrep.",
+            summaryIsHarvested: false,
+            summaryOrigin: nil
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+
+        #expect(description.hasPrefix("My own words about ripgrep. Pass exact argv items"))
+        #expect(!description.contains("Publisher's description"))
+    }
+
+    @Test func remCTLCLIAdapterDescriptionExplainsNumericIDsAndPrivateFlag() async throws {
         let coordinator = OAuthCoordinator()
         let tool = ToolDefinition(
             id: "test.remctl",
@@ -1149,28 +1235,28 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
-        let listedTool = try XCTUnwrap(tools.first)
-        let description = try XCTUnwrap(listedTool["description"] as? String)
-        XCTAssertTrue(description.contains("numeric `id` field"))
-        XCTAssertTrue(description.contains("do not pass the UUID embedded in `deepLink`"))
-        XCTAssertTrue(description.contains("synced rich URL attachments"))
-        XCTAssertTrue(description.contains("tag add/replace/remove"))
-        XCTAssertTrue(description.contains("list groups, smart lists, and templates"))
-        XCTAssertTrue(description.contains("Do not use `--private` for normal due dates, recurrence, or EventKit alarms"))
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+        #expect(description.contains("numeric `id` field"))
+        #expect(description.contains("do not pass the UUID embedded in `deepLink`"))
+        #expect(description.contains("synced rich URL attachments"))
+        #expect(description.contains("tag add/replace/remove"))
+        #expect(description.contains("list groups, smart lists, and templates"))
+        #expect(description.contains("Do not use `--private` for normal due dates, recurrence, or EventKit alarms"))
 
-        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
-        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
-        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
-        let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
-        XCTAssertTrue(argsDescription.contains("Use numeric reminder IDs"))
-        XCTAssertTrue(argsDescription.contains("Use `--private --url`"))
-        XCTAssertTrue(argsDescription.contains("edit --private --set-tags"))
-        XCTAssertTrue(argsDescription.contains("add --private -f"))
-        XCTAssertTrue(argsDescription.contains("section, list, group, smart-list, and template commands"))
-        XCTAssertTrue(argsDescription.contains("ordinary due dates, recurrence, and EventKit alarms do not"))
+        let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
+        let properties = try #require(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try #require(properties["args"] as? [String: Any])
+        let argsDescription = try #require(argsSchema["description"] as? String)
+        #expect(argsDescription.contains("Use numeric reminder IDs"))
+        #expect(argsDescription.contains("Use `--private --url`"))
+        #expect(argsDescription.contains("edit --private --set-tags"))
+        #expect(argsDescription.contains("add --private -f"))
+        #expect(argsDescription.contains("section, list, group, smart-list, and template commands"))
+        #expect(argsDescription.contains("ordinary due dates, recurrence, and EventKit alarms do not"))
     }
 
-    func testPocketCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {
+    @Test func pocketCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {
         let coordinator = OAuthCoordinator()
         let tool = ToolDefinition(
             id: "test.pocketctl",
@@ -1205,20 +1291,20 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
-        let listedTool = try XCTUnwrap(tools.first)
-        let description = try XCTUnwrap(listedTool["description"] as? String)
-        XCTAssertTrue(description.contains("For PocketCTL, prefer `--json`"))
-        XCTAssertTrue(description.contains("`--dry-run --json`"))
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+        #expect(description.contains("For PocketCTL, prefer `--json`"))
+        #expect(description.contains("`--dry-run --json`"))
 
-        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
-        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
-        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
-        let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
-        XCTAssertTrue(argsDescription.contains("Exact PocketCTL argv items"))
-        XCTAssertTrue(argsDescription.contains("played-state writes"))
+        let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
+        let properties = try #require(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try #require(properties["args"] as? [String: Any])
+        let argsDescription = try #require(argsSchema["description"] as? String)
+        #expect(argsDescription.contains("Exact PocketCTL argv items"))
+        #expect(argsDescription.contains("played-state writes"))
     }
 
-    func testHabitCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {
+    @Test func habitCTLCLIAdapterDescriptionExplainsJSONAndDryRun() async throws {
         let coordinator = OAuthCoordinator()
         let tool = ToolDefinition(
             id: "test.habitctl",
@@ -1253,20 +1339,20 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
-        let listedTool = try XCTUnwrap(tools.first)
-        let description = try XCTUnwrap(listedTool["description"] as? String)
-        XCTAssertTrue(description.contains("For HabitCTL, prefer `--json`"))
-        XCTAssertTrue(description.contains("checking, logging, archiving"))
+        let listedTool = try #require(tools.first)
+        let description = try #require(listedTool["description"] as? String)
+        #expect(description.contains("For HabitCTL, prefer `--json`"))
+        #expect(description.contains("checking, logging, archiving"))
 
-        let inputSchema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
-        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
-        let argsSchema = try XCTUnwrap(properties["args"] as? [String: Any])
-        let argsDescription = try XCTUnwrap(argsSchema["description"] as? String)
-        XCTAssertTrue(argsDescription.contains("Exact HabitCTL argv items"))
-        XCTAssertTrue(argsDescription.contains("note writes"))
+        let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
+        let properties = try #require(inputSchema["properties"] as? [String: Any])
+        let argsSchema = try #require(properties["args"] as? [String: Any])
+        let argsDescription = try #require(argsSchema["description"] as? String)
+        #expect(argsDescription.contains("Exact HabitCTL argv items"))
+        #expect(argsDescription.contains("note writes"))
     }
 
-    func testDestructiveMCPToolCallRequiresHostApproval() async throws {
+    @Test func destructiveMCPToolCallRequiresHostApproval() async throws {
         let coordinator = OAuthCoordinator()
         let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 5)
         let server = LocalMCPServer(
@@ -1329,20 +1415,20 @@ final class LocalMCPServerTests: XCTestCase {
         }
 
         let approval = try await waitForPendingToolApproval(in: toolApprovals)
-        XCTAssertEqual(approval.toolID, "test.remctl.run")
-        XCTAssertEqual(approval.clientName, "HTTP Test")
-        XCTAssertTrue(approval.argumentsPreview.contains("args=add Test -l Work"))
-        XCTAssertTrue(toolApprovals.deny(requestID: approval.id))
+        #expect(approval.toolID == "test.remctl.run")
+        #expect(approval.clientName == "HTTP Test")
+        #expect(approval.argumentsPreview.contains("args=add Test -l Work"))
+        #expect(toolApprovals.deny(requestID: approval.id))
 
         let deniedCall = try await callTask.value
-        XCTAssertEqual(deniedCall.statusCode, 200)
-        XCTAssertEqual(deniedCall.isError, true)
-        XCTAssertEqual(deniedCall.stderr, "Tool call was not approved on the host Mac.")
+        #expect(deniedCall.statusCode == 200)
+        #expect(deniedCall.isError == true)
+        #expect(deniedCall.stderr == "Tool call was not approved on the host Mac.")
     }
 
-    func testClientToolPermissionSkipsHostApprovalForDestructiveTool() async throws {
+    @Test func clientToolPermissionSkipsHostApprovalForDestructiveTool() async throws {
         let defaultsSuite = "MacRemoteTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
 
         let coordinator = OAuthCoordinator()
@@ -1380,7 +1466,7 @@ final class LocalMCPServerTests: XCTestCase {
         let base = URL(string: "http://127.0.0.1:\(port)")!
         try await waitForServerReady(base: base)
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
-        let client = try XCTUnwrap(coordinator.connectedClientSnapshot().first)
+        let client = try #require(coordinator.connectedClientSnapshot().first)
         _ = permissions.setAllowed(true, clientID: client.id, toolID: tool.id)
 
         let toolCall = try await postJSON(
@@ -1399,13 +1485,13 @@ final class LocalMCPServerTests: XCTestCase {
                 ]
             ]
         )
-        XCTAssertEqual(toolCall.statusCode, 200)
-        let result = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
-        XCTAssertEqual(result["isError"] as? Bool, false)
-        XCTAssertTrue(toolApprovals.approvalSnapshot().isEmpty)
+        #expect(toolCall.statusCode == 200)
+        let result = try #require(toolCall.json["result"] as? [String: Any])
+        #expect(result["isError"] as? Bool == false)
+        #expect(toolApprovals.approvalSnapshot().isEmpty)
     }
 
-    func testToolsListReflectsRuntimeUpdatesWithoutRestart() async throws {
+    @Test func toolsListReflectsRuntimeUpdatesWithoutRestart() async throws {
         let coordinator = OAuthCoordinator()
         let firstTool = ToolDefinition(
             id: "test.first",
@@ -1449,17 +1535,17 @@ final class LocalMCPServerTests: XCTestCase {
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
 
         let initialList = try await toolsList(base: base, accessToken: accessToken)
-        XCTAssertEqual(initialList.map { $0["name"] as? String }, ["test_first"])
+        #expect(initialList.map { $0["name"] as? String } == ["test_first"])
 
         runtime.update(tools: [firstTool, secondTool])
         let updatedList = try await toolsList(base: base, accessToken: accessToken)
-        XCTAssertEqual(
-            Set(updatedList.compactMap { $0["name"] as? String }),
+        #expect(
+            Set(updatedList.compactMap { $0["name"] as? String }) ==
             Set(["test_first", "test_second"])
         )
     }
 
-    func testMCPToolNamesAreClaudeCompatible() async throws {
+    @Test func mcpToolNamesAreClaudeCompatible() async throws {
         let coordinator = OAuthCoordinator()
         let tools = [
             ToolDefinition(
@@ -1533,19 +1619,19 @@ final class LocalMCPServerTests: XCTestCase {
 
         let listedTools = try await toolsList(base: base, accessToken: accessToken)
         let names = listedTools.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names.count, tools.count)
-        XCTAssertTrue(names.contains("preset_filesystem_list_directory"))
-        XCTAssertTrue(names.contains("custom_31a0edd6b19a5788"))
-        XCTAssertTrue(names.contains("same_name"))
-        XCTAssertEqual(Set(names).count, names.count)
+        #expect(names.count == tools.count)
+        #expect(names.contains("preset_filesystem_list_directory"))
+        #expect(names.contains("custom_31a0edd6b19a5788"))
+        #expect(names.contains("same_name"))
+        #expect(Set(names).count == names.count)
 
         for name in names {
-            XCTAssertLessThanOrEqual(name.count, 64)
-            XCTAssertNotNil(name.range(of: #"^[a-zA-Z0-9_-]{1,64}$"#, options: .regularExpression))
+            #expect(name.count <= 64)
+            #expect(name.range(of: #"^[a-zA-Z0-9_-]{1,64}$"#, options: .regularExpression) != nil)
         }
     }
 
-    func testMCPBridgeToolExposesUpstreamSchemaAndForwardsJSONArguments() async throws {
+    @Test func mcpBridgeToolExposesUpstreamSchemaAndForwardsJSONArguments() async throws {
         let bridgeTool = ToolDefinition(
             id: "mcp.paste.search",
             name: "Paste Search",
@@ -1599,24 +1685,24 @@ final class LocalMCPServerTests: XCTestCase {
         try await waitForServerReady(base: base)
 
         let health = try await getJSON(url: base.appendingPathComponent("health"))
-        XCTAssertEqual(health.json["tool_profile"] as? String, "mcp-bridge")
+        #expect(health.json["tool_profile"] as? String == "mcp-bridge")
 
         let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
         let listedTools = try await toolsList(base: base, accessToken: accessToken)
-        let listedTool = try XCTUnwrap(listedTools.first)
-        let toolName = try XCTUnwrap(listedTool["name"] as? String)
-        XCTAssertEqual(listedTool["title"] as? String, "Paste Search")
+        let listedTool = try #require(listedTools.first)
+        let toolName = try #require(listedTool["name"] as? String)
+        #expect(listedTool["title"] as? String == "Paste Search")
 
-        let schema = try XCTUnwrap(listedTool["inputSchema"] as? [String: Any])
-        XCTAssertEqual(schema["type"] as? String, "object")
-        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-        XCTAssertNotNil(properties["payload"] as? [String: Any])
+        let schema = try #require(listedTool["inputSchema"] as? [String: Any])
+        #expect(schema["type"] as? String == "object")
+        let properties = try #require(schema["properties"] as? [String: Any])
+        #expect((properties["payload"] as? [String: Any]) != nil)
 
-        let annotations = try XCTUnwrap(listedTool["annotations"] as? [String: Any])
-        XCTAssertEqual(annotations["title"] as? String, "Paste Search")
-        XCTAssertEqual(annotations["readOnlyHint"] as? Bool, true)
-        XCTAssertEqual(annotations["destructiveHint"] as? Bool, false)
-        XCTAssertEqual(annotations["openWorldHint"] as? Bool, false)
+        let annotations = try #require(listedTool["annotations"] as? [String: Any])
+        #expect(annotations["title"] as? String == "Paste Search")
+        #expect(annotations["readOnlyHint"] as? Bool == true)
+        #expect(annotations["destructiveHint"] as? Bool == false)
+        #expect(annotations["openWorldHint"] as? Bool == false)
 
         let toolCall = try await postJSON(
             url: base.appendingPathComponent("mcp/test-instance"),
@@ -1638,16 +1724,50 @@ final class LocalMCPServerTests: XCTestCase {
                 ]
             ]
         )
-        XCTAssertEqual(toolCall.statusCode, 200)
-        let result = try XCTUnwrap(toolCall.json["result"] as? [String: Any])
-        let structuredContent = try XCTUnwrap(result["structuredContent"] as? [String: Any])
-        let stdout = try XCTUnwrap(structuredContent["stdout"] as? String)
-        let echoedPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
+        #expect(toolCall.statusCode == 200)
+        let result = try #require(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try #require(result["structuredContent"] as? [String: Any])
+        let stdout = try #require(structuredContent["stdout"] as? String)
+        let echoedPayload = try #require(JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
 
-        XCTAssertEqual(echoedPayload["query"] as? String, "clip")
-        XCTAssertEqual(echoedPayload["count"] as? Int, 2)
-        XCTAssertEqual((echoedPayload["nested"] as? [String: Any])?["enabled"] as? Bool, true)
+        #expect(echoedPayload["query"] as? String == "clip")
+        #expect(echoedPayload["count"] as? Int == 2)
+        #expect((echoedPayload["nested"] as? [String: Any])?["enabled"] as? Bool == true)
     }
+}
+
+private func makeScannedAdapterTool(
+    summary: String,
+    summaryIsHarvested: Bool,
+    summaryOrigin: String?
+) -> ToolDefinition {
+    ToolDefinition(
+        id: "scan.homebrewFormula.rg",
+        name: "rg",
+        summary: summary,
+        executablePath: "/opt/homebrew/bin/rg",
+        argumentPattern: ["{args}"],
+        parameters: [
+            ToolParameter(name: "args", title: "Arguments", kind: .stringArray, required: false),
+            ToolParameter(name: "stdin", title: "Standard Input", kind: .string, required: false)
+        ],
+        capability: .destructive,
+        timeoutSeconds: 60,
+        outputByteLimit: 2048 * 1024,
+        origin: .userDefined,
+        provenance: ToolProvenance(
+            sourceKind: .homebrewFormula,
+            packageName: "ripgrep",
+            packageVersion: "14.1.0",
+            addedDate: Date(timeIntervalSince1970: 1_780_000_000),
+            resolvedPathAtAdd: "/opt/homebrew/Cellar/ripgrep/14.1.0/bin/rg",
+            signingIdentityAtAdd: "ad-hoc",
+            contentSHA256AtAdd: "abc123",
+            wasQuarantinedAtAdd: false,
+            summaryIsHarvested: summaryIsHarvested,
+            summaryOrigin: summaryOrigin
+        )
+    )
 }
 
 private struct FakeToolExecutor: ToolExecuting {
@@ -1694,9 +1814,9 @@ private func toolsList(base: URL, accessToken: String) async throws -> [[String:
             "method": "tools/list"
         ]
     )
-    XCTAssertEqual(response.statusCode, 200)
-    let result = try XCTUnwrap(response.json["result"] as? [String: Any])
-    return try XCTUnwrap(result["tools"] as? [[String: Any]])
+    #expect(response.statusCode == 200)
+    let result = try #require(response.json["result"] as? [String: Any])
+    return try #require(result["tools"] as? [[String: Any]])
 }
 
 private func authorizedAccessToken(
@@ -1716,8 +1836,8 @@ private func authorizedAccessToken(
             "scope": "mcp:tools"
         ]
     )
-    XCTAssertEqual(registered.statusCode, 201)
-    let clientID = try XCTUnwrap(registered.json["client_id"] as? String)
+    #expect(registered.statusCode == 201)
+    let clientID = try #require(registered.json["client_id"] as? String)
 
     var authorize = URLComponents(url: base.appendingPathComponent("authorize"), resolvingAgainstBaseURL: false)!
     authorize.queryItems = [
@@ -1730,17 +1850,17 @@ private func authorizedAccessToken(
         URLQueryItem(name: "code_challenge_method", value: "S256"),
         URLQueryItem(name: "resource", value: resource)
     ]
-    let authorizationPage = try await get(url: try XCTUnwrap(authorize.url), headers: headers)
-    XCTAssertEqual(authorizationPage.statusCode, 200)
+    let authorizationPage = try await get(url: try #require(authorize.url), headers: headers)
+    #expect(authorizationPage.statusCode == 200)
 
-    let requestID = try XCTUnwrap(coordinator.approvalSnapshot().first?.id)
-    XCTAssertTrue(server.approveAuthorizationRequest(id: requestID))
+    let requestID = try #require(coordinator.approvalSnapshot().first?.id)
+    #expect(server.approveAuthorizationRequest(id: requestID))
 
     var statusURL = URLComponents(url: base.appendingPathComponent("authorize/status"), resolvingAgainstBaseURL: false)!
     statusURL.queryItems = [URLQueryItem(name: "request_id", value: requestID.uuidString)]
-    let status = try await getJSON(url: try XCTUnwrap(statusURL.url), headers: headers)
-    let redirectURI = try XCTUnwrap(status.json["redirect_uri"] as? String)
-    let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+    let status = try await getJSON(url: try #require(statusURL.url), headers: headers)
+    let redirectURI = try #require(status.json["redirect_uri"] as? String)
+    let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
     let token = try await postForm(
         url: base.appendingPathComponent("token"),
@@ -1754,14 +1874,13 @@ private func authorizedAccessToken(
             "resource": resource
         ]
     )
-    XCTAssertEqual(token.statusCode, 200)
-    return try XCTUnwrap(token.json["access_token"] as? String)
+    #expect(token.statusCode == 200)
+    return try #require(token.json["access_token"] as? String)
 }
 
 private func waitForPendingToolApproval(
     in coordinator: ToolCallApprovalCoordinator,
-    file: StaticString = #filePath,
-    line: UInt = #line
+    sourceLocation: SourceLocation = #_sourceLocation
 ) async throws -> ToolCallApprovalRequest {
     for _ in 0..<50 {
         if let request = coordinator.approvalSnapshot().first(where: { $0.state == .pending }) {
@@ -1770,7 +1889,7 @@ private func waitForPendingToolApproval(
         try await Task.sleep(nanoseconds: 50_000_000)
     }
 
-    XCTFail("Timed out waiting for pending tool approval.", file: file, line: line)
+    Issue.record("Timed out waiting for pending tool approval.", sourceLocation: sourceLocation)
     throw NSError(domain: "MacRemoteTests", code: 1)
 }
 
@@ -1781,8 +1900,7 @@ private func get(url: URL, headers: [String: String] = [:]) async throws -> (sta
 
 private func waitForServerReady(
     base: URL,
-    file: StaticString = #filePath,
-    line: UInt = #line
+    sourceLocation: SourceLocation = #_sourceLocation
 ) async throws {
     let healthURL = base.appendingPathComponent("health")
     var lastError: Error?
@@ -1798,7 +1916,7 @@ private func waitForServerReady(
         try await Task.sleep(nanoseconds: 20_000_000)
     }
 
-    XCTFail("Timed out waiting for local MCP test server: \(lastError?.localizedDescription ?? "no response")", file: file, line: line)
+    Issue.record("Timed out waiting for local MCP test server: \(lastError?.localizedDescription ?? "no response")", sourceLocation: sourceLocation)
     throw NSError(domain: "MacRemoteTests", code: 2)
 }
 
@@ -1811,7 +1929,7 @@ private func getWithHeaders(
         request.setValue(value, forHTTPHeaderField: key)
     }
     let (data, response) = try await URLSession.shared.data(for: request)
-    let http = try XCTUnwrap(response as? HTTPURLResponse)
+    let http = try #require(response as? HTTPURLResponse)
     return (http.statusCode, data, http.allHeaderFields)
 }
 
@@ -1837,7 +1955,7 @@ private func postJSON(
     }
     request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
     let (data, response) = try await URLSession.shared.data(for: request)
-    let http = try XCTUnwrap(response as? HTTPURLResponse)
+    let http = try #require(response as? HTTPURLResponse)
     return (http.statusCode, (try? decodeJSON(data)) ?? [:], http.allHeaderFields)
 }
 
@@ -1859,12 +1977,12 @@ private func postForm(
         .joined(separator: "&")
         .data(using: .utf8)
     let (data, response) = try await URLSession.shared.data(for: request)
-    let http = try XCTUnwrap(response as? HTTPURLResponse)
+    let http = try #require(response as? HTTPURLResponse)
     return (http.statusCode, try decodeJSON(data))
 }
 
 private func decodeJSON(_ data: Data) throws -> [String: Any] {
-    try XCTUnwrap(JSONSerialization.jsonObject(with: data, options: []) as? [String: Any])
+    try #require(JSONSerialization.jsonObject(with: data, options: []) as? [String: Any])
 }
 
 private func percentEncode(_ value: String) -> String {

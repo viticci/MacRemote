@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 struct OAuthClientCredentials: Equatable, Sendable {
@@ -48,6 +49,12 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     private let userDefaults: UserDefaults
     private let service: String
     private let legacyAccount: String
+    /// The data-protection keychain (which honors LAContext for prompt-free
+    /// non-interactive reads) requires the app to be code-signed with an
+    /// application-identifier. The signed .app has it; an unsigned `swift test`
+    /// / `swift run` process does not and would get errSecMissingEntitlement, so
+    /// fall back to the file keychain there. Probed once per store.
+    private let usesDataProtectionKeychain: Bool
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -57,6 +64,27 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         self.userDefaults = userDefaults
         self.service = service
         self.legacyAccount = account
+        self.usesDataProtectionKeychain = Self.dataProtectionKeychainAvailable(service: service)
+    }
+
+    private static func dataProtectionKeychainAvailable(service: String) -> Bool {
+        // A read of an absent item returns errSecItemNotFound even when the
+        // process lacks the entitlement, so probe with a real add+delete — the
+        // same path that would otherwise fail with errSecMissingEntitlement.
+        let probe: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "\(service).__probe",
+            kSecAttrAccount as String: "__probe",
+            kSecValueData as String: Data("probe".utf8),
+            kSecUseDataProtectionKeychain as String: true
+        ]
+        SecItemDelete(probe as CFDictionary)
+        let addStatus = SecItemAdd(probe as CFDictionary, nil)
+        if addStatus == errSecSuccess {
+            SecItemDelete(probe as CFDictionary)
+            return true
+        }
+        return addStatus != errSecMissingEntitlement
     }
 
     func load() -> OAuthClientCredentials? {
@@ -64,33 +92,62 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     }
 
     func loadAll() -> [OAuthClientCredentials] {
-        if let metadata = loadMetadata() {
-            return metadata.compactMap { item in
-                guard !item.clientID.isEmpty,
-                      let clientSecret = try? readSecret(account: item.clientID),
-                      !clientSecret.isEmpty else {
-                    return nil
-                }
-                return OAuthClientCredentials(
-                    label: item.label,
-                    clientID: item.clientID,
-                    clientSecret: clientSecret,
-                    createdAt: item.createdAt
-                )
-            }
-        }
-
-        guard let legacy = loadLegacyCredential() else {
-            return []
-        }
-        return [legacy]
+        loadAllDetailed(interactive: true).credentials
     }
 
-    private func loadLegacyCredential() -> OAuthClientCredentials? {
+    /// Non-interactive loads never trigger the macOS Keychain password prompt:
+    /// after a re-sign/rebuild the item ACL no longer matches the binary, and a
+    /// startup-time prompt blocks the app before its first window (observed on
+    /// macOS 27). Locked entries are reported so the UI can offer a
+    /// user-initiated unlock instead.
+    func loadAllDetailed(interactive: Bool) -> (credentials: [OAuthClientCredentials], lockedClientIDs: [String]) {
+        var locked: [String] = []
+
+        if let metadata = loadMetadata() {
+            let credentials: [OAuthClientCredentials] = metadata.compactMap { item in
+                guard !item.clientID.isEmpty else { return nil }
+                do {
+                    let clientSecret = try readSecret(account: item.clientID, interactive: interactive)
+                    guard !clientSecret.isEmpty else { return nil }
+                    return OAuthClientCredentials(
+                        label: item.label,
+                        clientID: item.clientID,
+                        clientSecret: clientSecret,
+                        createdAt: item.createdAt
+                    )
+                } catch OAuthClientCredentialStoreError.keychain(let status)
+                    where status == errSecInteractionNotAllowed || status == errSecAuthFailed {
+                    locked.append(item.clientID)
+                    return nil
+                } catch {
+                    return nil
+                }
+            }
+            return (credentials, locked)
+        }
+
+        guard let legacy = loadLegacyCredential(interactive: interactive, lockedClientIDs: &locked) else {
+            return ([], locked)
+        }
+        return ([legacy], locked)
+    }
+
+    private func loadLegacyCredential(interactive: Bool, lockedClientIDs: inout [String]) -> OAuthClientCredentials? {
         guard let clientID = userDefaults.string(forKey: Self.clientIDKey),
-              !clientID.isEmpty,
-              let clientSecret = try? readSecret(account: legacyAccount),
-              !clientSecret.isEmpty else {
+              !clientID.isEmpty else {
+            return nil
+        }
+        let clientSecret: String
+        do {
+            clientSecret = try readSecret(account: legacyAccount, interactive: interactive)
+        } catch OAuthClientCredentialStoreError.keychain(let status)
+            where status == errSecInteractionNotAllowed || status == errSecAuthFailed {
+            lockedClientIDs.append(clientID)
+            return nil
+        } catch {
+            return nil
+        }
+        guard !clientSecret.isEmpty else {
             return nil
         }
         let createdAtTimestamp = userDefaults.double(forKey: Self.createdAtKey)
@@ -178,11 +235,33 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         userDefaults.removeObject(forKey: Self.credentialsMetadataKey)
     }
 
-    private func readSecret(account: String) throws -> String {
+    private func readSecret(account: String, interactive: Bool = true) throws -> String {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        guard !interactive else {
+            return try copyMatchingSecret(query)
+        }
 
+        // Non-interactive reads must never block launch on a SecurityAgent
+        // password prompt (observed after re-signed rebuilds on macOS 27).
+        // Data-protection keychain honors LAContext.interactionNotAllowed; the
+        // legacy file keychain (where a dev-signed app without the
+        // application-identifier entitlement stores items) ignores it and needs
+        // the process-wide interaction gate instead. Locked entries surface in
+        // Settings › Security for a user-initiated unlock.
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
+        if usesDataProtectionKeychain {
+            return try copyMatchingSecret(query)
+        }
+        return try legacyKeychainGate.withInteractionDisabled {
+            try copyMatchingSecret(query)
+        }
+    }
+
+    private func copyMatchingSecret(_ query: [String: Any]) throws -> String {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess else {
@@ -225,11 +304,17 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     }
 
     private func baseQuery(account: String) -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+        // Modern keychain (signed app): honors LAContext for non-interactive
+        // reads and avoids the legacy login-keychain ACL password prompt.
+        if usesDataProtectionKeychain {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
     }
 
     private func loadMetadata() -> [Metadata]? {
@@ -281,3 +366,26 @@ private extension Data {
             .replacingOccurrences(of: "=", with: "")
     }
 }
+
+// The SecKeychain* interaction gate is the only way to suppress the
+// SecurityAgent prompt for file-based keychain items. The APIs are deprecated;
+// the protocol indirection scopes that deprecation to the one implementation
+// method (deprecated contexts don't re-warn) while call sites stay warning-free.
+private protocol LegacyKeychainInteractionGating: Sendable {
+    func withInteractionDisabled<T>(_ body: () throws -> T) rethrows -> T
+}
+
+private struct LegacyKeychainInteractionGate: LegacyKeychainInteractionGating {
+    @available(macOS, deprecated: 12.0, message: "file-keychain-only escape hatch")
+    func withInteractionDisabled<T>(_ body: () throws -> T) rethrows -> T {
+        var wasAllowed: DarwinBoolean = true
+        SecKeychainGetUserInteractionAllowed(&wasAllowed)
+        SecKeychainSetUserInteractionAllowed(false)
+        defer {
+            SecKeychainSetUserInteractionAllowed(wasAllowed.boolValue)
+        }
+        return try body()
+    }
+}
+
+private let legacyKeychainGate: any LegacyKeychainInteractionGating = LegacyKeychainInteractionGate()

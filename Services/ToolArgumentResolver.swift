@@ -6,12 +6,49 @@ enum ToolArgumentResolver {
     private static let blockedExecutableNames: Set<String> = [
         "bash",
         "csh",
+        "dash",
         "env",
         "fish",
+        "ksh",
         "sh",
         "tcsh",
         "zsh"
     ]
+
+    // R6 hardening: any login shell the system knows about is Ring 0 even when
+    // it hides behind an innocent name, so keep both the raw /etc/shells entries
+    // and their symlink-resolved forms.
+    private static let registeredLoginShellPaths: Set<String> = {
+        guard let contents = try? String(contentsOfFile: "/etc/shells", encoding: .utf8) else {
+            return []
+        }
+        var paths = Set<String>()
+        for line in contents.split(whereSeparator: \.isNewline) {
+            let entry = line.trimmingCharacters(in: .whitespaces)
+            guard entry.hasPrefix("/") else { continue }
+            paths.insert(entry.lowercased())
+            paths.insert(URL(fileURLWithPath: entry).resolvingSymlinksInPath().path.lowercased())
+        }
+        return paths
+    }()
+
+    /// Ring 0 (R6/G1/G2): block shells by literal basename, by symlink-resolved
+    /// basename (`~/bin/notes → /bin/zsh` must not validate), and by resolved
+    /// membership in `/etc/shells`.
+    private static func ensureExecutableIsNotShell(_ path: String) throws {
+        let literalName = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        if blockedExecutableNames.contains(literalName) {
+            throw ToolValidationError.blockedExecutable(path)
+        }
+
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        if blockedExecutableNames.contains(resolved.lastPathComponent.lowercased()) {
+            throw ToolValidationError.blockedExecutable(path)
+        }
+        if registeredLoginShellPaths.contains(resolved.path.lowercased()) {
+            throw ToolValidationError.blockedExecutable(path)
+        }
+    }
 
     static func validate(_ tool: ToolDefinition) throws {
         guard !tool.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -44,10 +81,7 @@ enum ToolArgumentResolver {
             throw ToolValidationError.executableNotAbsolute
         }
 
-        let executableName = URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased()
-        if blockedExecutableNames.contains(executableName) {
-            throw ToolValidationError.blockedExecutable(tool.executablePath)
-        }
+        try ensureExecutableIsNotShell(tool.executablePath)
 
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: tool.executablePath, isDirectory: &isDirectory),
@@ -277,10 +311,7 @@ enum ToolArgumentResolver {
             throw ToolValidationError.invalidMCPBridge("stdio command must be an absolute path")
         }
 
-        let executableName = URL(fileURLWithPath: bridge.command).lastPathComponent.lowercased()
-        if blockedExecutableNames.contains(executableName) {
-            throw ToolValidationError.blockedExecutable(bridge.command)
-        }
+        try ensureExecutableIsNotShell(bridge.command)
 
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: bridge.command, isDirectory: &isDirectory),

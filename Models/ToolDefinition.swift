@@ -160,6 +160,7 @@ enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
     case imageProcessing
     case text
     case developer
+    case ai
 
     var id: String { rawValue }
 
@@ -170,9 +171,12 @@ enum ToolCategory: String, Codable, CaseIterable, Identifiable, Sendable {
         case .podcasts: "Podcasts"
         case .filesystem: "Filesystem"
         case .utilities: "Utilities"
-        case .imageProcessing: "Image Processing"
+        // DL-12: retitle only — the raw value stays `imageProcessing` so persisted
+        // tools.json needs zero migration.
+        case .imageProcessing: "Media"
         case .text: "Text"
         case .developer: "Developer"
+        case .ai: "AI & Agents"
         }
     }
 }
@@ -212,7 +216,7 @@ enum ToolPermissionRequirement: String, Codable, Hashable, CaseIterable, Sendabl
 
     var systemImage: String {
         switch self {
-        case .fullDiskAccess: "lock.shield"
+        case .fullDiskAccess: "internaldrive"
         case .reminders: "checklist"
         case .calendars: "calendar"
         case .contacts: "person.crop.circle"
@@ -221,8 +225,8 @@ enum ToolPermissionRequirement: String, Codable, Hashable, CaseIterable, Sendabl
         case .microphone: "mic"
         case .speechRecognition: "waveform"
         case .location: "location"
-        case .screenRecording: "rectangle.dashed"
-        case .accessibility: "figure"
+        case .screenRecording: "rectangle.dashed.badge.record"
+        case .accessibility: "accessibility"
         case .automation: "gearshape.2"
         case .localNetwork: "network"
         }
@@ -396,6 +400,33 @@ struct ToolParameter: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+/// R15 — the permanent record of where a scan-added tool came from and what its
+/// binary looked like at add time. Presence of `provenance` is what marks a tool
+/// as "Found on This Mac" (origin stays `.userDefined`).
+struct ToolProvenance: Codable, Hashable, Sendable {
+    let sourceKind: DiscoveredCLICandidate.Source
+    let packageName: String?
+    let packageVersion: String?
+    let addedDate: Date
+    let resolvedPathAtAdd: String
+    let signingIdentityAtAdd: String     // "Developer ID: <team>" | "ad-hoc" | "unsigned"
+    let contentSHA256AtAdd: String
+    let wasQuarantinedAtAdd: Bool
+    var summaryIsHarvested: Bool         // cleared when the user edits the summary (R11)
+    var summaryOrigin: String?           // "Homebrew" / "npm" / … — drives the provenance chip + MCP frame
+
+    /// The canonical string form a signing identity takes inside a provenance
+    /// record — the value R16 compares against on revalidation.
+    static func signingIdentityDescription(for trust: DiscoveredCLICandidate.SignatureTrust) -> String {
+        switch trust {
+        case .developerID(let team, _): "Developer ID: \(team)"
+        case .adhoc: "ad-hoc"
+        case .unsigned, .unchecked: "unsigned"
+        case .invalid: "invalid"
+        }
+    }
+}
+
 struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let name: String
@@ -412,6 +443,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let backend: ToolBackend
     let mcpBridge: MCPBridgeConfiguration?
     let mcpStdioBridge: MCPStdioBridgeConfiguration?
+    let provenance: ToolProvenance?
 
     var preview: String {
         if let mcpBridge {
@@ -486,6 +518,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         case backend
         case mcpBridge
         case mcpStdioBridge
+        case provenance
     }
 
     init(
@@ -503,7 +536,8 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         permissionRequirements: [ToolPermissionRequirement] = [],
         backend: ToolBackend = .process,
         mcpBridge: MCPBridgeConfiguration? = nil,
-        mcpStdioBridge: MCPStdioBridgeConfiguration? = nil
+        mcpStdioBridge: MCPStdioBridgeConfiguration? = nil,
+        provenance: ToolProvenance? = nil
     ) {
         self.id = id
         self.name = name
@@ -520,6 +554,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         self.backend = backend
         self.mcpBridge = mcpBridge
         self.mcpStdioBridge = mcpStdioBridge
+        self.provenance = provenance
     }
 
     init(from decoder: Decoder) throws {
@@ -539,6 +574,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         backend = try container.decodeIfPresent(ToolBackend.self, forKey: .backend) ?? .process
         mcpBridge = try container.decodeIfPresent(MCPBridgeConfiguration.self, forKey: .mcpBridge)
         mcpStdioBridge = try container.decodeIfPresent(MCPStdioBridgeConfiguration.self, forKey: .mcpStdioBridge)
+        provenance = try container.decodeIfPresent(ToolProvenance.self, forKey: .provenance)
     }
 }
 
@@ -561,6 +597,7 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
     case stringTooLong(String)
     case nulByte(String)
     case writeToolDisabled(String)
+    case identityChanged(String)
 
     var errorDescription: String? {
         switch self {
@@ -582,6 +619,7 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
         case .stringTooLong(let name): "String parameter too long: \(name)"
         case .nulByte(let name): "Parameter contains a NUL byte: \(name)"
         case .writeToolDisabled(let id): "Write-capable tool disabled: \(id)"
+        case .identityChanged(let name): "\(name) changed publisher since you added it — review before sharing again."
         }
     }
 }

@@ -1,8 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class FullDiskAccessServiceTests: XCTestCase {
-    func testRemCTLRuntimeFailuresAreNotClassifiedAsFullDiskAccessFailures() {
+struct FullDiskAccessServiceTests {
+    @Test func remCTLRuntimeFailuresAreNotClassifiedAsFullDiskAccessFailures() {
         let json: [String: Any] = [
             "ok": false,
             "checks": [
@@ -12,16 +13,16 @@ final class FullDiskAccessServiceTests: XCTestCase {
 
         let failedChecks = FullDiskAccessService.failedCheckNames(from: json)
 
-        XCTAssertEqual(failedChecks, ["python"])
-        XCTAssertFalse(FullDiskAccessService.failedChecksRequireFullDiskAccess(failedChecks))
+        #expect(failedChecks == ["python"])
+        #expect(FullDiskAccessService.failedChecksRequireFullDiskAccess(failedChecks) == false)
     }
 
-    func testRemCTLProtectedDataFailuresAreClassifiedAsFullDiskAccessFailures() {
-        XCTAssertTrue(FullDiskAccessService.failedChecksRequireFullDiskAccess(["database"]))
-        XCTAssertTrue(FullDiskAccessService.failedChecksRequireFullDiskAccess(["store_dir"]))
+    @Test func remCTLProtectedDataFailuresAreClassifiedAsFullDiskAccessFailures() {
+        #expect(FullDiskAccessService.failedChecksRequireFullDiskAccess(["database"]))
+        #expect(FullDiskAccessService.failedChecksRequireFullDiskAccess(["store_dir"]))
     }
 
-    func testGenericFDARequiredToolRequiresManualConfirmationWithoutRemCTL() async {
+    @Test func genericFDARequiredToolRequiresManualConfirmationWithoutRemCTL() async {
         let tool = ToolDefinition(
             id: "custom.echo",
             name: "Echo",
@@ -38,19 +39,19 @@ final class FullDiskAccessServiceTests: XCTestCase {
 
         let report = await FullDiskAccessService().check(environment: [:], tools: [tool])
 
-        XCTAssertEqual(report.state, .confirmationRequired)
-        XCTAssertTrue(report.requiresManualConfirmation)
-        XCTAssertTrue(report.automaticChecksPassed)
-        XCTAssertNotNil(report.confirmationSignature)
-        XCTAssertTrue(report.targets.contains { target in
+        #expect(report.state == .confirmationRequired)
+        #expect(report.requiresManualConfirmation)
+        #expect(report.automaticChecksPassed)
+        #expect(report.confirmationSignature != nil)
+        #expect(report.targets.contains { target in
             target.path == "/bin/echo" && target.role == .toolExecutable
         })
-        XCTAssertFalse(report.targets.contains { target in
+        #expect((report.targets.contains { target in
             target.role == .helperReported
-        })
+        }) == false)
     }
 
-    func testLayeredTargetsIncludeExecutableForFDARequiredTools() throws {
+    @Test func layeredTargetsIncludeExecutableForFDARequiredTools() throws {
         let tool = ToolDefinition(
             id: "custom.echo",
             name: "Echo",
@@ -67,12 +68,12 @@ final class FullDiskAccessServiceTests: XCTestCase {
 
         let targets = FullDiskAccessService.layeredTargets(for: [tool])
 
-        XCTAssertTrue(targets.contains { target in
+        #expect(targets.contains { target in
             target.path == "/bin/echo" && target.role == .toolExecutable
         })
     }
 
-    func testLayeredTargetsIncludeInterpreterForScriptTools() throws {
+    @Test func layeredTargetsIncludeInterpreterForScriptTools() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
@@ -101,15 +102,15 @@ final class FullDiskAccessServiceTests: XCTestCase {
 
         let targets = FullDiskAccessService.layeredTargets(for: [tool])
 
-        XCTAssertTrue(targets.contains { target in
+        #expect(targets.contains { target in
             target.path == scriptURL.path && target.role == .toolExecutable
         })
-        XCTAssertTrue(targets.contains { target in
+        #expect(targets.contains { target in
             target.role == .toolInterpreter && URL(fileURLWithPath: target.path).lastPathComponent.hasPrefix("python")
         })
     }
 
-    func testLayeredTargetsIncludeResolvedExecutableForSymlinkedTools() throws {
+    @Test func layeredTargetsIncludeResolvedExecutableForSymlinkedTools() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
@@ -141,15 +142,15 @@ final class FullDiskAccessServiceTests: XCTestCase {
 
         let targets = FullDiskAccessService.layeredTargets(for: [tool])
 
-        XCTAssertTrue(targets.contains { target in
+        #expect(targets.contains { target in
             target.path == symlinkURL.path && target.role == .toolExecutable
         })
-        XCTAssertTrue(targets.contains { target in
+        #expect(targets.contains { target in
             target.path == realScriptURL.path && target.role == .toolExecutable
         })
     }
 
-    func testSharedExecutableTargetsUseExecutableNameInsteadOfArbitraryToolName() throws {
+    @Test func sharedExecutableTargetsUseExecutableNameInsteadOfArbitraryToolName() throws {
         let firstTool = ToolDefinition(
             id: "custom.first",
             name: "First Action",
@@ -178,14 +179,14 @@ final class FullDiskAccessServiceTests: XCTestCase {
         )
 
         let targets = FullDiskAccessService.layeredTargets(for: [firstTool, secondTool])
-        let executableTarget = try XCTUnwrap(targets.first { $0.path == "/bin/echo" })
+        let executableTarget = try #require(targets.first { $0.path == "/bin/echo" })
 
-        XCTAssertEqual(executableTarget.title, "echo executable")
-        XCTAssertFalse(executableTarget.title.contains("First Action"))
-        XCTAssertFalse(executableTarget.title.contains("Second Action"))
+        #expect(executableTarget.title == "echo executable")
+        #expect(executableTarget.title.contains("First Action") == false)
+        #expect(executableTarget.title.contains("Second Action") == false)
     }
 
-    func testEnvShebangSkipsAssignmentsAndOptionsBeforeInterpreter() throws {
+    @Test func envShebangSkipsAssignmentsAndOptionsBeforeInterpreter() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
@@ -198,12 +199,12 @@ final class FullDiskAccessServiceTests: XCTestCase {
         """.write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
 
-        let interpreterPath = try XCTUnwrap(FullDiskAccessService.scriptInterpreterPath(forExecutableAt: scriptURL.path))
+        let interpreterPath = try #require(FullDiskAccessService.scriptInterpreterPath(forExecutableAt: scriptURL.path))
 
-        XCTAssertTrue(URL(fileURLWithPath: interpreterPath).lastPathComponent.hasPrefix("python"))
+        #expect(URL(fileURLWithPath: interpreterPath).lastPathComponent.hasPrefix("python"))
     }
 
-    func testMergedTargetsKeepSemanticRoleForDuplicateHelperPaths() {
+    @Test func mergedTargetsKeepSemanticRoleForDuplicateHelperPaths() {
         let toolTarget = FullDiskAccessTarget(
             title: "Tool Python",
             path: "/usr/bin/python3",
@@ -219,12 +220,12 @@ final class FullDiskAccessServiceTests: XCTestCase {
 
         let targets = FullDiskAccessService.mergedTargets([toolTarget, helperTarget])
 
-        XCTAssertEqual(targets.count, 1)
-        XCTAssertEqual(targets.first?.title, "Tool Python")
-        XCTAssertEqual(targets.first?.role, .toolInterpreter)
+        #expect(targets.count == 1)
+        #expect(targets.first?.title == "Tool Python")
+        #expect(targets.first?.role == .toolInterpreter)
     }
 
-    func testConfirmationSignatureTracksToolAndTargetSurface() {
+    @Test func confirmationSignatureTracksToolAndTargetSurface() {
         let firstTool = ToolDefinition(
             id: "custom.echo",
             name: "Echo",
@@ -257,6 +258,6 @@ final class FullDiskAccessServiceTests: XCTestCase {
         let firstSignature = FullDiskAccessService.confirmationSignature(for: [firstTool], targets: firstTargets)
         let secondSignature = FullDiskAccessService.confirmationSignature(for: [secondTool], targets: secondTargets)
 
-        XCTAssertNotEqual(firstSignature, secondSignature)
+        #expect(firstSignature != secondSignature)
     }
 }

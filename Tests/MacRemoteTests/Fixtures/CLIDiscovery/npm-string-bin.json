@@ -1,0 +1,6 @@
+{
+  "name": "@fixture/one-bin",
+  "version": "2.0.0",
+  "description": "Fixture package whose bin field is a plain string.",
+  "bin": "cli.js"
+}

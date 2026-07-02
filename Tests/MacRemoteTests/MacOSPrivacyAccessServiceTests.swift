@@ -1,8 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class MacOSPrivacyAccessServiceTests: XCTestCase {
-    func testAutomaticallyCheckedRequirementsOnlyIncludeSupportedServices() {
+struct MacOSPrivacyAccessServiceTests {
+    @Test func automaticallyCheckedRequirementsOnlyIncludeSupportedServices() {
         let tool = ToolDefinition(
             id: "custom.reminders",
             name: "Reminders Tool",
@@ -17,31 +18,31 @@ final class MacOSPrivacyAccessServiceTests: XCTestCase {
             permissionRequirements: [.screenRecording, .reminders, .fullDiskAccess]
         )
 
-        XCTAssertEqual(
-            MacOSPrivacyAccessService.automaticallyCheckedRequirements(in: [tool]),
+        #expect(
+            MacOSPrivacyAccessService.automaticallyCheckedRequirements(in: [tool]) ==
             [.reminders]
         )
     }
 
-    func testReportIsReadyWhenRequiredServicesAreReady() {
+    @Test func reportIsReadyWhenRequiredServicesAreReady() {
         let report = MacOSPrivacyAccessService.report(
             requirements: [.reminders],
             statuses: [.reminders: .ready]
         )
 
-        XCTAssertEqual(report.state, .ready)
-        XCTAssertTrue(report.isReady)
-        XCTAssertEqual(report.checkedRequirements, [.reminders])
+        #expect(report.state == .ready)
+        #expect(report.isReady)
+        #expect(report.checkedRequirements == [.reminders])
     }
 
-    func testReportBlocksWhenRequiredServiceIsDenied() {
+    @Test func reportBlocksWhenRequiredServiceIsDenied() {
         let report = MacOSPrivacyAccessService.report(
             requirements: [.reminders],
             statuses: [.reminders: .denied]
         )
 
-        XCTAssertEqual(report.state, .required([.reminders]))
-        XCTAssertFalse(report.isReady)
-        XCTAssertTrue(report.detail.contains("Grant Reminders access"))
+        #expect(report.state == .required([.reminders]))
+        #expect(report.isReady == false)
+        #expect(report.detail.contains("Grant Reminders access"))
     }
 }

@@ -8,7 +8,7 @@ enum BrrrServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .missingCredentials:
-            "Enter a Brrr webhook secret before sending notifications."
+            "Add your Brrr webhook secret in Settings, then try again."
         case .invalidResponse:
             "Brrr returned an invalid response."
         case .api(let message):

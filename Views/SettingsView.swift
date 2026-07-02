@@ -1,21 +1,42 @@
 import AppKit
 import SwiftUI
 
+/// Settings — spec §5.6 (⌘,). Three toolbar-style panes: General,
+/// Notifications, Security. Parity SE-1…SE-22 live here; SE-23…SE-39
+/// (Full Disk Access + macOS privacy) moved to Connection ▸ Readiness
+/// and the Access Fixer.
 struct SettingsView: View {
+    var body: some View {
+        TabView {
+            Tab("General", systemImage: "gearshape") {
+                GeneralSettingsPane()
+            }
+            Tab {
+                NotificationSettingsPane()
+            } label: {
+                Label("Notifications", systemImage: "bell.badge")
+                    .symbolRenderingMode(.hierarchical)
+            }
+            Tab("Security", systemImage: "lock.shield") {
+                SecuritySettingsPane()
+            }
+        }
+        .frame(width: 680, height: 580)
+    }
+}
+
+// MARK: - General (SE-1…SE-3 + app behavior)
+
+private struct GeneralSettingsPane: View {
     @Environment(AppModel.self) private var appModel
-    @State private var isShowingRotateInstanceConfirmation = false
-    @State private var isShowingRevokeOAuthConfirmation = false
-    @State private var isShowingRotateOAuthCredentialsConfirmation = false
-    @State private var isShowingDeleteOAuthCredentialsConfirmation = false
-    @State private var pendingOAuthCredentialRotationID: String?
-    @State private var pendingOAuthCredentialDeletionID: String?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var appModel = appModel
 
         Form {
-            Section("Connectors") {
-                Picker("Provider", selection: Binding(
+            Section("Connect an App") {
+                Picker("App", selection: Binding(
                     get: { appModel.connectorProvider },
                     set: { appModel.setConnectorProvider($0) }
                 )) {
@@ -26,7 +47,9 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Picker("Privacy", selection: Binding(
+                // D11: the singleton Sign-in method picker. The Address card
+                // shows the chosen mode read-only and points back here.
+                Picker("Sign-in method", selection: Binding(
                     get: { appModel.cloudflareDraft.accessMode },
                     set: { appModel.setCloudflareAccessMode($0) }
                 )) {
@@ -36,459 +59,27 @@ struct SettingsView: View {
                     }
                 }
 
-                ConnectorProfileSummary(
+                ConnectorCompatibilitySummary(
                     provider: appModel.connectorProvider,
                     accessMode: appModel.cloudflareDraft.accessMode
                 )
             }
 
-            Section("Local Server") {
-                LabeledContent("Bind address") {
-                    Text("127.0.0.1")
-                        .font(.system(.body, design: .monospaced))
-                }
-                LabeledContent("Instance ID") {
-                    Text(appModel.instanceID)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                }
+            Section("App Behavior") {
+                Toggle("Show menu bar icon", isOn: $appModel.isMenuBarExtraEnabled)
+                Toggle("Warn before quitting while sharing", isOn: $appModel.warnBeforeQuitWhileSharing)
+                Toggle("Show setup checklist", isOn: $appModel.isSetupChecklistEnabled)
 
-                HStack {
-                    Button("Rotate Instance ID", systemImage: "arrow.triangle.2.circlepath") {
-                        isShowingRotateInstanceConfirmation = true
-                    }
-                    .buttonStyle(.bordered)
-
-                    Text("Stops exposure, clears grants, and rotates the private instance identifier.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("OAuth Grants") {
-                Text("Revokes registered remote clients, authorization codes, access tokens, and refresh tokens. The MCP URL stays the same; clients must authorize again on this Mac.")
-                    .foregroundStyle(.secondary)
-
-                Button("Revoke OAuth Grants", systemImage: "person.crop.circle.badge.xmark") {
-                    isShowingRevokeOAuthConfirmation = true
-                }
-                .buttonStyle(.bordered)
-            }
-
-            OAuthClientCredentialsSection(
-                credentials: appModel.oauthClientCredentials,
-                connectorTitle: appModel.connectorProvider.title,
-                credentialsJSON: { credentials in
-                    appModel.oauthClientCredentialsJSON(for: credentials)
-                },
-                copyAction: { value, label in
-                    copyOAuthValue(value, label: label)
-                },
-                generateAction: {
-                    appModel.generateOAuthClientCredentials()
-                },
-                rotateAction: { clientID in
-                    pendingOAuthCredentialRotationID = clientID
-                    isShowingRotateOAuthCredentialsConfirmation = true
-                },
-                deleteAction: { clientID in
-                    pendingOAuthCredentialDeletionID = clientID
-                    isShowingDeleteOAuthCredentialsConfirmation = true
-                }
-            )
-
-            Section("Pushover") {
-                Toggle("Send Pushover alerts", isOn: $appModel.pushoverSettings.isEnabled)
-                    .toggleStyle(.checkbox)
-
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
-                    GridRow {
-                        Text("User ID")
-                            .foregroundStyle(.secondary)
-                        SecureField("Pushover User Key", text: $appModel.pushoverSettings.userKey)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 360)
-                    }
-
-                    GridRow {
-                        Text("API Key")
-                            .foregroundStyle(.secondary)
-                        SecureField("Pushover API Token", text: $appModel.pushoverSettings.apiToken)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 360)
-                    }
-                }
-                .disabled(!appModel.pushoverSettings.isEnabled)
-
-                Text("MacRemote sends alerts when a new OAuth client needs host approval, when cloudflared exits unexpectedly, and when the app restarts after a tunnel was marked active.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Button("Send Test Notification", systemImage: "paperplane") {
-                    appModel.sendPushoverTestNotification()
-                }
-                .disabled(!appModel.pushoverSettings.isConfigured)
-            }
-
-            Section("Brrr") {
-                Toggle("Send Brrr alerts", isOn: $appModel.brrrSettings.isEnabled)
-                    .toggleStyle(.checkbox)
-
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
-                    GridRow {
-                        Text("Secret")
-                            .foregroundStyle(.secondary)
-                        SecureField("Webhook Secret", text: $appModel.brrrSettings.webhookSecret)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 360)
-                    }
-                }
-                .disabled(!appModel.brrrSettings.isEnabled)
-
-                Text("MacRemote sends Brrr alerts through `/v1/send` with the webhook secret in the Authorization header.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Button("Send Test Notification", systemImage: "paperplane") {
-                    appModel.sendBrrrTestNotification()
-                }
-                .disabled(!appModel.brrrSettings.isConfigured)
-            }
-
-            Section("Full Disk Access") {
-                LabeledContent("Status") {
-                    HStack(spacing: 8) {
-                        Image(systemName: fullDiskAccessIcon)
-                            .foregroundStyle(fullDiskAccessColor)
-                        Text(appModel.fullDiskAccessReport.state.title)
-                    }
-                }
-
-                Text("Full Disk Access is layered. MacRemote may need access as the host app, and an FDA-required CLI or its script interpreter may also need access as the process reading protected data.")
-                    .foregroundStyle(.secondary)
-
-                HStack {
-                    Button(isCheckingFullDiskAccess ? "Check Again" : "Check Access", systemImage: "checkmark.shield") {
-                        appModel.checkFullDiskAccess()
-                    }
-
-                    Button("Open Guided Setup", systemImage: "gearshape.2") {
-                        appModel.openFullDiskAccessHelper()
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("Relaunch MacRemote", systemImage: "arrow.clockwise") {
-                        appModel.relaunchMacRemote()
-                    }
-
-                    Button("Reset App Row", systemImage: "arrow.triangle.2.circlepath") {
-                        appModel.resetMacRemoteFullDiskAccessGrant()
-                    }
-
-                    if appModel.fullDiskAccessReport.requiresManualConfirmation {
-                        Button("Confirm Setup", systemImage: "checkmark.seal") {
-                            appModel.confirmFullDiskAccessSetup()
-                        }
-                    }
-
-                    if let firstTarget = appModel.fullDiskAccessReport.targets.first {
-                        Button("Copy First Target", systemImage: "doc.on.doc") {
-                            copyPath(firstTarget.path)
-                            appModel.appendLog(level: .info, "Copied Full Disk Access target: \(firstTarget.title).")
-                        }
-                    }
-                }
-
-                if isCheckingFullDiskAccess {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Checking the active process context.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if !appModel.fullDiskAccessReport.detail.isEmpty {
-                    Text(appModel.fullDiskAccessReport.detail)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                if !appModel.fullDiskAccessReport.targets.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Grant Access To")
-                            .font(.subheadline.weight(.semibold))
-
-                        ForEach(appModel.fullDiskAccessReport.targets) { target in
-                            FullDiskAccessTargetRow(
-                                target: target,
-                                copyAction: {
-                                    copyPath(target.path)
-                                    appModel.appendLog(level: .info, "Copied Full Disk Access target: \(target.title).")
-                                },
-                                revealAction: {
-                                    NSWorkspace.shared.selectFile(target.path, inFileViewerRootedAtPath: "")
-                                    appModel.appendLog(level: .info, "Revealed Full Disk Access target: \(target.title).")
-                                }
-                            )
-                        }
-
-                        HStack(spacing: 10) {
-                            Button("Copy All Paths", systemImage: "doc.on.clipboard") {
-                                copyAllTargetPaths(appModel.fullDiskAccessReport.targets)
-                                appModel.appendLog(level: .info, "Copied all Full Disk Access target paths.")
-                            }
-
-                            Text("Drag a row into Full Disk Access, or copy a path and use Command-Shift-G in the file picker.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        VStack(alignment: .leading, spacing: 5) {
-                            Label("Open Guided Setup to launch the permission helper and System Settings.", systemImage: "1.circle")
-                            Label("Add every listed target to Full Disk Access.", systemImage: "2.circle")
-                            Label("Use Reset App Row if System Settings already shows MacRemote enabled but checks still fail.", systemImage: "3.circle")
-                            Label("Use Relaunch MacRemote after changing System Settings.", systemImage: "4.circle")
-                            Label("Run Check Access after the app reopens.", systemImage: "5.circle")
-                            if appModel.fullDiskAccessReport.requiresManualConfirmation {
-                                Label("Confirm Setup for tools MacRemote cannot automatically verify.", systemImage: "6.circle")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                if appModel.fullDiskAccessReport.targets.isEmpty {
-                    Text("Run Check Access to discover the exact Full Disk Access targets for this MacRemote process.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("After changing Full Disk Access, use Relaunch MacRemote and check again before starting the server. macOS often keeps the old permission state cached until the process exits.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("macOS Privacy") {
-                LabeledContent("Status") {
-                    HStack(spacing: 8) {
-                        Image(systemName: macOSPrivacyIcon)
-                            .foregroundStyle(macOSPrivacyColor)
-                        Text(appModel.macOSPrivacyAccessReport.state.title)
-                    }
-                }
-
-                Text("Some command-line tools need app-service privacy access from the host app that launches them. Reminders edits, for example, require Reminders access for MacRemote itself.")
-                    .foregroundStyle(.secondary)
-
-                HStack {
-                    Button(isCheckingMacOSPrivacy ? "Check Again" : "Check Access", systemImage: "checkmark.shield") {
-                        appModel.checkFullDiskAccess()
-                    }
-
-                    Button("Open Reminders Privacy", systemImage: "checklist") {
-                        openPrivacySettings(anchor: "Privacy_Reminders")
-                    }
-                }
-
-                if isCheckingMacOSPrivacy {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Checking MacRemote's app-service access.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if !appModel.macOSPrivacyAccessReport.detail.isEmpty {
-                    Text(appModel.macOSPrivacyAccessReport.detail)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                if !appModel.macOSPrivacyAccessReport.checkedRequirements.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(appModel.macOSPrivacyAccessReport.checkedRequirements, id: \.self) { requirement in
-                            StatusBadge(
-                                title: requirement.title,
-                                systemImage: requirement.systemImage,
-                                tint: .blue
-                            )
-                        }
-                    }
+                Button("Show Welcome Window") {
+                    openWindow(id: MacRemoteWindowID.welcome)
                 }
             }
         }
         .formStyle(.grouped)
-        .padding(24)
-        .frame(minWidth: 620, minHeight: 420)
-        .navigationTitle("Settings")
-        .confirmationDialog(
-            "Rotate Instance ID?",
-            isPresented: $isShowingRotateInstanceConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Rotate Instance ID", role: .destructive) {
-                appModel.rotateInstanceID()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("MacRemote will stop the local server and tunnel, clear pending OAuth and tool approvals, and rotate the private instance identifier.")
-        }
-        .confirmationDialog(
-            "Revoke OAuth Grants?",
-            isPresented: $isShowingRevokeOAuthConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Revoke Grants", role: .destructive) {
-                appModel.revokeOAuthGrants()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("MacRemote will invalidate all registered clients and OAuth tokens. The public MCP URL will stay unchanged, and clients must request host approval again.")
-        }
-        .confirmationDialog(
-            "Rotate OAuth Credentials?",
-            isPresented: $isShowingRotateOAuthCredentialsConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Rotate Credentials", role: .destructive) {
-                if let clientID = pendingOAuthCredentialRotationID {
-                    appModel.rotateOAuthClientCredentials(clientID: clientID)
-                }
-                pendingOAuthCredentialRotationID = nil
-            }
-            Button("Cancel", role: .cancel) {
-                pendingOAuthCredentialRotationID = nil
-            }
-        } message: {
-            Text("MacRemote will generate a new client ID and secret for this entry, invalidate that OAuth client, and clear its always-allow tool settings.")
-        }
-        .confirmationDialog(
-            "Delete OAuth Credentials?",
-            isPresented: $isShowingDeleteOAuthCredentialsConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Credentials", role: .destructive) {
-                if let clientID = pendingOAuthCredentialDeletionID {
-                    appModel.deleteOAuthClientCredentials(clientID: clientID)
-                }
-                pendingOAuthCredentialDeletionID = nil
-            }
-            Button("Cancel", role: .cancel) {
-                pendingOAuthCredentialDeletionID = nil
-            }
-        } message: {
-            Text("MacRemote will remove this client ID and secret, invalidate that OAuth client, and clear its always-allow tool settings.")
-        }
-    }
-
-    private func copyPath(_ path: String) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(path, forType: .string)
-        pasteboard.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
-    }
-
-    private func copyAllTargetPaths(_ targets: [FullDiskAccessTarget]) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(targets.map(\.path).joined(separator: "\n"), forType: .string)
-    }
-
-    private func copyOAuthValue(_ value: String, label: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-        appModel.appendLog(level: .info, "Copied \(label).")
-    }
-
-    private func openPrivacySettings(anchor: String) {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else {
-            return
-        }
-        NSWorkspace.shared.open(url)
-    }
-
-    private var isCheckingFullDiskAccess: Bool {
-        if case .checking = appModel.fullDiskAccessReport.state {
-            true
-        } else {
-            false
-        }
-    }
-
-    private var isCheckingMacOSPrivacy: Bool {
-        if case .checking = appModel.macOSPrivacyAccessReport.state {
-            true
-        } else {
-            false
-        }
-    }
-
-    private var fullDiskAccessIcon: String {
-        switch appModel.fullDiskAccessReport.state {
-        case .ready:
-            "checkmark.shield.fill"
-        case .required, .failed(_):
-            "exclamationmark.triangle.fill"
-        case .confirmationRequired:
-            "checkmark.seal.fill"
-        case .checking:
-            "hourglass"
-        case .helperOpened:
-            "gearshape.2.fill"
-        case .unknown:
-            "questionmark.circle"
-        }
-    }
-
-    private var fullDiskAccessColor: Color {
-        switch appModel.fullDiskAccessReport.state {
-        case .ready:
-            .green
-        case .required, .failed(_):
-            .orange
-        case .confirmationRequired:
-            .blue
-        case .checking:
-            .blue
-        case .helperOpened, .unknown:
-            .secondary
-        }
-    }
-
-    private var macOSPrivacyIcon: String {
-        switch appModel.macOSPrivacyAccessReport.state {
-        case .ready:
-            "checkmark.shield.fill"
-        case .required, .failed(_):
-            "exclamationmark.triangle.fill"
-        case .checking:
-            "hourglass"
-        case .unknown:
-            "questionmark.circle"
-        }
-    }
-
-    private var macOSPrivacyColor: Color {
-        switch appModel.macOSPrivacyAccessReport.state {
-        case .ready:
-            .green
-        case .required, .failed(_):
-            .orange
-        case .checking:
-            .blue
-        case .unknown:
-            .secondary
-        }
     }
 }
 
-private struct ConnectorProfileSummary: View {
+private struct ConnectorCompatibilitySummary: View {
     let provider: ConnectorProviderProfile
     let accessMode: CloudflareAccessMode
 
@@ -497,28 +88,12 @@ private struct ConnectorProfileSummary: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                StatusBadge(
-                    title: provider.authLabel,
-                    systemImage: "person.badge.key",
-                    tint: .blue
-                )
-                StatusBadge(
-                    title: provider.headerLabel,
-                    systemImage: "curlybraces",
-                    tint: .purple
-                )
-                StatusBadge(
-                    title: accessMode.shortTitle,
-                    systemImage: accessMode.systemImage,
-                    tint: .secondary
-                )
-                StatusBadge(
-                    title: compatibility.title,
-                    systemImage: compatibility.systemImage,
-                    tint: compatibility.tint
-                )
+        VStack(alignment: .leading, spacing: Space.s2) {
+            HStack(spacing: Space.s1) {
+                StateChip(provider.authLabel, systemImage: "person.badge.key", tint: .secondary)
+                StateChip(provider.headerLabel, systemImage: "curlybraces", tint: .secondary)
+                StateChip(accessMode.shortTitle, systemImage: accessMode.systemImage, tint: .secondary)
+                StateChip(compatibility.title, systemImage: compatibility.systemImage, tint: compatibility.tint)
             }
 
             Text(provider.setupLine(for: accessMode))
@@ -526,124 +101,380 @@ private struct ConnectorProfileSummary: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 2)
     }
 }
 
-private struct OAuthClientCredentialsSection: View {
-    let credentials: [OAuthClientCredentials]
-    let connectorTitle: String
-    let credentialsJSON: (OAuthClientCredentials) -> String?
-    let copyAction: (String, String) -> Void
-    let generateAction: () -> Void
-    let rotateAction: (String) -> Void
-    let deleteAction: (String) -> Void
+// MARK: - Notifications (SE-15…SE-22 + macOS notifications status)
 
-    private var generateButtonTitle: String {
-        "Generate \(connectorTitle) Credentials"
-    }
+private struct NotificationSettingsPane: View {
+    @Environment(AppModel.self) private var appModel
 
     var body: some View {
+        @Bindable var appModel = appModel
+
+        Form {
+            Section("Notifications") {
+                LabeledContent("macOS Notifications") {
+                    HStack(spacing: Space.s2) {
+                        statusChip
+
+                        switch appModel.notificationPermissionStatus {
+                        case .notDetermined:
+                            Button("Allow Notifications") {
+                                appModel.requestNotificationPermission()
+                            }
+                        case .denied:
+                            Button("Open Notification Settings") {
+                                appModel.openNotificationSettings()
+                            }
+                        case .authorized, .unknown:
+                            EmptyView()
+                        }
+                    }
+                }
+
+                if appModel.notificationPermissionStatus == .unknown {
+                    Text("Notifications need the packaged MacRemote app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                Toggle("Send Pushover notifications", isOn: $appModel.pushoverSettings.isEnabled)
+
+                SecureField("User ID", text: $appModel.pushoverSettings.userKey, prompt: Text("Pushover user key"))
+                    .disabled(!appModel.pushoverSettings.isEnabled)
+                SecureField("API Key", text: $appModel.pushoverSettings.apiToken, prompt: Text("Pushover API token"))
+                    .disabled(!appModel.pushoverSettings.isEnabled)
+
+                Button("Send Test", systemImage: "paperplane") {
+                    appModel.sendPushoverTestNotification()
+                }
+                .disabled(!appModel.pushoverSettings.isConfigured)
+            } header: {
+                Text("Pushover")
+            } footer: {
+                Text("Get notified when an app asks to connect, when your public link stops unexpectedly, or when MacRemote restarts while it was sharing.")
+            }
+
+            Section {
+                Toggle("Send Brrr notifications", isOn: $appModel.brrrSettings.isEnabled)
+
+                SecureField("Secret", text: $appModel.brrrSettings.webhookSecret, prompt: Text("Webhook secret"))
+                    .disabled(!appModel.brrrSettings.isEnabled)
+
+                Button("Send Test", systemImage: "paperplane") {
+                    appModel.sendBrrrTestNotification()
+                }
+                .disabled(!appModel.brrrSettings.isConfigured)
+            } header: {
+                Text("Brrr")
+            } footer: {
+                VStack(alignment: .leading, spacing: Space.s1) {
+                    Text("MacRemote sends notifications to your Brrr webhook, signed with the secret you paste here.")
+                    Text("Notification keys are stored on this Mac.")
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .task {
+            appModel.refreshNotificationPermissionStatus()
+        }
+    }
+
+    private var statusChip: StateChip {
+        switch appModel.notificationPermissionStatus {
+        case .authorized:
+            StateChip("Allowed", systemImage: "checkmark.circle.fill", role: .ready)
+        case .denied:
+            StateChip("Denied", systemImage: "bell.slash", role: .attention)
+        case .notDetermined:
+            StateChip("Not Requested", systemImage: "bell", role: .off)
+        case .unknown:
+            StateChip("Unavailable", systemImage: "questionmark.circle", role: .off)
+        }
+    }
+}
+
+// MARK: - Security (SE-4…SE-14)
+
+private struct SecuritySettingsPane: View {
+    @Environment(AppModel.self) private var appModel
+
+    @State private var isShowingResetAddressConfirmation = false
+    @State private var isShowingSignOutAllConfirmation = false
+    @State private var isShowingReplaceCredentialsConfirmation = false
+    @State private var isShowingDeleteCredentialsConfirmation = false
+    @State private var pendingReplaceClientID: String?
+    @State private var pendingDeleteClientID: String?
+
+    var body: some View {
+        Form {
+            localServerSection
+            appAccessSection
+            credentialsSection
+        }
+        .formStyle(.grouped)
+        .confirmationDialog(
+            "Reset your private address?",
+            isPresented: $isShowingResetAddressConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                appModel.rotateInstanceID()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Sharing stops, every app is signed out, and your Mac gets a new private address. Your public link stays the same.")
+        }
+        .confirmationDialog(
+            "Sign out every app?",
+            isPresented: $isShowingSignOutAllConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Sign Out All", role: .destructive) {
+                appModel.revokeOAuthGrants()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All connected apps must ask for your approval again. Your public link doesn't change.")
+        }
+        .confirmationDialog(
+            "Replace these credentials?",
+            isPresented: $isShowingReplaceCredentialsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Replace", role: .destructive) {
+                if let clientID = pendingReplaceClientID {
+                    appModel.rotateOAuthClientCredentials(clientID: clientID)
+                }
+                pendingReplaceClientID = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingReplaceClientID = nil
+            }
+        } message: {
+            Text("The old ID and secret stop working immediately; paste the new ones into \(appModel.connectorProvider.title).")
+        }
+        .confirmationDialog(
+            "Delete these credentials?",
+            isPresented: $isShowingDeleteCredentialsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let clientID = pendingDeleteClientID {
+                    appModel.deleteOAuthClientCredentials(clientID: clientID)
+                }
+                pendingDeleteClientID = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteClientID = nil
+            }
+        } message: {
+            Text("The app using them is signed out and its Always Allow settings are cleared.")
+        }
+    }
+
+    // MARK: Local server
+
+    private var localServerSection: some View {
+        Section("Local Server") {
+            LabeledContent("Address") {
+                VStack(alignment: .trailing, spacing: Space.s1) {
+                    Text("Only on this Mac")
+                    Text(verbatim: "127.0.0.1")
+                        .font(TypeRamp.machineCaption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
+            LabeledContent("Private address ID") {
+                MonoValue(appModel.instanceID) {
+                    appModel.appendLog(level: .info, "Copied the private address ID.")
+                }
+            }
+
+            if let confirmation = appModel.instanceRotationConfirmation {
+                HStack(spacing: Space.s2) {
+                    Label {
+                        Text(confirmation)
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.green)
+                    }
+                    Spacer()
+                    Button {
+                        appModel.dismissInstanceRotationConfirmation()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Dismiss")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: Space.s1) {
+                Button("Reset Private Address…") {
+                    isShowingResetAddressConfirmation = true
+                }
+                Text("Gives your Mac a new private address. Sharing stops and every app is signed out.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: App access
+
+    private var appAccessSection: some View {
+        Section("App Access") {
+            VStack(alignment: .leading, spacing: Space.s1) {
+                Button("Sign Out All Apps…") {
+                    isShowingSignOutAllConfirmation = true
+                }
+                Text("Signs out every connected app. Your public link stays the same — each app just asks for your approval again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: OAuth client credentials
+
+    private var credentialsSection: some View {
         Section("OAuth Client Credentials") {
-            Text("Use these with clients that support OAuth Client ID and Client Secret. The secret is stored in Keychain; rotating or deleting one entry only revokes that OAuth client.")
+            Text("Use these when an app asks to sign in with a generated ID and secret. The secret lives in your Keychain. Replacing or deleting an entry signs out only the app that uses it.")
                 .foregroundStyle(.secondary)
 
-            if !credentials.isEmpty {
-                ForEach(credentials, id: \.clientID) { credential in
-                    OAuthClientCredentialPanel(
-                        credentials: credential,
-                        credentialsJSON: credentialsJSON(credential),
-                        copyAction: copyAction,
-                        rotateAction: {
-                            rotateAction(credential.clientID)
-                        },
-                        deleteAction: {
-                            deleteAction(credential.clientID)
-                        }
-                    )
-
-                    if credential.clientID != credentials.last?.clientID {
-                        Divider()
+            if appModel.hasLockedOAuthCredentials {
+                LabeledContent {
+                    Button("Unlock…") {
+                        appModel.unlockOAuthCredentials()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } label: {
+                    Label {
+                        Text("Saved credentials are locked by macOS")
+                        Text("Unlocking shows a Keychain prompt — choose Always Allow so connected apps can keep signing in after rebuilds.")
+                    } icon: {
+                        Image(systemName: "lock.badge.clock")
+                            .foregroundStyle(.orange)
                     }
                 }
             }
 
-            if credentials.isEmpty {
-                Button(generateButtonTitle, systemImage: "key.badge.plus") {
-                    generateAction()
+            ForEach(appModel.oauthClientCredentials, id: \.clientID) { credential in
+                OAuthCredentialPanel(
+                    credential: credential,
+                    credentialsJSON: appModel.oauthClientCredentialsJSON(for: credential),
+                    copyAction: { value, auditLine in
+                        copyValue(value, auditLine: auditLine)
+                    },
+                    auditAction: { auditLine in
+                        appModel.appendLog(level: .info, auditLine)
+                    },
+                    replaceAction: {
+                        pendingReplaceClientID = credential.clientID
+                        isShowingReplaceCredentialsConfirmation = true
+                    },
+                    deleteAction: {
+                        pendingDeleteClientID = credential.clientID
+                        isShowingDeleteCredentialsConfirmation = true
+                    }
+                )
+
+                if credential.clientID != appModel.oauthClientCredentials.last?.clientID {
+                    Divider()
+                }
+            }
+
+            if appModel.oauthClientCredentials.isEmpty && !appModel.hasLockedOAuthCredentials {
+                Button(generateTitle, systemImage: "key.2.on.ring") {
+                    appModel.generateOAuthClientCredentials()
                 }
                 .buttonStyle(.borderedProminent)
             } else {
-                Button(generateButtonTitle, systemImage: "key.badge.plus") {
-                    generateAction()
+                Button(generateTitle, systemImage: "key.2.on.ring") {
+                    appModel.generateOAuthClientCredentials()
                 }
                 .buttonStyle(.bordered)
             }
         }
     }
+
+    private var generateTitle: String {
+        "Generate \(appModel.connectorProvider.title) Credentials"
+    }
+
+    private func copyValue(_ value: String, auditLine: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
+        appModel.appendLog(level: .info, auditLine)
+    }
 }
 
-private struct OAuthClientCredentialPanel: View {
-    let credentials: OAuthClientCredentials
+private struct OAuthCredentialPanel: View {
+    let credential: OAuthClientCredentials
     let credentialsJSON: String?
+    /// Writes the pasteboard and the audit line (labeled Copy buttons).
     let copyAction: (String, String) -> Void
-    let rotateAction: () -> Void
+    /// Audit line only — the grid's hover `CopyButton` writes the pasteboard itself.
+    let auditAction: (String) -> Void
+    let replaceAction: () -> Void
     let deleteAction: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(credentials.label)
-                .font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: Space.s3) {
+            Text(credential.label)
+                .font(TypeRamp.cardTitle)
 
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
-                GridRow {
-                    Text("Client ID")
-                        .foregroundStyle(.secondary)
-                    Text(credentials.clientID)
-                        .font(.system(.body, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-
-                GridRow {
-                    Text("Client Secret")
-                        .foregroundStyle(.secondary)
-                    Text(String(repeating: "*", count: 28))
-                        .font(.system(.body, design: .monospaced))
-                        .privacySensitive()
-                }
-
-                GridRow {
-                    Text("Created")
-                        .foregroundStyle(.secondary)
-                    Text(credentials.createdAt.formatted(date: .abbreviated, time: .shortened))
-                }
+            KeyValueGrid(rows: [
+                KeyValueRow("Client ID", credential.clientID),
+                KeyValueRow("Client Secret", credential.clientSecret, isSensitive: true),
+                KeyValueRow("Created", credential.createdAt.formatted(date: .abbreviated, time: .shortened))
+            ]) { row in
+                auditAction(auditLine(for: row.label))
             }
 
-            HStack {
+            HStack(spacing: Space.s2) {
                 Button("Copy ID", systemImage: "doc.on.doc") {
-                    copyAction(credentials.clientID, "OAuth client ID")
+                    copyAction(credential.clientID, "Copied OAuth client ID.")
                 }
 
                 Button("Copy Secret", systemImage: "key.fill") {
-                    copyAction(credentials.clientSecret, "OAuth client secret")
+                    copyAction(credential.clientSecret, "Copied OAuth client secret.")
                 }
 
                 if let credentialsJSON {
                     Button("Copy JSON", systemImage: "curlybraces") {
-                        copyAction(credentialsJSON, "OAuth client credentials JSON")
+                        copyAction(credentialsJSON, "Copied OAuth client credentials JSON.")
                     }
                 }
 
-                Button("Rotate", systemImage: "arrow.triangle.2.circlepath", role: .destructive) {
-                    rotateAction()
+                Spacer()
+
+                Button("Replace…") {
+                    replaceAction()
                 }
 
-                Button("Delete", systemImage: "trash", role: .destructive) {
+                Button("Delete…", role: .destructive) {
                     deleteAction()
                 }
             }
+        }
+    }
+
+    private func auditLine(for label: String) -> String {
+        switch label {
+        case "Client ID": "Copied OAuth client ID."
+        case "Client Secret": "Copied OAuth client secret."
+        default: "Copied OAuth credential \(label.lowercased())."
         }
     }
 }

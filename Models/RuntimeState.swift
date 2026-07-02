@@ -70,13 +70,13 @@ enum CloudflareCustomDomainState: Equatable, Sendable {
         case .idle:
             return "Load Cloudflare domains from the Wrangler account on this Mac."
         case .loadingDomains:
-            return "Checking Wrangler auth and loading Cloudflare zones."
+            return "Checking Wrangler sign-in and loading your Cloudflare domains."
         case .ready:
-            return "Choose a domain and subdomain, then deploy a named tunnel."
+            return "Choose a domain and subdomain, then deploy."
         case .preparingLocalServer:
-            return "Starting the local MCP server before deploying the named tunnel."
+            return "Starting the local server before deploying."
         case .deploying:
-            return "Creating or updating Cloudflare Tunnel, DNS, and selected Access resources."
+            return "Creating or updating your Cloudflare tunnel, DNS, and Access settings."
         case .deployed(let hostname):
             return hostname
         case .failed(let message):
@@ -228,7 +228,7 @@ enum FullDiskAccessTargetRole: String, Equatable, Sendable {
 
     var title: String {
         switch self {
-        case .hostApp: "Host app"
+        case .hostApp: "This app"
         case .toolExecutable: "Tool"
         case .toolInterpreter: "Interpreter"
         case .helperReported: "Helper"
@@ -276,7 +276,7 @@ struct FullDiskAccessTarget: Identifiable, Equatable, Sendable {
 
 struct FullDiskAccessReport: Equatable, Sendable {
     var state: FullDiskAccessState = .unknown
-    var detail: String = "Check Full Disk Access before exposing tools that require protected local data."
+    var detail: String = "Check Full Disk Access before sharing tools that use protected local data."
     var targets: [FullDiskAccessTarget] = []
     var requiresManualConfirmation = false
     var confirmationSignature: String?
@@ -296,23 +296,23 @@ struct FullDiskAccessPrompt: Identifiable, Equatable, Sendable {
 
         var title: String {
             switch self {
-            case .serverStart: "Full Disk Access Required"
+            case .serverStart: "Full Disk Access needed"
             case .remCTLTest: "Reminders Test Blocked"
-            case .remoteProof: "Remote MCP Proof Blocked"
-            case .manualCheck: "Full Disk Access Required"
+            case .remoteProof: "Full Test Blocked"
+            case .manualCheck: "Full Disk Access needed"
             }
         }
 
         var detail: String {
             switch self {
             case .serverStart:
-                "MacRemote cannot start an MCP server with FDA-required tools until the app-launched CLI process can read its protected data."
+                "Some shared tools need Full Disk Access before the server can start. Add every item below — then relaunch and check again."
             case .remCTLTest:
-                "The test tool must run from the same app process context that remote MCP calls will use."
+                "The test runs from MacRemote itself — the same way remote calls run — so MacRemote needs Full Disk Access first."
             case .remoteProof:
-                "Remote MCP verification is blocked until FDA-required tools pass their local permission check."
+                "The Full Test can't run until every tool that needs Full Disk Access passes its check on this Mac."
             case .manualCheck:
-                "Grant access to every listed target. If System Settings already shows access enabled, relaunch MacRemote, then check again."
+                "MacRemote and some of its tools each need Full Disk Access. Add every item below — then relaunch and check again."
             }
         }
     }
@@ -341,7 +341,7 @@ enum MacOSPrivacyAccessState: Equatable, Sendable {
 
 struct MacOSPrivacyAccessReport: Equatable, Sendable {
     var state: MacOSPrivacyAccessState = .unknown
-    var detail: String = "Check macOS privacy access before exposing tools that use protected app data."
+    var detail: String = "Check Privacy Permissions before sharing tools that use protected app data."
     var checkedRequirements: [ToolPermissionRequirement] = []
 
     var isReady: Bool {
@@ -353,6 +353,8 @@ enum SmokeTestMode: String, Equatable, Sendable {
     case preflight
     case anthropicAPI
 
+    // Kept verbatim: `title` feeds copied technical output (SmokeProofRecord.clipboardText)
+    // and is matched by SmokeTestServiceTests ("Mode: Anthropic API Smoke"). Visible UI uses displayTitle.
     var title: String {
         switch self {
         case .preflight: "MCP Preflight"
@@ -360,10 +362,17 @@ enum SmokeTestMode: String, Equatable, Sendable {
         }
     }
 
+    var displayTitle: String {
+        switch self {
+        case .preflight: "Quick Test"
+        case .anthropicAPI: "Full Test"
+        }
+    }
+
     var logTitle: String {
         switch self {
-        case .preflight: "MacRemote MCP preflight"
-        case .anthropicAPI: "Anthropic API smoke test"
+        case .preflight: "Quick Test"
+        case .anthropicAPI: "Full Test"
         }
     }
 }
@@ -381,18 +390,18 @@ enum SmokeTestState: Equatable, Sendable {
     var title: String {
         switch self {
         case .idle: "Not Run"
-        case .running(let mode): "Running \(mode.title)"
-        case .passed(let mode, _): "\(mode.title) Passed"
-        case .failed(let mode, _): "\(mode.title) Failed"
+        case .running(let mode): "Running \(mode.displayTitle)"
+        case .passed(let mode, _): "\(mode.displayTitle) Passed"
+        case .failed(let mode, _): "\(mode.displayTitle) Failed"
         }
     }
 
     var detail: String {
         switch self {
         case .idle:
-            "Run a direct MCP preflight first, then the full Anthropic API smoke test."
+            "Run the Quick Test first, then the Full Test."
         case .running(let mode):
-            "\(mode.title) is running. Approve the OAuth request in Approvals when prompted."
+            "\(mode.displayTitle) is running. Approve the request in Requests if one appears."
         case .passed(_, let message), .failed(_, let message):
             message
         }
@@ -424,6 +433,9 @@ enum SmokeReadinessStatus: String, Equatable, Sendable {
     case checking
     case warning
     case blocked
+    /// Not a problem — a step the user simply hasn't reached yet (server not
+    /// started, tunnel not opened). Renders calm/neutral, never alarming red.
+    case waiting
 
     var title: String {
         switch self {
@@ -431,6 +443,7 @@ enum SmokeReadinessStatus: String, Equatable, Sendable {
         case .checking: "Checking"
         case .warning: "Warning"
         case .blocked: "Blocked"
+        case .waiting: "Waiting"
         }
     }
 }

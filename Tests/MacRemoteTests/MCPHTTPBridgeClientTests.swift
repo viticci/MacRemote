@@ -1,9 +1,9 @@
 import Foundation
-import XCTest
+import Testing
 @testable import MacRemote
 
-final class MCPHTTPBridgeClientTests: XCTestCase {
-    func testCallsStreamableHTTPServerWithSessionHeadersAndJSONArguments() async throws {
+struct MCPHTTPBridgeClientTests {
+    @Test func callsStreamableHTTPServerWithSessionHeadersAndJSONArguments() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MCPBridgeURLProtocolMock.self]
         let session = URLSession(configuration: config)
@@ -58,23 +58,23 @@ final class MCPHTTPBridgeClientTests: XCTestCase {
             ]))
         ])
 
-        XCTAssertTrue(outcome.succeeded)
-        XCTAssertTrue(outcome.stdout.contains(#""ok":true"#))
+        #expect(outcome.succeeded)
+        #expect(outcome.stdout.contains(#""ok":true"#))
 
         let requests = MCPBridgeURLProtocolMock.requests()
-        XCTAssertEqual(requests.map { $0.method }, ["initialize", "notifications/initialized", "tools/call"])
-        XCTAssertEqual(requests[0].headers["Authorization"], "Bearer test-token")
-        XCTAssertNil(requests[0].headers["Mcp-Session-Id"])
-        XCTAssertEqual(requests[1].headers["Mcp-Session-Id"], "session-1")
-        XCTAssertEqual(requests[2].headers["Mcp-Session-Id"], "session-1")
-        XCTAssertEqual(requests[2].headers["MCP-Protocol-Version"], "2025-06-18")
+        #expect(requests.map { $0.method } == ["initialize", "notifications/initialized", "tools/call"])
+        #expect(requests[0].headers["Authorization"] == "Bearer test-token")
+        #expect(requests[0].headers["Mcp-Session-Id"] == nil)
+        #expect(requests[1].headers["Mcp-Session-Id"] == "session-1")
+        #expect(requests[2].headers["Mcp-Session-Id"] == "session-1")
+        #expect(requests[2].headers["MCP-Protocol-Version"] == "2025-06-18")
 
-        let params = try XCTUnwrap(requests[2].body["params"] as? [String: Any])
-        XCTAssertEqual(params["name"] as? String, "echo")
-        let arguments = try XCTUnwrap(params["arguments"] as? [String: Any])
-        let payload = try XCTUnwrap(arguments["payload"] as? [String: Any])
-        XCTAssertEqual(payload["query"] as? String, "clip")
-        XCTAssertEqual(payload["count"] as? Int, 2)
+        let params = try #require(requests[2].body["params"] as? [String: Any])
+        #expect(params["name"] as? String == "echo")
+        let arguments = try #require(params["arguments"] as? [String: Any])
+        let payload = try #require(arguments["payload"] as? [String: Any])
+        #expect(payload["query"] as? String == "clip")
+        #expect(payload["count"] as? Int == 2)
     }
 }
 

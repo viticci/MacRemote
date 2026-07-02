@@ -1,12 +1,14 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 import Observation
+import UserNotifications
 
 @MainActor
 @Observable
 final class AppModel {
-    var selection: NavigationSection? = .dashboard
+    var selection: NavigationSection? = .connection
     var tools: [ToolDefinition]
     var isRemCTLProfileEnabled: Bool
     var disabledToolIDs: Set<String>
@@ -30,6 +32,7 @@ final class AppModel {
     var cloudflareCustomDomainState: CloudflareCustomDomainState = .idle
     var lastCloudflareDeployment: CloudflareCustomDomainDeployment?
     var oauthClientCredentials: [OAuthClientCredentials]
+    var lockedOAuthClientIDs: [String] = []
     var connectorProvider: ConnectorProviderProfile = .raycast {
         didSet {
             persistConnectorSettings()
@@ -48,11 +51,74 @@ final class AppModel {
     var localMCPScanState: LocalMCPScanState = .idle
     var localMCPWorkingServerID: String?
     var localMCPErrorMessage: String?
+    var cliScanState: CLIScanState = .idle
+    var cliScanSourceFailures: [CLIScanSource: String] = [:]
+    /// DL-11 scan memory: candidates, last-scan date, seen-set, fingerprints.
+    /// Local app storage only; never exported, never logged beyond counts (R19).
+    private var cliScanCache: CLIScanCache?
+    private let cliScanCacheURL: URL
+    /// R16 — tools whose binary changed signing identity since they were added.
+    /// Drives the inline "changed publisher" row; sharing stays off while flagged.
+    var provenanceIdentityChangedToolIDs: Set<String> = []
+    /// R16 — first date a same-identity content change was noticed ("Binary updated …").
+    var provenanceContentUpdates: [String: Date] = [:]
+
+    /// Spec §2.4: privacy failures open Connection with this Readiness row
+    /// auto-expanded. The Connection page clears it via `clearReadinessRowToExpand()`.
+    var readinessRowToExpand: ReadinessRow?
+    /// Set by menu / MenuBarExtra "Go Public…"; the Connection page binds this to
+    /// its exposure confirmation dialog and calls `startTunnel()` on confirm.
+    var goPublicConfirmationRequested = false
+    /// The Connection page hosts the Testing Guide sheet bound to this flag.
+    var isTestingGuidePresented = false
+    /// Tools inspector visibility (⌥⌘I); the Tools page binds `.inspector` to it.
+    var isToolInspectorPresented = true
+    /// One-shot command for the Tools page (File ▸ New Tool… / Add from Library…).
+    var pendingToolsCommand: ToolsCommand?
+    /// Edit ▸ Find (⌘F). Pages observe changes and focus their search field.
+    var searchFocusToken = 0
+    /// D18: request ID → human denial reason ("Server stopped"). Session-only;
+    /// the Requests history rows read it.
+    var requestDenialReasons: [UUID: String] = [:]
+    /// Settings › Security shows this inline after Reset Private Address (§2.4).
+    var instanceRotationConfirmation: String?
+    var notificationPermissionStatus: NotificationPermissionStatus = .unknown
+    /// D13: one-time inline "Allow Notifications" row after the first resolved approval.
+    var shouldOfferNotificationPrompt = false
+    var hasCompletedWelcome: Bool {
+        didSet {
+            userDefaults.set(hasCompletedWelcome, forKey: Self.hasCompletedWelcomeKey)
+        }
+    }
+    var isMenuBarExtraEnabled: Bool {
+        didSet {
+            userDefaults.set(isMenuBarExtraEnabled, forKey: Self.menuBarExtraEnabledKey)
+        }
+    }
+    var warnBeforeQuitWhileSharing: Bool {
+        didSet {
+            userDefaults.set(warnBeforeQuitWhileSharing, forKey: Self.warnBeforeQuitWhileSharingKey)
+        }
+    }
+    var isSetupChecklistEnabled: Bool {
+        didSet {
+            userDefaults.set(isSetupChecklistEnabled, forKey: Self.setupChecklistEnabledKey)
+        }
+    }
+
+    /// Opens SwiftUI scenes by ID; installed once by `MacRemoteApp` (AppSkeletonInstaller).
+    @ObservationIgnored var windowOpener: (@MainActor (_ windowID: String) -> Void)?
+
+    static let serverStoppedDenialReason = "Server stopped"
+    static let notificationApprovalCategoryID = "macremote.approval"
+    static let notificationApproveActionID = "macremote.approval.approve"
+    static let notificationDenyActionID = "macremote.approval.deny"
 
     private static let instanceIDKey = "MacRemote.instanceID"
     private static let remCTLProfileEnabledKey = "MacRemote.remCTLProfileEnabled"
     private static let disabledToolIDsKey = "MacRemote.disabledToolIDs"
     private static let confirmedFullDiskAccessSignatureKey = "MacRemote.confirmedFullDiskAccessSignature"
+    private static let fullDiskAccessRelaunchPendingKey = "MacRemote.fullDiskAccessRelaunchPending"
     private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
     private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
     private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"
@@ -62,6 +128,12 @@ final class AppModel {
     private static let connectorAccessModeKey = "MacRemote.connector.accessMode"
     private static let tunnelSupervisionActiveKey = "MacRemote.tunnelSupervision.active"
     private static let tunnelSupervisionURLKey = "MacRemote.tunnelSupervision.url"
+    private static let hasCompletedWelcomeKey = "MacRemote.hasCompletedWelcome"
+    private static let menuBarExtraEnabledKey = "MacRemote.menuBarExtraEnabled"
+    private static let warnBeforeQuitWhileSharingKey = "MacRemote.warnBeforeQuitWhileSharing"
+    private static let setupChecklistEnabledKey = "MacRemote.setupChecklistEnabled"
+    private static let notificationPromptOfferedKey = "MacRemote.notificationPromptOffered"
+    private static let hasResolvedFirstApprovalKey = "MacRemote.hasResolvedFirstApproval"
 
     private let userDefaults: UserDefaults
     private let tunnelService = TunnelService()
@@ -69,7 +141,7 @@ final class AppModel {
     private let oauthGrantStore: OAuthGrantStore
     private let oauthClientCredentialStore: OAuthClientCredentialStore
     private let clientToolPermissionStore: ClientToolPermissionStore
-    private let toolSurfaceRuntime: ToolSurfaceRuntime
+    let toolSurfaceRuntime: ToolSurfaceRuntime
     private let fullDiskAccessService = FullDiskAccessService()
     private let macOSPrivacyAccessService = MacOSPrivacyAccessService()
     private let smokeTestService = SmokeTestService()
@@ -78,11 +150,23 @@ final class AppModel {
     private let brrrSender: any BrrrSending
     private let processRunner = ProcessRunner()
     private let localMCPScanner: LocalMCPScanner
+    private let cliScanner: LocalCLIScanner
+    private let provenanceInspector: any ToolProvenanceInspecting
+    private var cliScanTask: Task<Void, Never>?
     private var authCoordinator: OAuthCoordinator!
     private var toolCallApprovalCoordinator: ToolCallApprovalCoordinator!
     private var localServer: LocalMCPServer?
     private var approvalCoordinatorGeneration = 0
     private var notifiedAuthorizationRequestIDs: Set<UUID> = []
+    private var notifiedToolCallRequestIDs: Set<UUID> = []
+    private let notificationResponder = ApprovalNotificationResponder()
+    /// macOS only re-evaluates a running process's Full Disk Access at launch,
+    /// so the fixer's failing re-check quits and reopens the app once per
+    /// session. True after this instance already consumed that one relaunch.
+    private var hasAutoRelaunchedForFullDiskAccess = false
+    /// Concurrent callers (readiness card, smoke checks, Check Again) share one
+    /// in-flight probe instead of racing several `remctl doctor` processes.
+    private var fullDiskAccessRefreshTask: Task<FullDiskAccessReport, Never>?
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -91,7 +175,9 @@ final class AppModel {
         oauthClientCredentialStore: OAuthClientCredentialStore? = nil,
         pushoverSender: any PushoverSending = PushoverService(),
         brrrSender: any BrrrSending = BrrrService(),
-        localMCPScanner: LocalMCPScanner = LocalMCPScanner()
+        localMCPScanner: LocalMCPScanner = LocalMCPScanner(),
+        cliScanner: LocalCLIScanner = LocalCLIScanner(),
+        provenanceInspector: any ToolProvenanceInspecting = SecStaticCodeProvenanceInspector()
     ) {
         self.userDefaults = userDefaults
         self.toolStore = toolStore
@@ -102,9 +188,20 @@ final class AppModel {
         self.pushoverSender = pushoverSender
         self.brrrSender = brrrSender
         self.localMCPScanner = localMCPScanner
+        self.cliScanner = cliScanner
+        self.provenanceInspector = provenanceInspector
         self.pushoverSettings = Self.loadPushoverSettings(from: userDefaults)
         self.brrrSettings = Self.loadBrrrSettings(from: userDefaults)
-        self.oauthClientCredentials = self.oauthClientCredentialStore.loadAll()
+        self.hasCompletedWelcome = userDefaults.bool(forKey: Self.hasCompletedWelcomeKey)
+        self.isMenuBarExtraEnabled = Self.loadBool(Self.menuBarExtraEnabledKey, from: userDefaults, defaultValue: true)
+        self.warnBeforeQuitWhileSharing = Self.loadBool(Self.warnBeforeQuitWhileSharingKey, from: userDefaults, defaultValue: true)
+        self.isSetupChecklistEnabled = Self.loadBool(Self.setupChecklistEnabledKey, from: userDefaults, defaultValue: true)
+        // Non-interactive: a Keychain prompt here (e.g. after a re-signed rebuild)
+        // would block the app before its first window. Locked entries surface in
+        // Settings › Security with a user-initiated Unlock instead.
+        let loadedCredentials = self.oauthClientCredentialStore.loadAllDetailed(interactive: false)
+        self.oauthClientCredentials = loadedCredentials.credentials
+        self.lockedOAuthClientIDs = loadedCredentials.lockedClientIDs
         let loadedConnectorProvider = Self.loadConnectorProvider(from: userDefaults)
         self.connectorProvider = loadedConnectorProvider
         self.cloudflareDraft = CloudflareCustomDomainDraft(
@@ -129,9 +226,26 @@ final class AppModel {
         let disabledToolIDs = persistedDisabledToolIDs.intersection(Set(loadedTools.map(\.id)))
         self.tools = loadedTools
         self.disabledToolIDs = disabledToolIDs
+        let cliScanCacheURL = toolStore.fileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("cli-scan-cache.json")
+        let restoredCLIScanCache = Self.loadCLIScanCache(at: cliScanCacheURL)
+        self.cliScanCacheURL = cliScanCacheURL
+        self.cliScanCache = restoredCLIScanCache
+        if let restoredCLIScanCache {
+            self.cliScanState = restoredCLIScanCache.restoredState
+        }
         self.isRemCTLProfileEnabled = Self.remCTLToolsAreEnabled(in: loadedTools, disabledToolIDs: disabledToolIDs)
         self.clientToolPermissionSnapshot = clientToolPermissionStore.snapshot()
         self.toolSurfaceRuntime.update(tools: loadedTools.filter { !disabledToolIDs.contains($0.id) })
+        // R16 — remote pre-execution revalidation: a changed binary identity
+        // blocks the call (and auto-unshares the tool) before anything runs.
+        self.toolSurfaceRuntime.setPreExecutionCheck { [weak self] tool in
+            guard let self else { return }
+            if case .identityChanged = await self.revalidateToolProvenance(toolID: tool.id) {
+                throw ToolValidationError.identityChanged(tool.name)
+            }
+        }
 
         installApprovalCoordinators()
         tunnelStatus = tunnelService.status(localServerURL: nil)
@@ -140,9 +254,21 @@ final class AppModel {
         }
         appendLog(
             level: .info,
-            "MacRemote initialized with \(toolExposureSummary.total) exposed tools."
+            "MacRemote initialized with \(toolExposureSummary.total) shared tools."
         )
         warnIfTunnelSupervisionWasInterrupted()
+        configureUserNotificationsIfSupported()
+        if userDefaults.bool(forKey: Self.fullDiskAccessRelaunchPendingKey) {
+            userDefaults.removeObject(forKey: Self.fullDiskAccessRelaunchPendingKey)
+            hasAutoRelaunchedForFullDiskAccess = true
+            Task { await completeFullDiskAccessRelaunch() }
+        }
+        if hasLockedOAuthCredentials {
+            appendLog(
+                level: .warning,
+                "Saved sign-in credentials are locked by macOS. Unlock them in Settings › Security so connected apps can keep signing in."
+            )
+        }
     }
 
     private func installApprovalCoordinators() {
@@ -159,14 +285,14 @@ final class AppModel {
         toolCallApprovalCoordinator = ToolCallApprovalCoordinator { [weak self] approvals in
             Task { @MainActor in
                 guard self?.approvalCoordinatorGeneration == generation else { return }
-                self?.toolCallApprovals = approvals
-                if approvals.contains(where: { $0.state == .pending }) {
-                    self?.selection = .approvals
-                }
+                self?.handleToolCallApprovalsChanged(approvals)
             }
         }
         approvals = []
         toolCallApprovals = []
+        notifiedAuthorizationRequestIDs.removeAll()
+        notifiedToolCallRequestIDs.removeAll()
+        updateDockBadge()
         setConnectedClients(authCoordinator.connectedClientSnapshot())
     }
 
@@ -187,17 +313,21 @@ final class AppModel {
         }
 
         if cloudflareDraft.accessMode.requiresOAuthClientSecret, oauthClientCredentials.isEmpty {
+            guard lockedOAuthClientIDs.isEmpty else {
+                serverStatus = .failed("Your saved sign-in credentials are locked. Unlock them in Settings › Security, then start the server.")
+                return nil
+            }
             generateOAuthClientCredentials()
         }
         guard !cloudflareDraft.accessMode.requiresOAuthClientSecret || !oauthClientCredentials.isEmpty else {
-            serverStatus = .failed("Generate OAuth client credentials before starting the local MCP server.")
+            serverStatus = .failed("Generate sign-in credentials in Settings › Security before starting the server.")
             return nil
         }
 
         serverStatus = .starting
         let accessReady = await refreshAccessStatusForServerStart()
         guard accessReady else {
-            serverStatus = .failed("Required macOS access is missing for exposed tools.")
+            serverStatus = .failed("Required macOS access is missing for shared tools.")
             tunnelStatus = tunnelService.status(localServerURL: localServerURL)
             return nil
         }
@@ -210,8 +340,8 @@ final class AppModel {
         guard !serverStatus.isRunning else { return }
         let toolsToExpose = exposedTools
         guard !toolsToExpose.isEmpty else {
-            serverStatus = .failed("Enable at least one tool before starting the local MCP server.")
-            appendLog(level: .warning, "Blocked server start: no tools are currently exposed.")
+            serverStatus = .failed("Share at least one tool before starting the local server.")
+            appendLog(level: .warning, "Blocked server start: no tools are currently shared.")
             return
         }
 
@@ -247,6 +377,7 @@ final class AppModel {
     }
 
     func stopLocalServer() {
+        resolvePendingRequestsForServerStop()
         clearTunnelSupervision()
         tunnelService.stop()
         localServer?.stop()
@@ -275,7 +406,8 @@ final class AppModel {
         _ = authCoordinator.revokeAllGrants()
         installApprovalCoordinators()
         clientToolPermissionSnapshot = clientToolPermissionStore.clear()
-        selection = .settings
+        // §2.4: no navigation jump — Settings › Security confirms in place.
+        instanceRotationConfirmation = "New private address created"
         appendLog(
             level: .warning,
             "Rotated instance ID from \(Self.shortInstanceID(previousInstanceID)) to \(Self.shortInstanceID(nextInstanceID)); stopped exposure and cleared OAuth grants."
@@ -294,12 +426,35 @@ final class AppModel {
         )
     }
 
+    var hasLockedOAuthCredentials: Bool {
+        !lockedOAuthClientIDs.isEmpty
+    }
+
+    private func refreshOAuthClientCredentials() {
+        let loaded = oauthClientCredentialStore.loadAllDetailed(interactive: true)
+        oauthClientCredentials = loaded.credentials
+        lockedOAuthClientIDs = loaded.lockedClientIDs
+    }
+
+    /// User-initiated from Settings › Security: performs an interactive Keychain
+    /// read, so the macOS password prompt appears at a moment the user chose.
+    func unlockOAuthCredentials() {
+        let previouslyLocked = lockedOAuthClientIDs.count
+        refreshOAuthClientCredentials()
+        authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
+        if lockedOAuthClientIDs.isEmpty, previouslyLocked > 0 {
+            appendLog(level: .info, "Unlocked \(previouslyLocked) saved sign-in credential\(previouslyLocked == 1 ? "" : "s") from the Keychain.")
+        } else if hasLockedOAuthCredentials {
+            appendLog(level: .warning, "Sign-in credentials are still locked — the Keychain request was not approved.")
+        }
+    }
+
     func generateOAuthClientCredentials(label: String? = nil) {
         do {
             let credential = try oauthClientCredentialStore.generate(
                 label: label ?? defaultOAuthClientCredentialLabel
             )
-            oauthClientCredentials = oauthClientCredentialStore.loadAll()
+            refreshOAuthClientCredentials()
             authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
             appendLog(level: .info, "Generated OAuth client credentials for \(credential.label).")
         } catch {
@@ -314,7 +469,7 @@ final class AppModel {
                 return
             }
             revokeOAuthStateForCredential(clientID: clientID, action: "Rotated OAuth client credentials for \(replacement.label).")
-            oauthClientCredentials = oauthClientCredentialStore.loadAll()
+            refreshOAuthClientCredentials()
             authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
         } catch {
             appendLog(level: .error, "Could not rotate OAuth client credentials: \(error.localizedDescription)")
@@ -326,7 +481,7 @@ final class AppModel {
             let label = oauthClientCredentials.first { $0.clientID == clientID }?.label ?? "OAuth Client"
             try oauthClientCredentialStore.delete(clientID: clientID)
             revokeOAuthStateForCredential(clientID: clientID, action: "Deleted OAuth client credentials for \(label).")
-            oauthClientCredentials = oauthClientCredentialStore.loadAll()
+            refreshOAuthClientCredentials()
             authCoordinator.updateClientAuthentication(currentOAuthClientAuthenticationPolicy)
         } catch {
             appendLog(level: .error, "Could not delete OAuth client credentials: \(error.localizedDescription)")
@@ -395,7 +550,7 @@ final class AppModel {
 
     func runRemCTLTodayTest() {
         guard isToolIDExposed("remctl.today") else {
-            appendLog(level: .warning, "Expose the Today tool before running the Reminders test.")
+            appendLog(level: .warning, "Share the Today tool before running the Reminders test.")
             return
         }
 
@@ -431,7 +586,7 @@ final class AppModel {
         syncRunningToolSurface()
         appendLog(
             level: enabled ? .info : .warning,
-            enabled ? "Exposed Reminders tools." : "Disabled Reminders tools."
+            enabled ? "Shared Reminders tools." : "Stopped sharing Reminders tools."
         )
         return nil
     }
@@ -449,14 +604,14 @@ final class AppModel {
            tool.permissionRequirements.contains(.fullDiskAccess),
            !fullDiskAccessReport.isReady {
             presentFullDiskAccessPrompt(reason: .manualCheck)
-            return "Run Check Access before exposing Full Disk Access-required tools while the server is running."
+            return "Run Check Access before sharing tools that need Full Disk Access while the server is running."
         }
         if enabled,
            serverStatus.isRunning,
            MacOSPrivacyAccessService.automaticallyCheckedRequirements(in: [tool]).isEmpty == false,
            !macOSPrivacyAccessReport.isReady {
-            selection = .settings
-            return "Run Check Access before exposing tools that need macOS privacy access while the server is running."
+            revealReadinessRow(.privacyPermissions)
+            return "Run Check Access before sharing tools that need macOS privacy access while the server is running."
         }
 
         if enabled {
@@ -469,7 +624,12 @@ final class AppModel {
             fullDiskAccessPrompt = nil
         }
         syncRunningToolSurface()
-        appendLog(level: enabled ? .info : .warning, "\(enabled ? "Exposed" : "Disabled") tool \(tool.name).")
+        appendLog(level: enabled ? .info : .warning, enabled ? "Shared tool \(tool.name)." : "Stopped sharing tool \(tool.name).")
+        if enabled, tool.provenance != nil {
+            // R16 revalidation point: the Share toggle turning on. An identity
+            // change flips the tool back to Not Shared.
+            Task { await revalidateToolProvenance(toolID: id) }
+        }
         return nil
     }
 
@@ -483,12 +643,17 @@ final class AppModel {
 
     func checkFullDiskAccess() {
         Task {
+            let previousState = fullDiskAccessReport.state
             let report = await refreshFullDiskAccessStatus()
             switch report.state {
             case .ready:
                 fullDiskAccessPrompt = nil
                 appendLog(level: .info, "Full Disk Access check passed for MacRemote.")
             case .required:
+                if shouldAutoRelaunchForFullDiskAccess(previousState: previousState) {
+                    performFullDiskAccessRelaunch()
+                    return
+                }
                 presentFullDiskAccessPrompt(reason: .manualCheck)
                 appendLog(level: .warning, "Full Disk Access required: \(singleLine(report.detail))")
             case .confirmationRequired:
@@ -506,10 +671,10 @@ final class AppModel {
             case .ready:
                 appendLog(level: .info, "macOS privacy access check passed for MacRemote.")
             case .required:
-                selection = .settings
+                revealReadinessRow(.privacyPermissions)
                 appendLog(level: .warning, "macOS privacy access required: \(singleLine(privacyReport.detail))")
             case .failed(let message):
-                selection = .settings
+                revealReadinessRow(.privacyPermissions)
                 appendLog(level: .error, "macOS privacy access check failed: \(message)")
             default:
                 break
@@ -517,11 +682,47 @@ final class AppModel {
         }
     }
 
+    /// Auto quit-and-reopen is only worth one shot, and only once the user has
+    /// already seen a Required result (or just came back from System Settings):
+    /// at that point a still-failing check usually means macOS is serving this
+    /// process the cached pre-grant answer, which only a relaunch clears.
+    func shouldAutoRelaunchForFullDiskAccess(previousState: FullDiskAccessState) -> Bool {
+        guard !hasAutoRelaunchedForFullDiskAccess else { return false }
+        switch previousState {
+        case .required, .helperOpened:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func performFullDiskAccessRelaunch() {
+        hasAutoRelaunchedForFullDiskAccess = true
+        userDefaults.set(true, forKey: Self.fullDiskAccessRelaunchPendingKey)
+        appendLog(level: .info, "macOS only refreshes Full Disk Access at launch — quitting and reopening MacRemote to pick up your changes.")
+        relaunchMacRemote()
+    }
+
+    /// Second half of the automatic quit-and-reopen: the previous instance set
+    /// the pending marker before relaunching. Re-check from the fresh process
+    /// and either clear the fixer or reopen it with the stale-row guidance.
+    private func completeFullDiskAccessRelaunch() async {
+        guard exposedToolsRequireFullDiskAccess else { return }
+        let report = await refreshFullDiskAccessStatus()
+        if report.isReady {
+            fullDiskAccessPrompt = nil
+            appendLog(level: .info, "Full Disk Access is ready after relaunching MacRemote.")
+        } else {
+            presentFullDiskAccessPrompt(reason: .manualCheck)
+            appendLog(level: .warning, "Full Disk Access is still blocked after relaunching. If System Settings shows access enabled, the row may be stale — use Re-add MacRemote in System Settings. \(singleLine(report.detail))")
+        }
+    }
+
     func openFullDiskAccessHelper() {
         Task {
             fullDiskAccessReport = FullDiskAccessReport(
                 state: .helperOpened,
-                detail: "Opening the guided Full Disk Access setup. After changing System Settings, relaunch MacRemote before checking again.",
+                detail: "Opening System Settings. Add every item below, then come back and Check Again — MacRemote relaunches itself if macOS needs a fresh start to see the change.",
                 targets: fullDiskAccessReport.targets
             )
             let report = await fullDiskAccessService.openHelper(
@@ -529,7 +730,6 @@ final class AppModel {
                 tools: exposedTools
             )
             fullDiskAccessReport = report
-            selection = .settings
 
             switch report.state {
             case .helperOpened:
@@ -593,6 +793,11 @@ final class AppModel {
     }
 
     func runToolTest(toolID: String, parameters: [String: ToolArgumentValue] = [:]) async {
+        // R16 pre-execution revalidation: never run a binary whose publisher
+        // changed since it was added.
+        if case .identityChanged = await revalidateToolProvenance(toolID: toolID) {
+            return
+        }
         do {
             let result = try await toolExecutorSnapshot().execute(toolID: toolID, parameters: parameters)
             if result.succeeded {
@@ -605,17 +810,25 @@ final class AppModel {
         }
     }
 
-    func addUserTool(from draft: ToolDefinitionDraft) -> String? {
+    /// `shared: false` lands the tool Not Shared in the same transaction (R4 —
+    /// used by Customize & Save on scan-sourced drafts, so the tool never has a
+    /// momentary shared window on a running server).
+    func addUserTool(from draft: ToolDefinitionDraft, shared: Bool = true) -> String? {
         do {
             let tool = try draft.makeTool()
             appendTool(tool)
+            if !shared {
+                disabledToolIDs.insert(tool.id)
+            }
             try persistUserDefinedTools()
             persistToolExposureState()
             syncRunningToolSurface()
-            if isToolExposed(tool) {
+            if !shared {
+                appendLog(level: .info, "Added tool \(tool.name) — not shared.")
+            } else if isToolExposed(tool) {
                 appendLog(level: .info, "Added tool \(tool.name).")
             } else {
-                appendLog(level: .warning, "Added tool \(tool.name) disabled until Full Disk Access passes.")
+                appendLog(level: .warning, "Added tool \(tool.name) — not shared until Full Disk Access passes.")
             }
             return nil
         } catch {
@@ -626,6 +839,18 @@ final class AppModel {
 
     func addUserTools(from presetSet: DefaultToolPresetSet) -> String? {
         addUserTools(from: presetSet.presets, sourceName: presetSet.name)
+    }
+
+    /// How many of these presets are NOT already installed — lets callers show
+    /// honest counts ("Add 12 Tools") and treat all-duplicates as a non-event.
+    func newPresetCount(in presets: [DefaultToolPreset]) -> Int {
+        let existingSignatures = Set(tools.map(Self.toolSignature))
+        return presets.count { preset in
+            !existingSignatures.contains(Self.toolSignature(
+                executablePath: preset.executablePath,
+                argumentPattern: preset.draft.argumentPattern
+            ))
+        }
     }
 
     func addUserTools(from presets: [DefaultToolPreset], sourceName: String) -> String? {
@@ -661,7 +886,7 @@ final class AppModel {
             syncRunningToolSurface()
 
             let skipped = presets.count - candidates.count
-            let disabledSuffix = addedDisabledForFDA > 0 ? " \(addedDisabledForFDA) disabled until Full Disk Access passes." : ""
+            let disabledSuffix = addedDisabledForFDA > 0 ? " \(addedDisabledForFDA) not shared until Full Disk Access passes." : ""
             let skippedSuffix = skipped > 0 ? " Skipped \(skipped) already installed." : ""
             appendLog(level: .info, "Added \(candidates.count) tools from \(sourceName).\(skippedSuffix)\(disabledSuffix)")
             return nil
@@ -751,9 +976,302 @@ final class AppModel {
         syncRunningToolSurface()
         appendLog(
             level: enabled ? .info : .warning,
-            "\(enabled ? "Enabled" : "Disabled") \(serverTools.count) bridge tools for \(serverTools.first?.mcpBridgeServerName ?? "Local MCP")."
+            "\(enabled ? "Shared" : "Stopped sharing") \(serverTools.count) imported tools for \(serverTools.first?.mcpBridgeServerName ?? "Local MCP")."
         )
         return nil
+    }
+
+    // MARK: - CLI discovery (CLI-DISCOVERY-SPEC §2.2, §3.3)
+
+    func scanInstalledCLIs() {
+        guard !cliScanState.isScanning else {
+            appendLog(level: .warning, "The command-line tool scan is already running.")
+            return
+        }
+
+        cliScanSourceFailures = [:]
+        cliScanState = .scanning(
+            progress: CLIScanSource.allCases.map { CLISourceProgress(source: $0, phase: .pending) },
+            partial: []
+        )
+        appendLog(level: .info, "Scanning this Mac for command-line tools.")
+        startCLIScan(sources: CLIScanSource.allCases, retainedCandidates: [])
+    }
+
+    func cancelCLIScan() {
+        cliScanTask?.cancel()
+    }
+
+    func retryCLIScanSource(_ source: CLIScanSource) {
+        guard !cliScanState.isScanning else {
+            appendLog(level: .warning, "The command-line tool scan is already running.")
+            return
+        }
+
+        let retained = cliScanState.candidates.filter { $0.source.scanSource != source }
+        cliScanSourceFailures[source] = nil
+        cliScanState = .scanning(
+            progress: [CLISourceProgress(source: source, phase: .pending)],
+            partial: retained
+        )
+        appendLog(level: .info, "Retrying the command-line tool scan for \(source.displayName).")
+        startCLIScan(sources: [source], retainedCandidates: retained)
+    }
+
+    private func startCLIScan(sources: [CLIScanSource], retainedCandidates: [DiscoveredCLICandidate]) {
+        let scanner = cliScanner
+        let previousCache = cliScanCache
+        cliScanTask = Task {
+            let outcome = await scanner.scan(
+                sources: Set(sources),
+                previousCache: previousCache,
+                merging: retainedCandidates,
+                isCancelled: { Task.isCancelled },
+                onProgress: { progress, partial in
+                    Task { @MainActor in
+                        self.noteCLIScanProgress(progress, partial: partial)
+                    }
+                }
+            )
+            self.finishCLIScan(
+                state: outcome.scanState,
+                sourceProgress: outcome.sourceProgress,
+                sourceFingerprints: outcome.sourceFingerprints,
+                seenResolvedPaths: outcome.seenResolvedPaths,
+                sources: sources
+            )
+        }
+    }
+
+    private func noteCLIScanProgress(_ progress: CLISourceProgress, partial: [DiscoveredCLICandidate]) {
+        guard case .scanning(var ledger, _) = cliScanState else { return }
+        if let index = ledger.firstIndex(where: { $0.source == progress.source }) {
+            ledger[index] = progress
+        } else {
+            ledger.append(progress)
+        }
+        cliScanState = .scanning(progress: ledger, partial: partial)
+    }
+
+    private func finishCLIScan(
+        state: CLIScanState,
+        sourceProgress: [CLISourceProgress],
+        sourceFingerprints: [String: String],
+        seenResolvedPaths: Set<String>,
+        sources: [CLIScanSource]
+    ) {
+        cliScanTask = nil
+        for source in sources {
+            cliScanSourceFailures[source] = nil
+        }
+        for progress in sourceProgress {
+            if case .failed(let reason) = progress.phase {
+                cliScanSourceFailures[progress.source] = reason
+            }
+        }
+
+        cliScanState = state
+        switch state {
+        case .canceled(let candidates, _, _):
+            appendLog(level: .info, "Command-line tool scan canceled: \(candidates.count) tools kept from completed sources.")
+        case .failed(let reason, _, _):
+            appendLog(level: .error, "The command-line tool scan couldn't finish: \(reason)")
+        case .loaded(let candidates, let date):
+            appendLog(level: .info, "Scanned this Mac: \(candidates.count) command-line tool\(candidates.count == 1 ? "" : "s") found.")
+            persistCLIScanCache(
+                candidates: candidates,
+                date: date,
+                sourceFingerprints: sourceFingerprints,
+                seenResolvedPaths: seenResolvedPaths
+            )
+        case .idle, .scanning:
+            break
+        }
+    }
+
+    /// DL-11: the seen-set and fingerprints update only at scan completion, so
+    /// "New" keeps meaning "since the previous completed scan".
+    private func persistCLIScanCache(
+        candidates: [DiscoveredCLICandidate],
+        date: Date,
+        sourceFingerprints: [String: String],
+        seenResolvedPaths: Set<String>
+    ) {
+        var fingerprints = cliScanCache?.sourceFingerprints ?? [:]
+        fingerprints.merge(sourceFingerprints) { _, new in new }
+        let cache = CLIScanCache(
+            candidates: candidates,
+            lastScanDate: date,
+            seenResolvedPaths: seenResolvedPaths,
+            sourceFingerprints: fingerprints
+        )
+        cliScanCache = cache
+        do {
+            try FileManager.default.createDirectory(
+                at: cliScanCacheURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try JSONEncoder().encode(cache).write(to: cliScanCacheURL, options: [.atomic])
+        } catch {
+            appendLog(level: .warning, "Could not save the scan cache: \(error.localizedDescription)")
+        }
+    }
+
+    private static func loadCLIScanCache(at url: URL) -> CLIScanCache? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(CLIScanCache.self, from: data)
+    }
+
+    /// Adds scanned tools through the ordinary draft pipeline. Every draft is
+    /// forced to Flexible Command + Destructive (DL-1) with provenance recorded
+    /// (R15), and the new IDs land in `disabledToolIDs` in the same transaction
+    /// so scan bulk adds arrive Not Shared (R4/G3 — deliberately not
+    /// `appendTool`, which enables new tools by default).
+    func addToolsFromScan(_ candidates: [DiscoveredCLICandidate]) -> String? {
+        let existingSignatures = Set(tools.map(Self.toolSignature))
+        let newCandidates = candidates.filter { !existingSignatures.contains($0.addedSignature) }
+
+        guard !newCandidates.isEmpty else {
+            appendLog(level: .warning, "No new tools to add from the scan.")
+            return "All selected tools are already added."
+        }
+
+        let originalTools = tools
+        let originalDisabledToolIDs = disabledToolIDs
+
+        do {
+            var usedIDs = Set(tools.map(\.id))
+            var takenNames = Set((tools.map(\.name) + DefaultToolPresetCatalog.presets.map(\.name)).map { $0.lowercased() })
+            var rowFailures = [String]()
+            var addedCount = 0
+
+            for candidate in newCandidates {
+                var draft = scanToolDraft(for: candidate)
+                if takenNames.contains(draft.name.lowercased()) {
+                    draft.name = "\(draft.name) (\(candidate.source.displayName))"
+                }
+                do {
+                    let tool = try draft.makeTool(id: Self.mintScanToolID(for: candidate, existingIDs: usedIDs))
+                    tools.append(tool)
+                    disabledToolIDs.insert(tool.id)
+                    usedIDs.insert(tool.id)
+                    takenNames.insert(tool.name.lowercased())
+                    addedCount += 1
+                } catch {
+                    rowFailures.append("\(candidate.binaryName): \(error.localizedDescription)")
+                }
+            }
+
+            guard addedCount > 0 else {
+                tools = originalTools
+                disabledToolIDs = originalDisabledToolIDs
+                let message = rowFailures.joined(separator: " ")
+                appendLog(level: .error, "Could not add tools from the scan: \(message)")
+                return message
+            }
+
+            try persistUserDefinedTools()
+            persistToolExposureState()
+            syncRunningToolSurface()
+            appendLog(level: .info, "Added \(addedCount) tool\(addedCount == 1 ? "" : "s") from a scan of this Mac — none shared.")
+            if rowFailures.isEmpty {
+                return nil
+            }
+            return "Couldn't add \(rowFailures.count) of \(newCandidates.count): \(rowFailures.joined(separator: " "))"
+        } catch {
+            tools = originalTools
+            disabledToolIDs = originalDisabledToolIDs
+            appendLog(level: .error, "Could not add tools from the scan: \(error.localizedDescription)")
+            return error.localizedDescription
+        }
+    }
+
+    /// §3.3 — the candidate's own review draft (Flexible Command + Destructive,
+    /// DL-1/R5) plus the provenance record computed at add time (R15).
+    func scanToolDraft(for candidate: DiscoveredCLICandidate) -> ToolDefinitionDraft {
+        var draft = candidate.makeDraft()
+        draft.provenance = makeProvenance(for: candidate)
+        return draft
+    }
+
+    private func makeProvenance(for candidate: DiscoveredCLICandidate) -> ToolProvenance {
+        // R15: signature + content hash are re-read at add time; the candidate's
+        // scan-time signature is only the fallback for a vanished target.
+        let identity = provenanceInspector.currentIdentity(forExecutableAt: candidate.resolvedPath)
+        return ToolProvenance(
+            sourceKind: candidate.source,
+            packageName: candidate.packageName,
+            packageVersion: candidate.version,
+            addedDate: Date(),
+            resolvedPathAtAdd: candidate.resolvedPath,
+            signingIdentityAtAdd: identity?.signingIdentity
+                ?? ToolProvenance.signingIdentityDescription(for: candidate.signature),
+            contentSHA256AtAdd: identity?.contentSHA256 ?? "",
+            wasQuarantinedAtAdd: candidate.isQuarantined,
+            summaryIsHarvested: candidate.summary != nil,
+            summaryOrigin: candidate.summary != nil ? candidate.summaryOrigin : nil
+        )
+    }
+
+    /// §3.4 — scan IDs keep the candidate's product-minted "scan.<source>.<slug>"
+    /// namespace (never shadowing preset or `custom.<hex>` IDs), suffixed only
+    /// on collision with an already-registered tool.
+    static func mintScanToolID(for candidate: DiscoveredCLICandidate, existingIDs: Set<String>) -> String {
+        guard existingIDs.contains(candidate.id) else { return candidate.id }
+        var suffix = 2
+        while existingIDs.contains("\(candidate.id)-\(suffix)") {
+            suffix += 1
+        }
+        return "\(candidate.id)-\(suffix)"
+    }
+
+    // MARK: - Provenance revalidation (R16)
+
+    /// R16 — runs at the two revalidation points (Share toggle turning on, and
+    /// before executing a tool): a stat + static signature read, never execution.
+    /// Identity change ⇒ auto-unshare + inline row + one Activity warning;
+    /// content change under the same identity ⇒ informational only.
+    @discardableResult
+    func revalidateToolProvenance(toolID: String) async -> ToolProvenanceRevalidationOutcome? {
+        guard let tool = tools.first(where: { $0.id == toolID }),
+              let provenance = tool.provenance else {
+            return nil
+        }
+
+        let inspector = provenanceInspector
+        let path = tool.executablePath
+        let identity = await Task.detached { inspector.currentIdentity(forExecutableAt: path) }.value
+        guard let identity else {
+            // Missing executable is housekeeping (§5.6), never an auto-unshare.
+            return nil
+        }
+
+        if identity.signingIdentity != provenance.signingIdentityAtAdd {
+            noteProvenanceIdentityChange(for: tool)
+            return .identityChanged(previous: provenance.signingIdentityAtAdd, current: identity.signingIdentity)
+        }
+
+        provenanceIdentityChangedToolIDs.remove(toolID)
+        if !provenance.contentSHA256AtAdd.isEmpty, identity.contentSHA256 != provenance.contentSHA256AtAdd {
+            if provenanceContentUpdates[toolID] == nil {
+                provenanceContentUpdates[toolID] = Date()
+            }
+            return .contentChanged
+        }
+        return .identityUnchanged
+    }
+
+    private func noteProvenanceIdentityChange(for tool: ToolDefinition) {
+        let isFirstNotice = !provenanceIdentityChangedToolIDs.contains(tool.id)
+        provenanceIdentityChangedToolIDs.insert(tool.id)
+        if isToolExposed(tool) {
+            disabledToolIDs.insert(tool.id)
+            persistToolExposureState()
+            syncRunningToolSurface()
+        }
+        if isFirstNotice {
+            appendLog(level: .warning, "\(tool.name): publisher changed since it was added — sharing turned off pending review.")
+        }
     }
 
     func deleteUserTool(id: String) -> String? {
@@ -763,6 +1281,8 @@ final class AppModel {
 
         tools.removeAll { $0.id == id && $0.isUserDefined }
         disabledToolIDs.remove(id)
+        provenanceIdentityChangedToolIDs.remove(id)
+        provenanceContentUpdates[id] = nil
         do {
             persistToolExposureState()
             try persistUserDefinedTools()
@@ -777,21 +1297,85 @@ final class AppModel {
         }
     }
 
+    /// D8: transactional in-place edit. The tool keeps its ID, so Always Allow
+    /// allowances (keyed by tool ID) survive untouched; on any validation or
+    /// persistence failure the whole change rolls back — tools, exposure state,
+    /// and the allowance snapshot.
+    func updateUserTool(id: String, draft: ToolDefinitionDraft) -> String? {
+        guard let index = tools.firstIndex(where: { $0.id == id }) else {
+            return "Unknown tool."
+        }
+        let existing = tools[index]
+        guard existing.isUserDefined else {
+            return "Built-in tools can't be edited."
+        }
+        guard existing.mcpBridgeIdentity == nil else {
+            return "Imported tools can't be edited. Refresh their MCP server instead."
+        }
+
+        let originalTools = tools
+        let originalDisabledToolIDs = disabledToolIDs
+        let originalAllowances = clientToolPermissionSnapshot
+
+        do {
+            // Provenance is permanent (R15): edits carry it forward, and a
+            // changed summary clears the harvested mark — the user's words are
+            // trusted and unframed (R11/DL-10).
+            var effectiveDraft = draft
+            if effectiveDraft.provenance == nil {
+                effectiveDraft.provenance = existing.provenance
+            }
+            if var provenance = effectiveDraft.provenance,
+               provenance.summaryIsHarvested,
+               effectiveDraft.summary.trimmingCharacters(in: .whitespacesAndNewlines) != existing.summary {
+                provenance.summaryIsHarvested = false
+                provenance.summaryOrigin = nil
+                effectiveDraft.provenance = provenance
+            }
+
+            let updated = try effectiveDraft.makeTool(id: id)
+            tools[index] = updated
+
+            if isToolExposed(updated),
+               serverStatus.isRunning,
+               updated.permissionRequirements.contains(.fullDiskAccess),
+               !fullDiskAccessReport.isReady {
+                disabledToolIDs.insert(id)
+                presentFullDiskAccessPrompt(reason: .manualCheck)
+            }
+
+            try persistUserDefinedTools()
+            persistToolExposureState()
+            syncRunningToolSurface()
+            appendLog(level: .info, "Updated tool \(updated.name).")
+            return nil
+        } catch {
+            tools = originalTools
+            disabledToolIDs = originalDisabledToolIDs
+            clientToolPermissionSnapshot = originalAllowances
+            appendLog(level: .error, "Could not update tool: \(error.localizedDescription)")
+            return error.localizedDescription
+        }
+    }
+
     func approveAuthorizationRequest(_ id: UUID) {
         if localServer?.approveAuthorizationRequest(id: id) == true {
-            appendLog(level: .info, "Authorization request approved on host Mac.")
+            appendLog(level: .info, "Connection request approved on this Mac.")
+            noteApprovalResolved()
         }
     }
 
     func denyAuthorizationRequest(_ id: UUID) {
         if localServer?.denyAuthorizationRequest(id: id) == true {
-            appendLog(level: .warning, "Authorization request denied on host Mac.")
+            appendLog(level: .warning, "Connection request denied on this Mac.")
+            noteApprovalResolved()
         }
     }
 
     func approveToolCallRequest(_ id: UUID) {
         if toolCallApprovalCoordinator.approve(requestID: id) {
-            appendLog(level: .info, "Tool call approved on host Mac.")
+            appendLog(level: .info, "Tool run approved on this Mac.")
+            noteApprovalResolved()
         }
     }
 
@@ -804,14 +1388,52 @@ final class AppModel {
 
         setToolAlwaysAllowed(true, toolID: request.toolID, clientID: clientID, clientTrustID: request.clientTrustID)
         if toolCallApprovalCoordinator.approve(requestID: id) {
-            appendLog(level: .info, "\(request.toolName) approved forever for \(request.clientName ?? "this client").")
+            appendLog(level: .info, "\(request.clientName ?? "This app") can now run \(request.toolName) without asking.")
+            noteApprovalResolved()
         }
     }
 
     func denyToolCallRequest(_ id: UUID) {
         if toolCallApprovalCoordinator.deny(requestID: id) {
-            appendLog(level: .warning, "Tool call denied on host Mac.")
+            appendLog(level: .warning, "Tool run denied on this Mac.")
+            noteApprovalResolved()
         }
+    }
+
+    /// Requests batch bar (spec §5.3): Deny All Waiting. Never approves anything (D2).
+    func denyAllWaitingRequests() {
+        let pendingAuthorizations = approvals.filter { $0.state == .pending }
+        let pendingToolCalls = toolCallApprovals.filter { $0.state == .pending }
+        let total = pendingAuthorizations.count + pendingToolCalls.count
+        guard total > 0 else { return }
+
+        for request in pendingAuthorizations {
+            _ = authCoordinator.deny(requestID: request.id)
+        }
+        for request in pendingToolCalls {
+            _ = toolCallApprovalCoordinator.deny(requestID: request.id)
+        }
+        appendLog(level: .warning, "Denied \(total) waiting request\(total == 1 ? "" : "s").")
+        noteApprovalResolved()
+    }
+
+    /// D18: pending requests resolve to Denied with reason "Server stopped";
+    /// one grouped Activity line.
+    private func resolvePendingRequestsForServerStop() {
+        let pendingAuthorizations = approvals.filter { $0.state == .pending }
+        let pendingToolCalls = toolCallApprovals.filter { $0.state == .pending }
+        let total = pendingAuthorizations.count + pendingToolCalls.count
+        guard total > 0 else { return }
+
+        for request in pendingAuthorizations {
+            requestDenialReasons[request.id] = Self.serverStoppedDenialReason
+            _ = authCoordinator.deny(requestID: request.id)
+        }
+        for request in pendingToolCalls {
+            requestDenialReasons[request.id] = Self.serverStoppedDenialReason
+        }
+        toolCallApprovalCoordinator.denyAllPending()
+        appendLog(level: .warning, "Server stopped — denied \(total) waiting request\(total == 1 ? "" : "s").")
     }
 
     func isToolAlwaysAllowed(toolID: String, clientID: String) -> Bool {
@@ -886,7 +1508,7 @@ final class AppModel {
     func startTunnel() {
         guard let localServerURL else {
             tunnelStatus = .stopped
-            appendLog(level: .warning, "Start the local MCP server before creating a tunnel.")
+            appendLog(level: .warning, "Start the local server before going public.")
             return
         }
 
@@ -1018,12 +1640,12 @@ final class AppModel {
 
     func checkSmokeReadiness() {
         guard !smokeTestState.isRunning else {
-            appendLog(level: .warning, "Wait for the current smoke test before checking readiness again.")
+            appendLog(level: .warning, "Wait for the current test before checking readiness again.")
             return
         }
 
         anthropicCredentialState = .checking
-        appendLog(level: .info, "Checking remote MCP smoke test readiness.")
+        appendLog(level: .info, "Checking test readiness.")
 
         Task {
             let fdaRequired = exposedToolsRequireFullDiskAccess
@@ -1042,7 +1664,7 @@ final class AppModel {
                 presentFullDiskAccessPrompt(reason: .remoteProof)
             }
             if privacyRequired, !privacyReport.isReady {
-                selection = .settings
+                revealReadinessRow(.privacyPermissions)
             }
             appendLog(
                 level: credentialState.isReady && fdaReady && privacyReady ? .info : .warning,
@@ -1065,7 +1687,7 @@ final class AppModel {
         }
 
         guard !smokeTestState.isRunning else {
-            appendLog(level: .warning, "A MacRemote smoke test is already running.")
+            appendLog(level: .warning, "A test is already running.")
             return
         }
 
@@ -1299,6 +1921,382 @@ final class AppModel {
         }
     }
 
+    // MARK: - Pending interrupts (Approval window + Requests menu)
+
+    /// Pending requests of both kinds, oldest first — the Approval window's
+    /// "1 of N" order and the target order for the Requests menu verbs (D4).
+    var pendingInterrupts: [PendingInterrupt] {
+        let authorizations = approvals
+            .filter { $0.state == .pending }
+            .map(PendingInterrupt.authorization)
+        let toolCalls = toolCallApprovals
+            .filter { $0.state == .pending }
+            .map(PendingInterrupt.toolCall)
+        return (authorizations + toolCalls).sorted { $0.createdAt < $1.createdAt }
+    }
+
+    var frontmostPendingInterrupt: PendingInterrupt? {
+        pendingInterrupts.first
+    }
+
+    var pendingRequestCount: Int {
+        approvals.count(where: { $0.state == .pending })
+            + toolCallApprovals.count(where: { $0.state == .pending })
+    }
+
+    var canAlwaysAllowFrontmostPendingRequest: Bool {
+        if case .toolCall(let request) = frontmostPendingInterrupt {
+            return request.clientID != nil
+        }
+        return false
+    }
+
+    func approveFrontmostPendingRequest() {
+        switch frontmostPendingInterrupt {
+        case .authorization(let request):
+            approveAuthorizationRequest(request.id)
+        case .toolCall(let request):
+            approveToolCallRequest(request.id)
+        case nil:
+            break
+        }
+    }
+
+    func denyFrontmostPendingRequest() {
+        switch frontmostPendingInterrupt {
+        case .authorization(let request):
+            denyAuthorizationRequest(request.id)
+        case .toolCall(let request):
+            denyToolCallRequest(request.id)
+        case nil:
+            break
+        }
+    }
+
+    func alwaysAllowFrontmostPendingRequest() {
+        guard case .toolCall(let request) = frontmostPendingInterrupt,
+              request.clientID != nil else { return }
+        approveToolCallForever(request.id)
+    }
+
+    // MARK: - Window presentation
+
+    /// D4: non-activating presentation. `openWindow` never activates the app from
+    /// the background, and `.windowLevel(.floating)` keeps the window visible above
+    /// other apps' windows without key status. When MacRemote itself is frontmost,
+    /// key focus is handed back to the window that had it, so a misdirected Return
+    /// can't approve anything. The window becomes key on first click.
+    func presentApprovalWindow() {
+        // NSApp is nil outside a running NSApplication (swift test).
+        guard let application = NSApp else { return }
+        let previousKeyWindow = application.keyWindow
+        windowOpener?(MacRemoteWindowID.approval)
+        DispatchQueue.main.async {
+            guard let window = Self.approvalNSWindow() else { return }
+            window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
+            window.orderFrontRegardless()
+            if application.isActive,
+               let previousKeyWindow,
+               previousKeyWindow !== window,
+               previousKeyWindow.isVisible {
+                previousKeyWindow.makeKey()
+            }
+        }
+    }
+
+    private static func approvalNSWindow() -> NSWindow? {
+        NSApp?.windows.first { window in
+            window.identifier?.rawValue.contains(MacRemoteWindowID.approval) == true
+                || window.title == "Approval"
+        }
+    }
+
+    func openMainWindow() {
+        windowOpener?(MacRemoteWindowID.main)
+        NSApp?.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - Navigation helpers (spec §2.3/§2.4)
+
+    func revealReadinessRow(_ row: ReadinessRow) {
+        selection = .connection
+        readinessRowToExpand = row
+    }
+
+    func clearReadinessRowToExpand() {
+        readinessRowToExpand = nil
+    }
+
+    func openTestingGuide() {
+        selection = .connection
+        isTestingGuidePresented = true
+    }
+
+    func focusSearchField() {
+        searchFocusToken &+= 1
+    }
+
+    func requestNewTool() {
+        selection = .tools
+        pendingToolsCommand = .newTool
+    }
+
+    func requestAddFromLibrary() {
+        selection = .tools
+        pendingToolsCommand = .addFromLibrary
+    }
+
+    /// CLI-2/DL-4: menu entry points navigate to Library ▸ Found on This Mac —
+    /// they never start a scan.
+    func requestScanForCommandLineTools() {
+        selection = .tools
+        pendingToolsCommand = .scanCommandLineTools
+    }
+
+    func clearPendingToolsCommand() {
+        pendingToolsCommand = nil
+    }
+
+    /// Menu / MenuBarExtra "Go Public…": opens the main window's exposure
+    /// confirmation — the blast-radius dialog never fires from a menu (spec §2.5).
+    func requestGoPublic() {
+        guard serverStatus.isRunning, !tunnelStatus.isRunning, tunnelStatus != .starting else { return }
+        openMainWindow()
+        selection = .connection
+        goPublicConfirmationRequested = true
+    }
+
+    func dismissInstanceRotationConfirmation() {
+        instanceRotationConfirmation = nil
+    }
+
+    // MARK: - Welcome & quit gate (spec §2.6)
+
+    func completeWelcome() {
+        hasCompletedWelcome = true
+    }
+
+    var shouldConfirmQuit: Bool {
+        warnBeforeQuitWhileSharing && tunnelStatus.isRunning
+    }
+
+    /// The user confirmed "Stop sharing and quit": stop sharing deliberately so
+    /// the next launch doesn't fire the interrupted-supervision crash warning.
+    func prepareForConfirmedQuit() {
+        stopTunnel()
+    }
+
+    // MARK: - Menu bar status (spec §2.5)
+
+    var menuBarStatusLine: String {
+        if hasConnectionFailure {
+            return "⚠ Connection failed"
+        }
+        if let url = currentPublicMCPURL {
+            return "● Public — \(url.host() ?? url.absoluteString)"
+        }
+        if serverStatus.isRunning {
+            return "● Local only"
+        }
+        return "○ Off"
+    }
+
+    var hasConnectionFailure: Bool {
+        if case .failed = serverStatus { return true }
+        if case .failed = tunnelStatus { return true }
+        return false
+    }
+
+    var canRunRemindersRoundTrip: Bool {
+        serverStatus.isRunning && isToolIDExposed("remctl.today")
+    }
+
+    // MARK: - Copy actions (every Copy logs — parity CC-2)
+
+    func copyPublicURL() {
+        guard let url = currentPublicMCPURL else {
+            appendLog(level: .warning, "Go public before copying your public link.")
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(url.absoluteString, forType: .string)
+        appendLog(level: .info, "Copied the public link for this Mac.")
+    }
+
+    func copyTestCommand(for mode: SmokeTestMode) {
+        guard let mcpURL = currentPublicMCPURL else {
+            appendLog(level: .warning, "Go public before copying a test command.")
+            return
+        }
+        let command = smokeTestCopyCommand(for: mode, mcpURL: mcpURL)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(command, forType: .string)
+        appendLog(level: .info, "Copied the \(mode == .preflight ? "Quick Test" : "Full Test") command.")
+    }
+
+    // MARK: - Native notifications (D13, spec §5.4)
+
+    func refreshNotificationPermissionStatus() {
+        guard supportsUserNotifications else {
+            notificationPermissionStatus = .unknown
+            return
+        }
+        Task {
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                notificationPermissionStatus = .notDetermined
+            case .authorized, .provisional, .ephemeral:
+                notificationPermissionStatus = .authorized
+            case .denied:
+                notificationPermissionStatus = .denied
+            @unknown default:
+                notificationPermissionStatus = .unknown
+            }
+        }
+    }
+
+    func requestNotificationPermission() {
+        shouldOfferNotificationPrompt = false
+        userDefaults.set(true, forKey: Self.notificationPromptOfferedKey)
+        guard supportsUserNotifications else {
+            appendLog(level: .warning, "Notifications need the packaged MacRemote app — build it with script/build_and_run.sh.")
+            return
+        }
+        Task {
+            do {
+                let granted = try await UNUserNotificationCenter.current()
+                    .requestAuthorization(options: [.alert, .sound])
+                notificationPermissionStatus = granted ? .authorized : .denied
+                appendLog(
+                    level: .info,
+                    granted ? "Notifications allowed." : "Notifications not allowed. You can change this in System Settings."
+                )
+            } catch {
+                notificationPermissionStatus = .denied
+                appendLog(level: .warning, "Notification permission request failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func dismissNotificationPrompt() {
+        shouldOfferNotificationPrompt = false
+        userDefaults.set(true, forKey: Self.notificationPromptOfferedKey)
+    }
+
+    func openNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func handleNotificationResponse(action: String, requestID: UUID?, kind: String?) {
+        switch action {
+        case Self.notificationApproveActionID:
+            guard let requestID else { return }
+            if kind == "toolCall" {
+                approveToolCallRequest(requestID)
+            } else {
+                approveAuthorizationRequest(requestID)
+            }
+        case Self.notificationDenyActionID:
+            guard let requestID else { return }
+            if kind == "toolCall" {
+                denyToolCallRequest(requestID)
+            } else {
+                denyAuthorizationRequest(requestID)
+            }
+        default:
+            presentApprovalWindow()
+        }
+    }
+
+    /// UNUserNotificationCenter crashes outside a real .app bundle (swift run,
+    /// swift test) — every call site must stay behind this guard.
+    private var supportsUserNotifications: Bool {
+        Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
+    }
+
+    private func configureUserNotificationsIfSupported() {
+        guard supportsUserNotifications else { return }
+        notificationResponder.handler = { [weak self] action, requestID, kind in
+            Task { @MainActor in
+                self?.handleNotificationResponse(action: action, requestID: requestID, kind: kind)
+            }
+        }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = notificationResponder
+        let approve = UNNotificationAction(
+            identifier: Self.notificationApproveActionID,
+            title: "Approve",
+            options: []
+        )
+        let deny = UNNotificationAction(
+            identifier: Self.notificationDenyActionID,
+            title: "Deny",
+            options: [.destructive]
+        )
+        let category = UNNotificationCategory(
+            identifier: Self.notificationApprovalCategoryID,
+            actions: [approve, deny],
+            intentIdentifiers: []
+        )
+        center.setNotificationCategories([category])
+        refreshNotificationPermissionStatus()
+    }
+
+    private func postApprovalNotification(kind: String, requestID: UUID, title: String, body: String) {
+        guard supportsUserNotifications, notificationPermissionStatus == .authorized else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.categoryIdentifier = Self.notificationApprovalCategoryID
+        content.userInfo = ["requestID": requestID.uuidString, "kind": kind]
+        let request = UNNotificationRequest(
+            identifier: Self.approvalNotificationIdentifier(for: requestID),
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    private func clearDeliveredApprovalNotifications(for ids: [UUID]) {
+        guard supportsUserNotifications, !ids.isEmpty else { return }
+        let identifiers = ids.map(Self.approvalNotificationIdentifier(for:))
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    private static func approvalNotificationIdentifier(for requestID: UUID) -> String {
+        "macremote.approval.\(requestID.uuidString)"
+    }
+
+    /// Rule 42: Dock badge only for pending requests, cleared when reviewed.
+    private func updateDockBadge() {
+        // NSApp is nil outside a running NSApplication (swift test).
+        guard let application = NSApp else { return }
+        let count = pendingRequestCount
+        application.dockTile.badgeLabel = count > 0 ? String(count) : nil
+    }
+
+    /// D13: the one-time inline notification ask fires right after the user
+    /// resolves their first approval.
+    private func noteApprovalResolved() {
+        guard !userDefaults.bool(forKey: Self.hasResolvedFirstApprovalKey) else { return }
+        userDefaults.set(true, forKey: Self.hasResolvedFirstApprovalKey)
+        if !userDefaults.bool(forKey: Self.notificationPromptOfferedKey),
+           notificationPermissionStatus == .notDetermined {
+            shouldOfferNotificationPrompt = true
+        }
+    }
+
+    private static func loadBool(_ key: String, from userDefaults: UserDefaults, defaultValue: Bool) -> Bool {
+        guard userDefaults.object(forKey: key) != nil else { return defaultValue }
+        return userDefaults.bool(forKey: key)
+    }
+
     func appendLog(level: AppLogEntry.Level, _ message: String) {
         logs.insert(AppLogEntry(date: Date(), level: level, message: message), at: 0)
         if logs.count > 250 {
@@ -1394,36 +2392,68 @@ final class AppModel {
         userDefaults.set(brrrSettings.trimmedWebhookSecret, forKey: Self.brrrWebhookSecretKey)
     }
 
+    /// Spec §2.4: pending approvals never navigate. The escalation stack fires
+    /// instead — Approval window + Dock badge + native notification + Pushover/Brrr.
     private func handleAuthorizationApprovalsChanged(_ approvals: [ApprovalRequest]) {
         self.approvals = approvals
         setConnectedClients(authCoordinator.connectedClientSnapshot())
-        notifyForNewAuthorizationApprovals(approvals)
-        if approvals.contains(where: { $0.state == .pending }) {
-            selection = .approvals
-        }
-    }
-
-    private func notifyForNewAuthorizationApprovals(_ approvals: [ApprovalRequest]) {
-        guard hasConfiguredNotificationProvider else { return }
 
         let newPendingRequests = approvals
             .filter { request in
                 request.state == .pending && !notifiedAuthorizationRequestIDs.contains(request.id)
             }
             .sorted { $0.createdAt < $1.createdAt }
+        let resolvedIDs = approvals.filter { $0.state != .pending }.map(\.id)
+        clearDeliveredApprovalNotifications(for: resolvedIDs)
+        updateDockBadge()
+        guard !newPendingRequests.isEmpty else { return }
 
         for request in newPendingRequests {
             notifiedAuthorizationRequestIDs.insert(request.id)
+            postApprovalNotification(
+                kind: "authorization",
+                requestID: request.id,
+                title: "\(request.clientName) wants to connect",
+                body: "Approve or deny it in MacRemote."
+            )
             sendNotificationToConfiguredProviders(
                 title: "MacRemote Approval Request",
-                message: "\(request.clientName) is requesting MacRemote access. Open MacRemote on the host Mac to approve or deny it.",
+                message: "\(request.clientName) wants to connect to this Mac. Open MacRemote to approve or deny it.",
                 threadID: "macremote-approval"
             )
         }
+        presentApprovalWindow()
     }
 
-    private var hasConfiguredNotificationProvider: Bool {
-        pushoverSettings.isConfigured || brrrSettings.isConfigured
+    private func handleToolCallApprovalsChanged(_ approvals: [ToolCallApprovalRequest]) {
+        toolCallApprovals = approvals
+
+        let newPendingRequests = approvals
+            .filter { request in
+                request.state == .pending && !notifiedToolCallRequestIDs.contains(request.id)
+            }
+            .sorted { $0.createdAt < $1.createdAt }
+        let resolvedIDs = approvals.filter { $0.state != .pending }.map(\.id)
+        clearDeliveredApprovalNotifications(for: resolvedIDs)
+        updateDockBadge()
+        guard !newPendingRequests.isEmpty else { return }
+
+        for request in newPendingRequests {
+            notifiedToolCallRequestIDs.insert(request.id)
+            let appName = request.clientName ?? "An app"
+            postApprovalNotification(
+                kind: "toolCall",
+                requestID: request.id,
+                title: "\(appName) wants to run \(request.toolName)",
+                body: "Approve or deny it in MacRemote."
+            )
+            sendNotificationToConfiguredProviders(
+                title: "MacRemote Approval Request",
+                message: "\(appName) wants to run \(request.toolName) on this Mac. Open MacRemote to approve or deny it.",
+                threadID: "macremote-approval"
+            )
+        }
+        presentApprovalWindow()
     }
 
     private func sendNotificationToConfiguredProviders(title: String, message: String, threadID: String? = nil) {
@@ -1498,11 +2528,12 @@ final class AppModel {
 
         let previousURL = userDefaults.string(forKey: Self.tunnelSupervisionURLKey)
         clearTunnelSupervision()
-        let suffix = previousURL.map { " Previous public URL: \($0)." } ?? ""
-        let message = "MacRemote restarted while a Cloudflare Tunnel was marked active. Tunnel supervision was interrupted; confirm the tunnel is still running or restart it from MacRemote.\(suffix)"
+        let suffix = previousURL.map { "\n\($0)" } ?? ""
+        // Canonical rewrite #9 (GUIDELINES §4.4).
+        let message = "MacRemote restarted while your link was live. Open MacRemote to check or restart it.\(suffix)"
         appendLog(level: .warning, message)
         sendNotificationToConfiguredProviders(
-            title: "MacRemote Tunnel Supervision Interrupted",
+            title: "Public link needs attention",
             message: message,
             threadID: "macremote-tunnel"
         )
@@ -1619,7 +2650,7 @@ final class AppModel {
     private func syncRunningToolSurface() {
         toolSurfaceRuntime.update(tools: exposedTools)
         if serverStatus.isRunning {
-            appendLog(level: .info, "Updated exposed tools; connected clients can refresh tools/list.")
+            appendLog(level: .info, "Updated shared tools; connected apps can refresh their tool list.")
         }
     }
 
@@ -1645,6 +2676,10 @@ final class AppModel {
     }
 
     private func presentFullDiskAccessPrompt(reason: FullDiskAccessPrompt.Reason) {
+        // Idempotent while shown: each prompt has a fresh sheet identity, so
+        // re-presenting (e.g. once per tool during a bulk Library import) made
+        // the sheet dismiss and reopen over and over.
+        guard fullDiskAccessPrompt == nil else { return }
         fullDiskAccessPrompt = FullDiskAccessPrompt(reason: reason)
     }
 
@@ -1683,10 +2718,11 @@ final class AppModel {
                 detail: "Grant FDA to every target shown in Settings, then relaunch MacRemote."
             )
         case .confirmationRequired:
+            // Needs the user's eyes, but nothing is known to be wrong — warning, not failure.
             return SmokeReadinessCheck(
                 id: "full-disk-access",
                 title: "Full Disk Access",
-                status: .blocked,
+                status: .warning,
                 detail: "Confirm the current Full Disk Access setup in Settings."
             )
         case .failed(let message):
@@ -1697,10 +2733,11 @@ final class AppModel {
                 detail: message
             )
         default:
+            // Not checked yet this session — calm, not alarming.
             return SmokeReadinessCheck(
                 id: "full-disk-access",
                 title: "Full Disk Access",
-                status: .blocked,
+                status: .waiting,
                 detail: "Run Check Readiness or Check Access before exposing the MCP server."
             )
         }
@@ -1748,10 +2785,11 @@ final class AppModel {
                 detail: message
             )
         default:
+            // Not checked yet this session — calm, not alarming.
             return SmokeReadinessCheck(
                 id: "macos-privacy",
                 title: "macOS Privacy",
-                status: .blocked,
+                status: .waiting,
                 detail: "Run Check Readiness or Check Access before exposing the MCP server."
             )
         }
@@ -1784,8 +2822,8 @@ final class AppModel {
             return SmokeReadinessCheck(
                 id: "local-server",
                 title: "Local MCP Server",
-                status: .blocked,
-                detail: "Start the local MCP server after required permission checks pass."
+                status: .waiting,
+                detail: "Starts when you turn on the server."
             )
         }
     }
@@ -1819,8 +2857,10 @@ final class AppModel {
             return SmokeReadinessCheck(
                 id: "public-tunnel",
                 title: "Public MCP URL",
-                status: .blocked,
-                detail: "Start the public tunnel after the local server is running."
+                status: .waiting,
+                detail: serverStatus.isRunning
+                    ? "Ready when you go public."
+                    : "Ready after you start the server and go public."
             )
         }
     }
@@ -1835,7 +2875,7 @@ final class AppModel {
                 id: "tool-surface",
                 title: "Tool Surface",
                 status: .blocked,
-                detail: "Enable at least one tool before running the remote proof."
+                detail: "Share at least one tool before testing."
             )
         }
 
@@ -1912,7 +2952,7 @@ final class AppModel {
     }
 
     private func stopExposureForInstanceRotation() {
-        toolCallApprovalCoordinator.denyAllPending()
+        resolvePendingRequestsForServerStop()
         clearTunnelSupervision()
         tunnelService.stop()
         localServer?.stop()
@@ -1923,29 +2963,39 @@ final class AppModel {
     }
 
     private func refreshFullDiskAccessStatus() async -> FullDiskAccessReport {
-        fullDiskAccessReport = FullDiskAccessReport(
-            state: .checking,
-            detail: "Checking protected-data access from MacRemote.",
-            targets: fullDiskAccessReport.targets
-        )
-        var report = await fullDiskAccessService.check(
-            environment: AppModel.toolEnvironment,
-            tools: exposedTools
-        )
-
-        if report.requiresManualConfirmation,
-           let signature = report.confirmationSignature,
-           userDefaults.string(forKey: Self.confirmedFullDiskAccessSignatureKey) == signature {
-            report = FullDiskAccessReport(
-                state: .ready,
-                detail: "Manual Full Disk Access confirmation is recorded for the current FDA-required tool surface.",
-                targets: report.targets,
-                confirmationSignature: signature,
-                automaticChecksPassed: report.automaticChecksPassed
-            )
+        if let inFlight = fullDiskAccessRefreshTask {
+            return await inFlight.value
         }
 
-        fullDiskAccessReport = report
+        let refresh = Task { () -> FullDiskAccessReport in
+            fullDiskAccessReport = FullDiskAccessReport(
+                state: .checking,
+                detail: "Checking protected-data access from MacRemote.",
+                targets: fullDiskAccessReport.targets
+            )
+            var report = await fullDiskAccessService.check(
+                environment: AppModel.toolEnvironment,
+                tools: exposedTools
+            )
+
+            if report.requiresManualConfirmation,
+               let signature = report.confirmationSignature,
+               userDefaults.string(forKey: Self.confirmedFullDiskAccessSignatureKey) == signature {
+                report = FullDiskAccessReport(
+                    state: .ready,
+                    detail: "Manual Full Disk Access confirmation is recorded for the current FDA-required tool surface.",
+                    targets: report.targets,
+                    confirmationSignature: signature,
+                    automaticChecksPassed: report.automaticChecksPassed
+                )
+            }
+
+            fullDiskAccessReport = report
+            return report
+        }
+        fullDiskAccessRefreshTask = refresh
+        let report = await refresh.value
+        fullDiskAccessRefreshTask = nil
         return report
     }
 
@@ -1965,7 +3015,7 @@ final class AppModel {
             let report = await refreshFullDiskAccessStatus()
             guard report.isReady else {
                 presentFullDiskAccessPrompt(reason: .serverStart)
-                appendLog(level: .warning, "Blocked server start: grant Full Disk Access before exposing FDA-required tools.")
+                appendLog(level: .warning, "Blocked server start: grant Full Disk Access before sharing tools that need it.")
                 return false
             }
         }
@@ -1973,7 +3023,7 @@ final class AppModel {
         if exposedToolsRequireCheckedMacOSPrivacyAccess {
             let report = await refreshMacOSPrivacyAccessStatus()
             guard report.isReady else {
-                selection = .settings
+                revealReadinessRow(.privacyPermissions)
                 appendLog(level: .warning, "Blocked server start: \(singleLine(report.detail))")
                 return false
             }
@@ -2017,10 +3067,126 @@ final class AppModel {
             tunnelStatus = .failed(message)
             appendLog(level: .error, message)
             sendNotificationToConfiguredProviders(
-                title: "MacRemote Tunnel Stopped",
-                message: "\(message) Open MacRemote on the host Mac to restart the tunnel.",
+                title: "Public link needs attention",
+                message: "\(message) Open MacRemote to check or restart it.",
                 threadID: "macremote-tunnel"
             )
         }
+    }
+}
+
+// MARK: - Supporting types
+
+/// One-shot commands the menu bar sends to the Tools page.
+enum ToolsCommand: String, Sendable {
+    case newTool
+    case addFromLibrary
+    case scanCommandLineTools
+}
+
+enum NotificationPermissionStatus: Equatable, Sendable {
+    case unknown
+    case notDetermined
+    case authorized
+    case denied
+}
+
+/// A pending request of either kind, unified for the Approval window's
+/// "1 of N" queue and the Requests menu verbs.
+enum PendingInterrupt: Identifiable, Equatable {
+    case authorization(ApprovalRequest)
+    case toolCall(ToolCallApprovalRequest)
+
+    var id: UUID {
+        switch self {
+        case .authorization(let request): request.id
+        case .toolCall(let request): request.id
+        }
+    }
+
+    var createdAt: Date {
+        switch self {
+        case .authorization(let request): request.createdAt
+        case .toolCall(let request): request.createdAt
+        }
+    }
+
+    var clientName: String? {
+        switch self {
+        case .authorization(let request): request.clientName
+        case .toolCall(let request): request.clientName
+        }
+    }
+}
+
+enum ToolProvenanceRevalidationOutcome: Equatable, Sendable {
+    case identityUnchanged
+    case contentChanged
+    case identityChanged(previous: String, current: String)
+}
+
+struct ToolBinaryIdentity: Equatable, Sendable {
+    let signingIdentity: String
+    let contentSHA256: String
+}
+
+protocol ToolProvenanceInspecting: Sendable {
+    /// Reads the current signing identity and content hash of the binary at
+    /// `path` without executing it. Returns nil when the file is unreadable.
+    func currentIdentity(forExecutableAt path: String) -> ToolBinaryIdentity?
+}
+
+/// A stat, a streaming hash, and the scanner's static signature reader —
+/// `SecStaticCode*` parses `LC_CODE_SIGNATURE` on disk and never runs the
+/// binary (spec §2.1/R16).
+struct SecStaticCodeProvenanceInspector: ToolProvenanceInspecting {
+    private let signatureReader: any SignatureReading
+
+    init(signatureReader: any SignatureReading = CodeSignatureReader()) {
+        self.signatureReader = signatureReader
+    }
+
+    func currentIdentity(forExecutableAt path: String) -> ToolBinaryIdentity? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              let contentSHA256 = sha256Hex(ofFileAt: path) else {
+            return nil
+        }
+        return ToolBinaryIdentity(
+            signingIdentity: ToolProvenance.signingIdentityDescription(
+                for: signatureReader.signatureTrust(atPath: path)
+            ),
+            contentSHA256: contentSHA256
+        )
+    }
+
+    private func sha256Hex(ofFileAt path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else {
+            return nil
+        }
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while let chunk = try? handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Bridges UNUserNotificationCenter action callbacks (arbitrary queue) onto the
+/// main actor. The handler is installed once during AppModel init.
+final class ApprovalNotificationResponder: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    var handler: (@Sendable (_ actionIdentifier: String, _ requestID: UUID?, _ kind: String?) -> Void)?
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let userInfo = response.notification.request.content.userInfo
+        let requestID = (userInfo["requestID"] as? String).flatMap(UUID.init(uuidString:))
+        let kind = userInfo["kind"] as? String
+        handler?(response.actionIdentifier, requestID, kind)
     }
 }

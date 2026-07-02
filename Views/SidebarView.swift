@@ -1,38 +1,31 @@
 import SwiftUI
 
 struct SidebarView: View {
+    @Environment(AppModel.self) private var appModel
     @Binding var selection: NavigationSection?
 
     var body: some View {
-        VStack(spacing: 0) {
-            Color.clear
-                .frame(height: 64)
-                .accessibilityHidden(true)
-
-            List(selection: $selection) {
-                ForEach(NavigationSection.allCases) { section in
-                    HStack(spacing: 10) {
-                        Image(systemName: section.systemImage)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 18)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(section.title)
-                                .lineLimit(1)
-
-                            if let detail = section.detail {
-                                Text(detail)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
+        List(selection: $selection) {
+            ForEach(NavigationSection.allCases) { section in
+                Label(section.title, systemImage: section.systemImage)
+                    .badge(section == .requests ? appModel.pendingRequestCount : 0)
+                    .accessibilityValue(
+                        section == .requests && appModel.pendingRequestCount > 0
+                            ? "\(appModel.pendingRequestCount) requests waiting"
+                            : ""
+                    )
+                    .overlay(alignment: .trailing) {
+                        if section == .connection, appModel.hasConnectionFailure {
+                            Circle()
+                                .fill(.red)
+                                .frame(width: 6, height: 6)
+                                .accessibilityLabel("Connection failed")
                         }
                     }
                     .tag(section)
-                }
             }
-            .listStyle(.sidebar)
         }
+        .listStyle(.sidebar)
         .navigationTitle("MacRemote")
     }
 }

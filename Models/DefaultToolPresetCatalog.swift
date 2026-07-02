@@ -70,7 +70,7 @@ struct DefaultToolPresetSet: Identifiable, Hashable, Sendable {
     let presetIDs: [String]
 
     var presets: [DefaultToolPreset] {
-        presetIDs.compactMap(DefaultToolPresetCatalog.preset)
+        presetIDs.compactMap { DefaultToolPresetCatalog.preset(id: $0) }
     }
 }
 
@@ -87,7 +87,7 @@ enum DefaultToolPresetCatalog {
 
     static var preferredCategory: ToolCategory {
         if codexExecutablePath != nil {
-            return .developer
+            return .ai
         }
         if pocketCTLExecutablePath != nil {
             return .podcasts
@@ -109,7 +109,7 @@ enum DefaultToolPresetCatalog {
             DefaultToolPresetSet(
                 id: "set.all_system_presets",
                 name: "All System Presets",
-                summary: "Install every available preset MacRemote detected on this Mac.",
+                summary: "Install every preset MacRemote found on this Mac.",
                 presetIDs: allPresetIDs
             )
         ]
@@ -118,8 +118,8 @@ enum DefaultToolPresetCatalog {
         if !detectedCLIPresetIDs.isEmpty {
             sets.append(DefaultToolPresetSet(
                 id: "set.detected_clis",
-                name: "Detected CLIs",
-                summary: "Install one direct adapter for each detected command-line tool.",
+                name: "Found on This Mac",
+                summary: "Install one Flexible Command for each command-line tool found on this Mac.",
                 presetIDs: detectedCLIPresetIDs
             ))
         }
@@ -129,7 +129,7 @@ enum DefaultToolPresetCatalog {
             sets.append(DefaultToolPresetSet(
                 id: "set.reminders",
                 name: "Reminders",
-                summary: "Install the Reminders read tools plus the direct RemCTL adapter.",
+                summary: "Install the Reminders read tools plus the flexible RemCTL command.",
                 presetIDs: remCTLPresetIDs
             ))
         }
@@ -139,7 +139,7 @@ enum DefaultToolPresetCatalog {
             sets.append(DefaultToolPresetSet(
                 id: "set.habits",
                 name: "Habits",
-                summary: "Install Habitify inspection tools plus the direct HabitCTL adapter.",
+                summary: "Install the Habitify read tools plus the flexible HabitCTL command.",
                 presetIDs: habitCTLPresetIDs
             ))
         }
@@ -149,7 +149,7 @@ enum DefaultToolPresetCatalog {
             sets.append(DefaultToolPresetSet(
                 id: "set.podcasts",
                 name: "Podcasts",
-                summary: "Install Pocket Casts inspection tools plus the direct PocketCTL adapter.",
+                summary: "Install the Pocket Casts read tools plus the flexible PocketCTL command.",
                 presetIDs: pocketPresetIDs
             ))
         }
@@ -159,15 +159,28 @@ enum DefaultToolPresetCatalog {
                 preset.id.hasPrefix("preset.peekaboo.") ||
                     preset.id.hasPrefix("preset.spogo.") ||
                     preset.id.hasPrefix("preset.summarize.") ||
-                    preset.id.hasPrefix("preset.gog.")
+                    preset.id.hasPrefix("preset.gog.") ||
+                    preset.id.hasPrefix("preset.openclaw.")
             }
             .map(\.id)
         if !steipetePresetIDs.isEmpty {
             sets.append(DefaultToolPresetSet(
                 id: "set.steipete_openclaw",
                 name: "Steipete / OpenClaw",
-                summary: "Install presets for Peekaboo, Spogo, Summarize, and Gog when present.",
+                summary: "Install presets for Peekaboo, Spogo, Summarize, Gog, and OpenClaw when present.",
                 presetIDs: steipetePresetIDs
+            ))
+        }
+
+        let aiPresetIDs = availablePresets
+            .filter { $0.category == .ai }
+            .map(\.id)
+        if !aiPresetIDs.isEmpty {
+            sets.append(DefaultToolPresetSet(
+                id: "set.ai",
+                name: "AI & Agents",
+                summary: "Install AI, agent, and local model CLIs.",
+                presetIDs: aiPresetIDs
             ))
         }
 
@@ -433,6 +446,18 @@ enum DefaultToolPresetCatalog {
         presets.first { $0.id == id }
     }
 
+    // §6.3 — lookups for the scanner's preset fold pass (§2.4 step 5).
+    static func preset(matchingExecutablePath path: String) -> DefaultToolPreset? {
+        presets.first { $0.executablePath == path }
+    }
+
+    static func preset(matchingBasename basename: String) -> DefaultToolPreset? {
+        presets.first { preset in
+            URL(fileURLWithPath: preset.executablePath).lastPathComponent
+                .caseInsensitiveCompare(basename) == .orderedSame
+        }
+    }
+
     static var codexExecutablePath: String? {
         ExecutableLocator.executablePath(named: "codex")
     }
@@ -456,7 +481,7 @@ enum DefaultToolPresetCatalog {
             DefaultToolPreset(
                 id: "preset.developer.codex_read_only_exec",
                 name: "Codex Read-Only Exec",
-                summary: "Run Codex non-interactively in read-only mode with a model prompt.",
+                summary: "Run Codex non-interactively with a prompt inside its read-only sandbox. The sandbox blocks file writes, but Codex still reads any local file its prompt asks for and sends context to the model, so calls require host approval.",
                 executablePath: executablePath,
                 argumentPattern: [
                     "--ask-for-approval", "never",
@@ -466,18 +491,18 @@ enum DefaultToolPresetCatalog {
                     "{prompt}"
                 ],
                 capability: .destructive,
-                category: .developer,
+                category: .ai,
                 timeoutSeconds: 60,
                 outputLimitKB: 2048
             ),
             DefaultToolPreset(
                 id: "preset.developer.codex",
                 name: "Codex CLI",
-                summary: "Run Codex by passing argv directly. Write-capable calls require per-call host approval.",
+                summary: "Run Codex by passing argv directly. Write calls ask for approval on this Mac.",
                 executablePath: executablePath,
                 argumentPattern: ["{args}"],
                 capability: .destructive,
-                category: .developer,
+                category: .ai,
                 timeoutSeconds: 60,
                 outputLimitKB: 2048,
                 mode: .cliAdapter
@@ -769,6 +794,8 @@ enum DefaultToolPresetCatalog {
             summarizePresets +
             gogPresets +
             llmPresets +
+            localModelPresets +
+            documentReadPresets +
             githubPresets +
             textDataPresets +
             mediaPresets +
@@ -820,6 +847,8 @@ enum DefaultToolPresetCatalog {
                 summarizePresets +
                 gogPresets +
                 llmPresets +
+                localModelPresets +
+                documentReadPresets +
                 githubPresets +
                 textDataPresets +
                 mediaPresets +
@@ -849,7 +878,7 @@ enum DefaultToolPresetCatalog {
         }
     }
 
-    private static let claudeCodeSummary = "Run Claude Code by passing argv directly. For remote MCP use, prefer non-interactive invocations such as `--print`, `--output-format json` or `--output-format stream-json`, explicit `--model`, `--permission-mode`, `--add-dir`, `--mcp-config`, and `--strict-mcp-config`; avoid bare interactive sessions and login flows unless the host Mac is attended."
+    private static let claudeCodeSummary = "Run Claude Code by passing argv directly. For remote MCP use, prefer non-interactive invocations such as `--print`, `--output-format json` or `--output-format stream-json`, explicit `--model`, `--permission-mode`, `--add-dir`, `--mcp-config`, and `--strict-mcp-config`; avoid bare interactive sessions and login flows unless this Mac is attended."
 
     private static let genericCLIAdapterDescriptors: [GenericCLIAdapterDescriptor] = [
         GenericCLIAdapterDescriptor(
@@ -857,7 +886,7 @@ enum DefaultToolPresetCatalog {
             presetID: "preset.claude.run",
             name: "Claude Code",
             summary: claudeCodeSummary,
-            category: .developer,
+            category: .ai,
             timeoutSeconds: 60,
             outputLimitKB: 5120
         ),
@@ -865,8 +894,118 @@ enum DefaultToolPresetCatalog {
             executableName: "grok",
             presetID: "preset.grok.run",
             name: "Grok CLI",
-            summary: "Run Grok by passing argv directly for local agent workflows.",
+            summary: "Run Grok by passing argv directly. Prefer non-interactive invocations with explicit output flags; avoid interactive sessions and login flows unless this Mac is attended.",
+            category: .ai
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "openclaw",
+            presetID: "preset.openclaw.run",
+            name: "OpenClaw CLI",
+            summary: "Run OpenClaw by passing argv directly for local agent gateway workflows. Prefer explicit subcommands and `--json` output; avoid interactive sessions and login flows unless this Mac is attended.",
             category: .developer
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "lms",
+            presetID: "preset.lms.run",
+            name: "LM Studio CLI",
+            summary: "Run the LM Studio CLI by passing argv directly to list, load, and unload local models and query the local server. `ps` and `ls` are read-only.",
+            category: .ai
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "git",
+            presetID: "preset.git.run",
+            name: "Git CLI",
+            summary: "Run git by passing argv directly against local repositories, using `-C {repo}` to select the repository. `status`, `log`, `diff`, and `show` are read-only; `commit`, `push`, `reset`, `rebase`, and `clean` modify repositories or remotes.",
+            category: .developer,
+            timeoutSeconds: 45
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "docker",
+            presetID: "preset.docker.run",
+            name: "Docker CLI",
+            summary: "Run Docker by passing argv directly for container workflows. Requires a running Docker or Colima daemon; `ps`, `images`, `inspect`, and `logs` are read-only, while `run`, `exec`, and `rm` create or modify containers.",
+            category: .developer
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "ipsw",
+            presetID: "preset.ipsw.run",
+            name: "IPSW CLI",
+            summary: "Run blacktop's ipsw by passing argv directly for IPSW/OTA firmware inspection and research. `info` and URL-listing commands are read-only; downloads and extractions write very large files.",
+            category: .developer
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "vercel",
+            presetID: "preset.vercel.run",
+            name: "Vercel CLI",
+            summary: "Run the Vercel CLI by passing argv directly for deploy, env, logs, and project workflows. `ls`, `inspect`, and `logs` are read-only; deploys and env writes change hosted projects.",
+            category: .developer
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "wrangler",
+            presetID: "preset.wrangler.run",
+            name: "Wrangler CLI",
+            summary: "Run the Wrangler CLI by passing argv directly for Cloudflare Workers deploy, env, logs, and project workflows. `list`, `tail`, and `versions list` are read-only; deploys and secret writes change hosted projects.",
+            category: .developer
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "go",
+            presetID: "preset.go.run",
+            name: "Go CLI",
+            summary: "Run the Go toolchain by passing argv directly for build, test, and module workflows.",
+            category: .developer
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "cargo",
+            presetID: "preset.cargo.run",
+            name: "Cargo CLI",
+            summary: "Run Cargo by passing argv directly for Rust build, test, and package workflows.",
+            category: .developer
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "defuddle",
+            presetID: "preset.defuddle.run",
+            name: "Defuddle",
+            summary: "Extract readable article content from a URL or local HTML file with Defuddle. Use `parse {url} --markdown` for Markdown output.",
+            category: .text,
+            capability: .write,
+            timeoutSeconds: 45
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "ntn",
+            presetID: "preset.ntn.run",
+            name: "Notion CLI",
+            summary: "Run ntn by passing argv directly to read and edit Notion pages and databases. Prefer `--json`; search and fetch commands are read-only, while page and database edits modify the workspace.",
+            category: .text,
+            timeoutSeconds: 45
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "obsidian",
+            presetID: "preset.obsidian.run",
+            name: "Obsidian CLI",
+            summary: "Run the Obsidian CLI by passing argv directly to read, search, and edit notes in local vaults. Requires Obsidian to be installed; vault writes modify note files on disk.",
+            category: .text,
+            timeoutSeconds: 30
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "pandoc",
+            presetID: "preset.pandoc.run",
+            name: "Pandoc CLI",
+            summary: "Convert documents between Markdown, HTML, DOCX, PDF, and more by passing argv directly; conversions write output files.",
+            category: .text
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "magick",
+            presetID: "preset.magick.run",
+            name: "ImageMagick CLI",
+            summary: "Run ImageMagick by passing argv directly for image conversion and editing; conversions write output files.",
+            category: .imageProcessing
+        ),
+        GenericCLIAdapterDescriptor(
+            executableName: "exiftool",
+            presetID: "preset.exiftool.run",
+            name: "ExifTool CLI",
+            summary: "Read or edit EXIF/IPTC/XMP metadata in media files by passing argv directly. Reads are safe; write flags modify files in place.",
+            category: .imageProcessing
         ),
         GenericCLIAdapterDescriptor(
             executableName: "swift",
@@ -878,7 +1017,7 @@ enum DefaultToolPresetCatalog {
         GenericCLIAdapterDescriptor(
             executableName: "xcodebuild",
             presetID: "preset.xcodebuild.run",
-            name: "Xcodebuild CLI",
+            name: "xcodebuild CLI",
             summary: "Run xcodebuild by passing argv directly for Apple platform build workflows.",
             category: .developer
         ),
@@ -892,14 +1031,14 @@ enum DefaultToolPresetCatalog {
         GenericCLIAdapterDescriptor(
             executableName: "npm",
             presetID: "preset.npm.run",
-            name: "NPM CLI",
+            name: "npm CLI",
             summary: "Run npm by passing argv directly for package and script workflows.",
             category: .developer
         ),
         GenericCLIAdapterDescriptor(
             executableName: "pnpm",
             presetID: "preset.pnpm.run",
-            name: "PNPM CLI",
+            name: "pnpm CLI",
             summary: "Run pnpm by passing argv directly for package and script workflows.",
             category: .developer
         ),
@@ -928,7 +1067,9 @@ enum DefaultToolPresetCatalog {
             executableName: "curl",
             presetID: "preset.curl.run",
             name: "Curl CLI",
-            summary: "Run curl by passing argv directly for HTTP workflows. Requests that send data require host approval.",
+            // F2: `.localNetwork` understates the reach — curl talks to any
+            // host — but the requirement stays and the summary says so.
+            summary: "Run curl by passing argv directly for HTTP requests. Every call requires host approval; requests can reach any host, so include the full URL and method in the argv for the approval prompt.",
             category: .utilities,
             capability: .destructive,
             timeoutSeconds: 45,
@@ -938,7 +1079,7 @@ enum DefaultToolPresetCatalog {
             executableName: "rsync",
             presetID: "preset.rsync.run",
             name: "Rsync CLI",
-            summary: "Run rsync by passing argv directly for file transfer workflows.",
+            summary: "Run rsync by passing argv directly to copy or mirror files locally or to remote hosts. `--delete` and overwrites destroy data at the destination; every call requires host approval.",
             category: .filesystem
         ),
         GenericCLIAdapterDescriptor(
@@ -1044,7 +1185,7 @@ enum DefaultToolPresetCatalog {
             directAdapter(
                 id: "preset.peekaboo.run",
                 name: "Peekaboo CLI",
-                summary: "Run Peekaboo by passing argv directly. Use absolute paths; no shell expansion is performed.",
+                summary: "Run Peekaboo by passing argv directly to capture screenshots, list and inspect apps, windows, and UI elements, and drive clicks and keystrokes on this Mac's screen.",
                 executablePath: executablePath,
                 category: .utilities,
                 timeoutSeconds: 60,
@@ -1081,7 +1222,7 @@ enum DefaultToolPresetCatalog {
             directAdapter(
                 id: "preset.spogo.run",
                 name: "Spogo CLI",
-                summary: "Run Spogo by passing argv directly. Playback and library changes require host approval.",
+                summary: "Run Spogo by passing argv directly. Playback and library changes ask for approval on this Mac.",
                 executablePath: executablePath,
                 category: .utilities,
                 timeoutSeconds: 30,
@@ -1093,13 +1234,15 @@ enum DefaultToolPresetCatalog {
     private static var summarizePresets: [DefaultToolPreset] {
         guard let executablePath = ExecutableLocator.executablePath(named: "summarize") else { return [] }
         return [
+            // DL-14: fetches arbitrary URLs and spends model credits, so it is
+            // `.write` — read-only would skip the per-call approval gate.
             DefaultToolPreset(
                 id: "preset.summarize.input",
                 name: "Summarize Input",
-                summary: "Summarize a URL or local file path.",
+                summary: "Summarize a URL or local file path. Fetches the URL and sends content to the configured model API.",
                 executablePath: executablePath,
                 argumentPattern: ["{input}", "--format", "md"],
-                capability: .readOnly,
+                capability: .write,
                 category: .text,
                 timeoutSeconds: 60,
                 outputLimitKB: 2048
@@ -1121,7 +1264,7 @@ enum DefaultToolPresetCatalog {
             directAdapter(
                 id: "preset.gog.run",
                 name: "Gog CLI",
-                summary: "Run Gog by passing argv directly. Prefer --json, --dry-run, --no-input, and --gmail-no-send when applicable.",
+                summary: "Run Gog, a Google Workspace CLI for Gmail, Calendar, Drive, and Contacts, by passing argv directly. Prefer `--json`, `--dry-run`, `--no-input`, and `--gmail-no-send` when applicable; sends and edits require host approval.",
                 executablePath: executablePath,
                 category: .utilities,
                 timeoutSeconds: 45
@@ -1135,11 +1278,11 @@ enum DefaultToolPresetCatalog {
             DefaultToolPreset(
                 id: "preset.llm.prompt",
                 name: "LLM Prompt",
-                summary: "Run Simon Willison's llm CLI with a prompt.",
+                summary: "Run Simon Willison's llm CLI with a prompt. Sends the prompt to the currently configured model API and logs the exchange to the local llm database.",
                 executablePath: executablePath,
                 argumentPattern: ["prompt", "{prompt}"],
                 capability: .write,
-                category: .developer,
+                category: .ai,
                 timeoutSeconds: 60,
                 outputLimitKB: 2048
             ),
@@ -1148,10 +1291,125 @@ enum DefaultToolPresetCatalog {
                 name: "LLM CLI",
                 summary: "Run llm by passing argv directly for model, embedding, plugin, and log workflows.",
                 executablePath: executablePath,
-                category: .developer,
+                category: .ai,
                 timeoutSeconds: 60
             )
         ]
+    }
+
+    // §6.1 #3/#4 — local model runtimes (detection-gated; `ollama` is an
+    // app-vended symlink per DL-17, `whisper-cli` is whisper.cpp's binary).
+    private static var localModelPresets: [DefaultToolPreset] {
+        var presets: [DefaultToolPreset] = []
+
+        if let ollama = ExecutableLocator.executablePath(named: "ollama") {
+            presets.append(DefaultToolPreset(
+                id: "preset.ollama.models",
+                name: "Ollama Models",
+                summary: "List locally installed Ollama models.",
+                executablePath: ollama,
+                argumentPattern: ["list"],
+                capability: .readOnly,
+                category: .ai,
+                timeoutSeconds: 10,
+                outputLimitKB: 1024
+            ))
+            presets.append(directAdapter(
+                id: "preset.ollama.run",
+                name: "Ollama CLI",
+                summary: "Run Ollama by passing argv directly for local model workflows. `list`, `ps`, and `show` are read-only; `run {model} {prompt}` generates text locally; `pull` and `rm` change local model storage. Generation can be slow — keep prompts short.",
+                executablePath: ollama,
+                category: .ai,
+                timeoutSeconds: 60
+            ))
+        }
+
+        if let whisper = ExecutableLocator.executablePath(named: "whisper-cli") {
+            presets.append(DefaultToolPreset(
+                id: "preset.whisper.transcribe",
+                name: "Whisper Transcribe",
+                summary: "Transcribe a local audio file with whisper.cpp. Requires a GGML model path and a 16 kHz-friendly audio file; prints the transcript to stdout.",
+                executablePath: whisper,
+                argumentPattern: ["-m", "{model}", "-f", "{audio}", "--no-prints"],
+                capability: .readOnly,
+                category: .ai,
+                timeoutSeconds: 60,
+                outputLimitKB: 2048
+            ))
+            presets.append(directAdapter(
+                id: "preset.whisper.run",
+                name: "Whisper CLI",
+                summary: "Run whisper.cpp by passing argv directly for local audio transcription. Requires a GGML model path via `-m`; output flags such as `-otxt` write transcript files next to the input.",
+                executablePath: whisper,
+                category: .ai,
+                timeoutSeconds: 60
+            ))
+        }
+
+        return presets
+    }
+
+    // §6.1 #5/#6/#13 — read-only document extraction plus the safe-delete helper.
+    private static var documentReadPresets: [DefaultToolPreset] {
+        var presets: [DefaultToolPreset] = []
+
+        if let pdftotext = ExecutableLocator.executablePath(named: "pdftotext") {
+            presets.append(DefaultToolPreset(
+                id: "preset.pdftotext.extract",
+                name: "PDF Extract Text",
+                summary: "Extract plain text from a PDF to stdout.",
+                executablePath: pdftotext,
+                argumentPattern: ["{path}", "-"],
+                capability: .readOnly,
+                category: .text,
+                timeoutSeconds: 30,
+                outputLimitKB: 2048
+            ))
+        }
+
+        if let pdfinfo = ExecutableLocator.executablePath(named: "pdfinfo") {
+            presets.append(DefaultToolPreset(
+                id: "preset.pdfinfo.info",
+                name: "PDF Info",
+                summary: "Return page count, dimensions, and metadata for a PDF.",
+                executablePath: pdfinfo,
+                argumentPattern: ["{path}"],
+                capability: .readOnly,
+                category: .text,
+                timeoutSeconds: 10,
+                outputLimitKB: 512
+            ))
+        }
+
+        if let tesseract = ExecutableLocator.executablePath(named: "tesseract") {
+            presets.append(DefaultToolPreset(
+                id: "preset.tesseract.ocr",
+                name: "OCR Image",
+                summary: "Recognize text in an image with Tesseract OCR and print it to stdout.",
+                executablePath: tesseract,
+                argumentPattern: ["{image}", "stdout"],
+                capability: .readOnly,
+                category: .imageProcessing,
+                timeoutSeconds: 60,
+                outputLimitKB: 2048
+            ))
+        }
+
+        if let trasher = ExecutableLocator.executablePath(named: "trasher") {
+            presets.append(DefaultToolPreset(
+                id: "preset.trasher.trash",
+                name: "Move To Trash",
+                summary: "Move a file or folder to the macOS Trash instead of deleting it permanently.",
+                executablePath: trasher,
+                argumentPattern: ["{path}"],
+                capability: .write,
+                category: .filesystem,
+                timeoutSeconds: 10,
+                outputLimitKB: 256
+            ))
+        }
+
+        return presets
     }
 
     private static var githubPresets: [DefaultToolPreset] {
@@ -1171,7 +1429,7 @@ enum DefaultToolPresetCatalog {
             directAdapter(
                 id: "preset.gh.run",
                 name: "GitHub CLI",
-                summary: "Run GitHub CLI by passing argv directly. Repository mutations require host approval.",
+                summary: "Run GitHub CLI by passing argv directly. Repository mutations ask for approval on this Mac.",
                 executablePath: executablePath,
                 category: .developer,
                 timeoutSeconds: 45
@@ -1185,7 +1443,7 @@ enum DefaultToolPresetCatalog {
         if let jq = ExecutableLocator.executablePath(named: "jq") {
             presets.append(DefaultToolPreset(
                 id: "preset.jq.file",
-                name: "JQ File",
+                name: "jq File",
                 summary: "Apply a jq filter to a JSON file.",
                 executablePath: jq,
                 argumentPattern: ["{filter}", "{path}"],
@@ -1196,7 +1454,7 @@ enum DefaultToolPresetCatalog {
             ))
             presets.append(directAdapter(
                 id: "preset.jq.run",
-                name: "JQ CLI",
+                name: "jq CLI",
                 summary: "Run jq by passing argv directly.",
                 executablePath: jq,
                 category: .text,
@@ -1235,23 +1493,25 @@ enum DefaultToolPresetCatalog {
         var presets: [DefaultToolPreset] = []
 
         if let ytDLP = ExecutableLocator.executablePath(named: "yt-dlp") {
+            // DL-14: fetching the URL is an unapproved outbound channel when
+            // read-only, so the metadata template is `.write`.
             presets.append(DefaultToolPreset(
                 id: "preset.ytdlp.metadata",
-                name: "YT-DLP Metadata",
-                summary: "Return video metadata without downloading media.",
+                name: "yt-dlp Metadata",
+                summary: "Return video metadata as JSON without downloading media. Fetches the URL from this Mac.",
                 executablePath: ytDLP,
                 argumentPattern: ["--dump-json", "--skip-download", "{url}"],
-                capability: .readOnly,
-                category: .utilities,
+                capability: .write,
+                category: .imageProcessing,
                 timeoutSeconds: 30,
                 outputLimitKB: 2048
             ))
             presets.append(directAdapter(
                 id: "preset.ytdlp.run",
-                name: "YT-DLP CLI",
-                summary: "Run yt-dlp by passing argv directly. Downloads require host approval.",
+                name: "yt-dlp CLI",
+                summary: "Run yt-dlp by passing argv directly. Downloads ask for approval on this Mac.",
                 executablePath: ytDLP,
-                category: .utilities,
+                category: .imageProcessing,
                 timeoutSeconds: 60
             ))
         }
@@ -1274,7 +1534,7 @@ enum DefaultToolPresetCatalog {
             presets.append(directAdapter(
                 id: "preset.ffmpeg.run",
                 name: "FFmpeg CLI",
-                summary: "Run FFmpeg by passing argv directly. Media conversion writes require host approval.",
+                summary: "Run FFmpeg by passing argv directly. Media conversion writes ask for approval on this Mac.",
                 executablePath: ffmpeg,
                 category: .imageProcessing,
                 timeoutSeconds: 60
@@ -1302,7 +1562,7 @@ enum DefaultToolPresetCatalog {
             presets.append(directAdapter(
                 id: "preset.cloudflared.run",
                 name: "Cloudflared CLI",
-                summary: "Run cloudflared by passing argv directly for tunnel and network workflows.",
+                summary: "Run cloudflared by passing argv directly. Creating tunnels exposes local services to the internet and requires host approval; `tunnel list` and `version` are read-only.",
                 executablePath: cloudflared,
                 category: .utilities,
                 timeoutSeconds: 60
@@ -1324,7 +1584,7 @@ enum DefaultToolPresetCatalog {
             presets.append(directAdapter(
                 id: "preset.tailscale.run",
                 name: "Tailscale CLI",
-                summary: "Run Tailscale by passing argv directly. Network state changes require host approval.",
+                summary: "Run Tailscale by passing argv directly. Network state changes ask for approval on this Mac.",
                 executablePath: tailscale,
                 category: .utilities,
                 timeoutSeconds: 30
@@ -1385,7 +1645,7 @@ enum DefaultToolPresetCatalog {
             presets.append(directAdapter(
                 id: "preset.supabase.run",
                 name: "Supabase CLI",
-                summary: "Run Supabase CLI by passing argv directly for local and hosted project workflows.",
+                summary: "Run the Supabase CLI by passing argv directly for local and hosted project workflows. `status`, `projects list`, and `inspect` are read-only; migrations, deploys, and secrets commands modify projects.",
                 executablePath: supabase,
                 category: .developer,
                 timeoutSeconds: 60
@@ -1396,7 +1656,7 @@ enum DefaultToolPresetCatalog {
             presets.append(directAdapter(
                 id: "preset.xcodegen.run",
                 name: "XcodeGen CLI",
-                summary: "Run XcodeGen by passing argv directly. Project generation writes require host approval.",
+                summary: "Run XcodeGen by passing argv directly. Project generation writes ask for approval on this Mac.",
                 executablePath: xcodegen,
                 category: .developer,
                 timeoutSeconds: 60
@@ -1413,29 +1673,21 @@ enum DefaultToolPresetCatalog {
             presets.append(directAdapter(
                 id: "preset.grok_session.run",
                 name: "Grok Session CLI",
-                summary: "Run grok-session by passing argv directly for local agent-session workflows.",
+                summary: "Run grok-session by passing argv directly to list, resume, and inspect saved Grok agent sessions.",
                 executablePath: grokSession,
                 category: .developer,
                 timeoutSeconds: 60
             ))
         }
 
-        if let cora = ExecutableLocator.executablePath(named: "cora") {
-            presets.append(directAdapter(
-                id: "preset.cora.run",
-                name: "Cora CLI",
-                summary: "Run Cora by passing argv directly.",
-                executablePath: cora,
-                category: .developer,
-                timeoutSeconds: 60
-            ))
-        }
+        // No Cora preset: its behavior could not be verified, and a preset the
+        // product cannot describe truthfully must not ship (owner decision).
 
         if let monologue = ExecutableLocator.executablePath(named: "monologue") {
             presets.append(directAdapter(
                 id: "preset.monologue.run",
                 name: "Monologue CLI",
-                summary: "Run Monologue by passing argv directly.",
+                summary: "Run Monologue by passing argv directly to list, search, and read voice notes, transcripts, and summaries. Reads are safe; prefer JSON output.",
                 executablePath: monologue,
                 category: .text,
                 timeoutSeconds: 60
@@ -1448,22 +1700,37 @@ enum DefaultToolPresetCatalog {
     private static var personalWorkflowPresets: [DefaultToolPreset] {
         var presets: [DefaultToolPreset] = []
 
-        if let matter = ExecutableLocator.executablePath(named: "matter") {
-            presets.append(directAdapter(
-                id: "preset.matter.run",
-                name: "Matter CLI",
-                summary: "Run Matter by passing argv directly for read-later workflows.",
-                executablePath: matter,
+        // DL-13: Matter is deprecated — Readwise replaced it. No Matter preset.
+        if let readwise = ExecutableLocator.executablePath(named: "readwise") {
+            presets.append(DefaultToolPreset(
+                id: "preset.readwise.inbox",
+                name: "Readwise Inbox",
+                summary: "List the Readwise Reader inbox as JSON.",
+                executablePath: readwise,
+                argumentPattern: ["reader-list-documents", "--location", "new", "--json"],
+                capability: .readOnly,
                 category: .text,
-                timeoutSeconds: 60
+                timeoutSeconds: 20,
+                outputLimitKB: 1024
+            ))
+            presets.append(directAdapter(
+                id: "preset.readwise.run",
+                name: "Readwise CLI",
+                summary: "Run the Readwise Reader CLI by passing argv directly for read-later documents and highlights. Prefer `--json`, `--limit`, and `--response-fields` for reads; `reader-list-documents`, `reader-search-documents`, and `readwise-list-highlights` are read-only, while create, move, tag, and bulk-edit commands modify the library.",
+                executablePath: readwise,
+                category: .text,
+                timeoutSeconds: 45
             ))
         }
 
         if let spark = ExecutableLocator.executablePath(named: "spark") {
+            // Capability stays `.destructive` even though the CLI is read-only:
+            // mailbox content is maximally sensitive, and per-call approval is
+            // the only exfiltration gate (F4).
             presets.append(directAdapter(
                 id: "preset.spark.run",
                 name: "Spark CLI",
-                summary: "Run Spark by passing argv directly for email workflows.",
+                summary: "Query Spark email by passing argv directly: list and search emails, read threads and attachments, and check calendar events, availability, and contacts. The CLI is read-only — it cannot send, reply, or file mail — and requires Spark Desktop to be running.",
                 executablePath: spark,
                 category: .utilities,
                 timeoutSeconds: 60
@@ -1474,7 +1741,7 @@ enum DefaultToolPresetCatalog {
             presets.append(directAdapter(
                 id: "preset.frames.run",
                 name: "Frames CLI",
-                summary: "Run Frames by passing argv directly for screenshot and media framing workflows.",
+                summary: "Run Frames by passing argv directly to add Apple device bezels to screenshots. Writes framed images next to the originals.",
                 executablePath: frames,
                 category: .imageProcessing,
                 timeoutSeconds: 60

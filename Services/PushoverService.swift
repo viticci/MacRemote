@@ -8,7 +8,7 @@ enum PushoverServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .missingCredentials:
-            "Enter a Pushover User Key and API Token before sending notifications."
+            "Add your Pushover User Key and API Token in Settings, then try again."
         case .invalidResponse:
             "Pushover returned an invalid response."
         case .api(let message):

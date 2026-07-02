@@ -17,10 +17,21 @@ final class LocalMCPServer: @unchecked Sendable {
     private static let protocolVersionHeader = "MCP-Protocol-Version"
     private static let connectorIconPath = "/macremote-icon.png"
     private static let connectorIconFileName = "MacRemoteConnectorIcon.png"
+    private static let connectorIcon128Path = "/macremote-icon-128.png"
+    private static let connectorIcon128FileName = "MacRemoteConnectorIcon128.png"
+    private static let connectorIcon64FileName = "MacRemoteConnectorIcon64.png"
     private static let faviconICOPath = "/favicon.ico"
     private static let faviconICOFileName = "Favicon.ico"
     private static let faviconPNGPath = "/favicon.png"
     private static let faviconPNGFileName = "Favicon.png"
+
+    // Claude.ai resolves connector icons through Google's favicon service today and may
+    // adopt SEP-973 serverInfo.icons later; the data: entry needs no fetch at all.
+    // Built once because it embeds ~9 KB of base64.
+    private static let connectorIconDataURI: String? = {
+        guard let data = staticResourceData(fileName: connectorIcon64FileName) else { return nil }
+        return "data:image/png;base64,\(data.base64EncodedString())"
+    }()
 
     private let queue = DispatchQueue(label: "com.macremote.local-server")
     private var listener: NWListener?
@@ -171,6 +182,10 @@ final class LocalMCPServer: @unchecked Sendable {
             return staticIconResponse(fileName: Self.connectorIconFileName, contentType: "image/png")
         }
 
+        if request.method == "GET", request.path == Self.connectorIcon128Path {
+            return staticIconResponse(fileName: Self.connectorIcon128FileName, contentType: "image/png")
+        }
+
         if request.method == "GET", request.path == Self.faviconICOPath {
             return staticIconResponse(fileName: Self.faviconICOFileName, contentType: "image/x-icon")
         }
@@ -195,6 +210,10 @@ final class LocalMCPServer: @unchecked Sendable {
         }
 
         switch (request.method, request.path) {
+        case ("GET", "/"):
+            // Google's favicon fetcher parses this page for <link rel="icon">; it is also
+            // what a person sees when they open the bare tunnel URL in a browser.
+            return htmlResponse(landingPageHTML())
         case ("GET", "/health"):
             return jsonResponse(healthPayload(base: base, activePort: activePort))
         case ("GET", "/.well-known/oauth-authorization-server"):
@@ -586,18 +605,7 @@ final class LocalMCPServer: @unchecked Sendable {
                             "listChanged": false
                         ]
                     ],
-                    "serverInfo": [
-                        "name": "MacRemote",
-                        "version": "0.1.0",
-                        "title": "MacRemote",
-                        "icons": [
-                            [
-                                "src": connectorIconURL(base: base),
-                                "mimeType": "image/png",
-                                "sizes": ["512x512"]
-                            ]
-                        ]
-                    ]
+                    "serverInfo": serverInfo(base: base)
                 ])
             case "ping":
                 return jsonRPCResult(id: id, result: [:])
@@ -766,7 +774,12 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     private func toolDescription(for tool: ToolDefinition) -> String {
-        var parts = [tool.summary]
+        // DL-10/R10: a harvested publisher summary is data, not guidance — it
+        // composes last, quoted and provenance-labeled, after MacRemote's own
+        // product-authored text. Curated, hand-written, and user-edited
+        // summaries compose first, exactly as before.
+        let harvestedFrame = harvestedSummaryFrame(for: tool)
+        var parts = harvestedFrame == nil ? [tool.summary] : []
 
         if let bridge = tool.mcpBridge {
             parts.append("Bridged from MCP server `\(bridge.serverName)` at \(bridge.serverURL). MacRemote initializes the upstream streamable HTTP session and forwards exact JSON arguments to upstream tool `\(bridge.toolName)`. No shell or executable is used.")
@@ -816,7 +829,21 @@ final class LocalMCPServer: @unchecked Sendable {
             parts.append("May require macOS privacy permission for \(names); macOS can attribute child CLI access to MacRemote as the host app.")
         }
 
+        if let harvestedFrame {
+            parts.append(harvestedFrame)
+        }
+
         return parts.joined(separator: " ")
+    }
+
+    private func harvestedSummaryFrame(for tool: ToolDefinition) -> String? {
+        guard let provenance = tool.provenance,
+              provenance.summaryIsHarvested,
+              !tool.summary.isEmpty else {
+            return nil
+        }
+        let origin = provenance.summaryOrigin ?? provenance.sourceKind.displayName
+        return "Publisher's description (\(origin), unverified): \"\(tool.summary)\""
     }
 
     private func outputSchema() -> [String: Any] {
@@ -1032,6 +1059,105 @@ final class LocalMCPServer: @unchecked Sendable {
         ).data
     }
 
+    private func serverInfo(base: String) -> [String: Any] {
+        var icons: [[String: Any]] = [
+            [
+                "src": "\(base)\(Self.connectorIcon128Path)",
+                "mimeType": "image/png",
+                "sizes": ["128x128"]
+            ],
+            [
+                "src": connectorIconURL(base: base),
+                "mimeType": "image/png",
+                "sizes": ["512x512"]
+            ]
+        ]
+        if let dataURI = Self.connectorIconDataURI {
+            icons.append([
+                "src": dataURI,
+                "mimeType": "image/png",
+                "sizes": ["64x64"]
+            ])
+        }
+        return [
+            "name": "MacRemote",
+            "version": "0.1.0",
+            "title": "MacRemote",
+            "description": "Approved local CLI tools on this Mac, exposed over MCP.",
+            "websiteUrl": base,
+            "icons": icons
+        ]
+    }
+
+    private func htmlResponse(_ html: String) -> Data {
+        HTTPResponse(
+            status: .ok,
+            headers: [
+                "Cache-Control": "public, max-age=3600",
+                "Content-Type": "text/html; charset=utf-8"
+            ],
+            body: html
+        ).data
+    }
+
+    // Shared web shell (spec §5.9): both public HTML pages render the same
+    // centered mark + wordmark. Favicon markup must stay identical across pages —
+    // Google's favicon fetcher (Claude.ai connector icons) parses it.
+    private static let webShellStyle = """
+        :root { color-scheme: light dark; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+          display: grid; place-items: center;
+          min-height: 92vh; margin: 0; padding: 0 24px;
+          color: #1d1d1f; background: #f5f5f7;
+          text-align: center;
+          -webkit-font-smoothing: antialiased;
+        }
+        @media (prefers-color-scheme: dark) {
+          body { color: #f5f5f7; background: #1d1d1f; }
+        }
+        img.mark { width: 96px; height: 96px; border-radius: 22px; }
+        h1 { font-size: 1.5em; font-weight: 600; margin: 0.7em 0 0.3em; }
+        p { margin: 0.4em auto; max-width: 34em; line-height: 1.45; }
+        footer { margin-top: 2.4em; font-size: 0.85em; opacity: 0.55; }
+        code { font-family: ui-monospace, Menlo, monospace; font-size: 0.95em; }
+    """
+
+    private func webShellPage(bodyContent: String, extraStyle: String = "", script: String = "") -> String {
+        """
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>MacRemote</title>
+          <link rel="icon" href="/favicon.ico" sizes="any">
+          <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
+          <link rel="apple-touch-icon" href="/macremote-icon.png">
+          <style>
+        \(Self.webShellStyle)
+        \(extraStyle)
+          </style>
+        </head>
+        <body>
+          <main>
+            <img class="mark" src="/macremote-icon-128.png" alt="MacRemote">
+            <h1>MacRemote</h1>
+        \(bodyContent)
+          </main>
+        \(script)
+        </body>
+        </html>
+        """
+    }
+
+    private func landingPageHTML() -> String {
+        webShellPage(bodyContent: """
+            <p>This Mac shares approved tools with apps its owner authorizes. Connections require sign-in and the owner&rsquo;s approval.</p>
+            <footer>MCP endpoint: <code>/mcp</code></footer>
+        """)
+    }
+
     private func staticIconResponse(fileName: String, contentType: String) -> Data {
         guard let data = Self.staticResourceData(fileName: fileName) else {
             return jsonErrorResponse(
@@ -1078,39 +1204,57 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     private func authorizationPageHTML(requestID: UUID) -> String {
+        let waitingStyle = """
+            .dots span {
+              animation: dot-pulse 1.4s infinite ease-in-out;
+              opacity: 0.2;
+            }
+            .dots span:nth-child(2) { animation-delay: 0.2s; }
+            .dots span:nth-child(3) { animation-delay: 0.4s; }
+            @keyframes dot-pulse {
+              0%, 80%, 100% { opacity: 0.2; }
+              40% { opacity: 1; }
+            }
+            @media (prefers-reduced-motion: reduce) {
+              .dots span { animation: none; opacity: 0.6; }
+            }
         """
-        <!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>MacRemote Approval</title>
-          <link rel="icon" href="/favicon.ico" sizes="any">
-          <link rel="icon" type="image/png" href="/favicon.png">
-          <link rel="apple-touch-icon" href="/macremote-icon.png">
-          <style>
-            body { font: -apple-system-body; margin: 42px; max-width: 680px; color: #1d1d1f; }
-            code { background: #f5f5f7; padding: 2px 5px; border-radius: 5px; }
-          </style>
-        </head>
-        <body>
-          <h1>Host approval required</h1>
-          <p>Open MacRemote on this Mac and approve this request. This page will redirect after approval.</p>
-          <p>Request <code>\(requestID.uuidString.htmlEscaped)</code></p>
+        let script = """
           <script>
+            const statusLine = document.getElementById('status');
+            function setLine(text) { statusLine.textContent = text; }
             async function poll() {
-              const response = await fetch('/authorize/status?request_id=\(requestID.uuidString)');
-              const status = await response.json();
-              if (status.redirect_uri) {
-                window.location.href = status.redirect_uri;
-                return;
-              }
+              try {
+                const response = await fetch('/authorize/status?request_id=\(requestID.uuidString)');
+                const status = await response.json();
+                if (status.status === 'approved' && status.redirect_uri) {
+                  setLine('Approved \\u2014 redirecting\\u2026');
+                  window.location.href = status.redirect_uri;
+                  return;
+                }
+                if (status.status === 'denied' || status.status === 'expired' || status.status === 'not_found') {
+                  setLine(status.status === 'denied'
+                    ? 'Denied on the owner\\u2019s Mac.'
+                    : 'This request expired. Try connecting again.');
+                  if (status.redirect_uri) {
+                    setTimeout(() => { window.location.href = status.redirect_uri; }, 1500);
+                  }
+                  return;
+                }
+              } catch (error) {}
               setTimeout(poll, 1200);
             }
             poll();
           </script>
-        </body>
-        </html>
         """
+        return webShellPage(
+            bodyContent: """
+                <p id="status">Waiting for approval on the owner&rsquo;s Mac<span class="dots"><span>.</span><span>.</span><span>.</span></span></p>
+                <footer>Request ID: <code>\(requestID.uuidString.htmlEscaped)</code></footer>
+            """,
+            extraStyle: waitingStyle,
+            script: script
+        )
     }
 
     private static func availablePort() throws -> UInt16 {

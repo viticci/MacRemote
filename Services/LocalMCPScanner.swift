@@ -139,29 +139,67 @@ struct LocalMCPScanner: Sendable {
             return candidates
         }
 
-        for index in candidates.indices where candidates[index].bridgeable {
-            do {
-                candidates[index].probe = try await probe(candidate: candidates[index])
-                candidates[index].probeError = nil
-            } catch {
-                candidates[index].probe = nil
-                candidates[index].probeError = error.localizedDescription
+        // Probe concurrently (bounded) instead of serially: each probe launches
+        // a server process or makes HTTP round-trips with multi-second timeouts,
+        // and a Mac with a dozen configured servers left the scan spinner up
+        // for minutes when probed one at a time.
+        let snapshot = candidates
+        let probeIndices = snapshot.indices.filter { snapshot[$0].bridgeable }
+        let maxConcurrentProbes = 4
+        let outcomes = await withTaskGroup(
+            of: (Int, LocalMCPProbeResult?, String?).self,
+            returning: [Int: (LocalMCPProbeResult?, String?)].self
+        ) { group in
+            var pending = probeIndices[...]
+            var collected = [Int: (LocalMCPProbeResult?, String?)]()
+
+            func addProbeTask(for index: Int) {
+                group.addTask {
+                    do {
+                        // Bulk scan: cap each server's startup allowance so one
+                        // slow server cannot dominate the scan. Import re-probes
+                        // with the candidate's full configured timeout.
+                        return (index, try await self.probe(candidate: snapshot[index], timeoutCapSeconds: 10), nil)
+                    } catch {
+                        return (index, nil, error.localizedDescription)
+                    }
+                }
             }
+
+            for index in pending.prefix(maxConcurrentProbes) {
+                addProbeTask(for: index)
+            }
+            pending = pending.dropFirst(maxConcurrentProbes)
+
+            while let (index, result, failure) = await group.next() {
+                collected[index] = (result, failure)
+                if let next = pending.first {
+                    pending = pending.dropFirst()
+                    addProbeTask(for: next)
+                }
+            }
+            return collected
+        }
+
+        for (index, outcome) in outcomes {
+            candidates[index].probe = outcome.0
+            candidates[index].probeError = outcome.1
         }
         return candidates
     }
 
-    func probe(candidate: LocalMCPServerCandidate) async throws -> LocalMCPProbeResult {
+    func probe(candidate: LocalMCPServerCandidate, timeoutCapSeconds: TimeInterval? = nil) async throws -> LocalMCPProbeResult {
         if candidate.transport == .stdio {
             guard let command = candidate.command else {
                 throw LocalMCPScannerError.missingCommand
             }
+            let configuredTimeout = candidate.startupTimeoutSeconds ?? 20
             return try await stdioBridgeClient.probe(
                 command: try resolvedCommand(command),
                 args: candidate.args,
                 environmentVariables: candidate.environment,
                 protocolVersion: "2025-06-18",
-                timeoutSeconds: candidate.startupTimeoutSeconds ?? 20
+                timeoutSeconds: timeoutCapSeconds.map { min(configuredTimeout, $0) } ?? configuredTimeout
             )
         }
 
@@ -707,7 +745,9 @@ struct LocalMCPScanner: Sendable {
         }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 60
+        // Probing a local server: 60s here compounded across three requests
+        // per candidate and kept the scan spinner up for minutes.
+        request.timeoutInterval = 10
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)

@@ -1,0 +1,9 @@
+[tool]
+requirements = [{ name = "habitctl", directory = "/Users/fixture/Projects/habitctl" }]
+entrypoints = [
+    { name = "habit", install-path = "/Users/fixture/.local/bin/habit", from = "habitctl" },
+    { name = "habitctl", install-path = "/Users/fixture/.local/bin/habitctl", from = "habitctl" },
+]
+
+[tool.options]
+exclude-newer = "2026-06-01T00:00:00Z"

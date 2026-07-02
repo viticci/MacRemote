@@ -1,8 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class OAuthCoordinatorTests: XCTestCase {
-    func testRegisteredClientsAreCapped() throws {
+struct OAuthCoordinatorTests {
+    @Test func registeredClientsAreCapped() throws {
         let coordinator = OAuthCoordinator()
 
         for index in 0..<OAuthCoordinator.maxRegisteredClients {
@@ -11,24 +12,19 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "redirect_uris": ["http://127.0.0.1/callback/\(index)"],
                 "scope": "mcp:tools"
             ])
-            XCTAssertNotNil(client["client_id"] as? String)
+            #expect((client["client_id"] as? String) != nil)
         }
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidRequest("Too many registered OAuth clients. Revoke grants and try again.")) {
             try coordinator.registerClient(from: [
                 "client_name": "Overflow",
                 "redirect_uris": ["http://127.0.0.1/callback/overflow"],
                 "scope": "mcp:tools"
             ])
-        ) { error in
-            XCTAssertEqual(
-                error as? OAuthError,
-                .invalidRequest("Too many registered OAuth clients. Revoke grants and try again.")
-            )
         }
     }
 
-    func testDynamicRegistrationReusesExistingLogicalClient() throws {
+    @Test func dynamicRegistrationReusesExistingLogicalClient() throws {
         let coordinator = OAuthCoordinator()
         let first = try coordinator.registerClient(from: [
             "client_name": "Codex CLI",
@@ -41,11 +37,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             "scope": "mcp:tools"
         ])
 
-        XCTAssertEqual(first["client_id"] as? String, second["client_id"] as? String)
-        XCTAssertEqual(coordinator.connectedClientSnapshot().count, 0)
+        #expect(first["client_id"] as? String == second["client_id"] as? String)
+        #expect(coordinator.connectedClientSnapshot().count == 0)
     }
 
-    func testLoopbackRegistrationReusesLogicalClientAcrossCallbackPorts() throws {
+    @Test func loopbackRegistrationReusesLogicalClientAcrossCallbackPorts() throws {
         let coordinator = OAuthCoordinator()
         let first = try coordinator.registerClient(from: [
             "client_name": "Codex CLI",
@@ -58,10 +54,10 @@ final class OAuthCoordinatorTests: XCTestCase {
             "scope": "mcp:tools"
         ])
 
-        let clientID = try XCTUnwrap(first["client_id"] as? String)
-        XCTAssertEqual(second["client_id"] as? String, clientID)
-        XCTAssertEqual(
-            second["redirect_uris"] as? [String],
+        let clientID = try #require(first["client_id"] as? String)
+        #expect(second["client_id"] as? String == clientID)
+        #expect(
+            second["redirect_uris"] as? [String] ==
             ["http://127.0.0.1:49152/callback", "http://127.0.0.1:49153/callback"]
         )
 
@@ -77,12 +73,12 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: "http://127.0.0.1:1234",
             resource: "http://127.0.0.1:1234/mcp/test-instance"
         )
-        let request = try XCTUnwrap(coordinator.approvalSnapshot().first { $0.id == requestID })
-        XCTAssertEqual(request.clientID, clientID)
-        XCTAssertTrue(request.clientTrustID.hasPrefix("macremote-trust-"))
+        let request = try #require(coordinator.approvalSnapshot().first { $0.id == requestID })
+        #expect(request.clientID == clientID)
+        #expect(request.clientTrustID.hasPrefix("macremote-trust-"))
     }
 
-    func testNativeAppRedirectSchemeCanRegisterForDynamicClients() throws {
+    @Test func nativeAppRedirectSchemeCanRegisterForDynamicClients() throws {
         let coordinator = OAuthCoordinator()
         let redirectURI = "raycast://extensions/raycast/raycast/mcp-oauth-callback"
 
@@ -92,11 +88,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             "scope": "mcp:tools"
         ])
 
-        XCTAssertNotNil(client["client_id"] as? String)
-        XCTAssertEqual(client["redirect_uris"] as? [String], [redirectURI])
+        #expect((client["client_id"] as? String) != nil)
+        #expect(client["redirect_uris"] as? [String] == [redirectURI])
     }
 
-    func testRegisteredClientPersistsAcrossCoordinatorRestart() throws {
+    @Test func registeredClientPersistsAcrossCoordinatorRestart() throws {
         let defaults = try isolatedOAuthDefaults()
         let store = OAuthGrantStore(userDefaults: defaults)
         let issuer = "https://macremote.example"
@@ -109,7 +105,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": [redirectURI],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
 
         let reloaded = OAuthCoordinator(grantStore: store)
         let requestID = try reloaded.beginAuthorization(
@@ -127,12 +123,12 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        let request = try XCTUnwrap(reloaded.approvalSnapshot().first { $0.id == requestID })
-        XCTAssertEqual(request.clientName, "Notion")
-        XCTAssertEqual(request.redirectURI, redirectURI)
+        let request = try #require(reloaded.approvalSnapshot().first { $0.id == requestID })
+        #expect(request.clientName == "Notion")
+        #expect(request.redirectURI == redirectURI)
     }
 
-    func testRefreshTokenPersistsAcrossCoordinatorRestart() throws {
+    @Test func refreshTokenPersistsAcrossCoordinatorRestart() throws {
         let defaults = try isolatedOAuthDefaults()
         let store = OAuthGrantStore(userDefaults: defaults)
         let issuer = "https://macremote.example"
@@ -146,30 +142,28 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertTrue(firstCoordinator.validateAccessToken(issued.accessToken, issuer: issuer, resource: resource))
+        #expect(firstCoordinator.validateAccessToken(issued.accessToken, issuer: issuer, resource: resource))
 
         let reloaded = OAuthCoordinator(grantStore: store)
-        XCTAssertEqual(reloaded.connectedClientSnapshot().first?.name, "Notion")
+        #expect(reloaded.connectedClientSnapshot().first?.name == "Notion")
         let rotated = try reloaded.exchangeToken(form: [
             "grant_type": "refresh_token",
             "refresh_token": issued.refreshToken,
             "resource": resource
         ], issuer: issuer, resource: resource)
 
-        let accessToken = try XCTUnwrap(rotated["access_token"] as? String)
-        XCTAssertTrue(reloaded.validateAccessToken(accessToken, issuer: issuer, resource: resource))
-        XCTAssertThrowsError(
+        let accessToken = try #require(rotated["access_token"] as? String)
+        #expect(reloaded.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        #expect(throws: OAuthError.invalidGrant("Invalid refresh token.")) {
             try reloaded.exchangeToken(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": issued.refreshToken,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("Invalid refresh token."))
         }
     }
 
-    func testAuthorizeCanRecoverNotionCachedDynamicClientID() throws {
+    @Test func authorizeCanRecoverNotionCachedDynamicClientID() throws {
         let defaults = try isolatedOAuthDefaults()
         let store = OAuthGrantStore(userDefaults: defaults)
         let coordinator = OAuthCoordinator(grantStore: store)
@@ -197,12 +191,12 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        let request = try XCTUnwrap(coordinator.approvalSnapshot().first { $0.id == requestID })
-        XCTAssertEqual(request.clientName, "Notion")
-        XCTAssertEqual(request.redirectURI, redirectURI)
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let request = try #require(coordinator.approvalSnapshot().first { $0.id == requestID })
+        #expect(request.clientName == "Notion")
+        #expect(request.redirectURI == redirectURI)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
         let token = try coordinator.exchangeToken(form: [
             "grant_type": "authorization_code",
             "client_id": clientID,
@@ -211,36 +205,31 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        XCTAssertNotNil(token["access_token"] as? String)
+        #expect((token["access_token"] as? String) != nil)
 
         let reloaded = OAuthCoordinator(grantStore: store)
-        XCTAssertEqual(reloaded.connectedClientSnapshot().first?.id, clientID)
-        XCTAssertEqual(reloaded.connectedClientSnapshot().first?.name, "Notion")
+        #expect(reloaded.connectedClientSnapshot().first?.id == clientID)
+        #expect(reloaded.connectedClientSnapshot().first?.name == "Notion")
     }
 
-    func testUnsafeRedirectSchemesAreRejectedForDynamicClients() throws {
+    @Test func unsafeRedirectSchemesAreRejectedForDynamicClients() throws {
         let coordinator = OAuthCoordinator()
 
         for redirectURI in [
             "javascript:alert(1)",
             "file:///tmp/callback"
         ] {
-            XCTAssertThrowsError(
+            #expect(throws: OAuthError.invalidRequest("redirect_uri must use HTTPS, loopback HTTP, or a private-use app scheme.")) {
                 try coordinator.registerClient(from: [
                     "client_name": "Unsafe",
                     "redirect_uris": [redirectURI],
                     "scope": "mcp:tools"
                 ])
-            ) { error in
-                XCTAssertEqual(
-                    error as? OAuthError,
-                    .invalidRequest("redirect_uri must use HTTPS, loopback HTTP, or a private-use app scheme.")
-                )
             }
         }
     }
 
-    func testPendingAuthorizationsAreCapped() throws {
+    @Test func pendingAuthorizationsAreCapped() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "https://macremote.example"
         let resource = "\(issuer)/mcp/test-instance"
@@ -249,7 +238,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
 
         for index in 0..<OAuthCoordinator.maxPendingAuthorizations {
             _ = try coordinator.beginAuthorization(
@@ -268,7 +257,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             )
         }
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidRequest("Too many pending authorization requests. Approve, deny, or wait for expiration.")) {
             try coordinator.beginAuthorization(
                 queryItems: [
                     "response_type": "code",
@@ -283,15 +272,10 @@ final class OAuthCoordinatorTests: XCTestCase {
                 issuer: issuer,
                 resource: resource
             )
-        ) { error in
-            XCTAssertEqual(
-                error as? OAuthError,
-                .invalidRequest("Too many pending authorization requests. Approve, deny, or wait for expiration.")
-            )
         }
     }
 
-    func testResolvedAuthorizationsArePruned() throws {
+    @Test func resolvedAuthorizationsArePruned() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "https://macremote.example"
         let resource = "\(issuer)/mcp/test-instance"
@@ -300,7 +284,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
 
         for index in 0..<(OAuthCoordinator.maxStoredAuthorizations + 20) {
             let requestID = try coordinator.beginAuthorization(
@@ -317,13 +301,13 @@ final class OAuthCoordinatorTests: XCTestCase {
                 issuer: issuer,
                 resource: resource
             )
-            XCTAssertTrue(coordinator.deny(requestID: requestID))
+            #expect(coordinator.deny(requestID: requestID))
         }
 
-        XCTAssertLessThanOrEqual(coordinator.approvalSnapshot().count, OAuthCoordinator.maxStoredAuthorizations)
+        #expect(coordinator.approvalSnapshot().count <= OAuthCoordinator.maxStoredAuthorizations)
     }
 
-    func testHostApprovalRequiredBeforeTokenExchange() throws {
+    @Test func hostApprovalRequiredBeforeTokenExchange() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "test-verifier-\(UUID().uuidString)"
         let issuer = "http://127.0.0.1:1234"
@@ -333,7 +317,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
 
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
@@ -349,12 +333,12 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        let pendingApproval = try XCTUnwrap(coordinator.approvalSnapshot().first)
-        XCTAssertEqual(pendingApproval.state, .pending)
-        XCTAssertEqual(pendingApproval.issuer, issuer)
-        XCTAssertEqual(pendingApproval.resource, resource)
-        XCTAssertEqual(pendingApproval.redirectURI, "http://127.0.0.1/callback")
-        XCTAssertThrowsError(
+        let pendingApproval = try #require(coordinator.approvalSnapshot().first)
+        #expect(pendingApproval.state == .pending)
+        #expect(pendingApproval.issuer == issuer)
+        #expect(pendingApproval.resource == resource)
+        #expect(pendingApproval.redirectURI == "http://127.0.0.1/callback")
+        #expect(throws: (any Error).self) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": clientID,
@@ -362,12 +346,12 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code": "not-issued",
                 "code_verifier": verifier
             ], issuer: issuer, resource: resource)
-        )
+        }
 
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        #expect(coordinator.approve(requestID: requestID))
         let status = coordinator.authorizationStatus(requestID: requestID)
-        let redirectURI = try XCTUnwrap(status["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let redirectURI = try #require(status["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
         let token = try coordinator.exchangeToken(form: [
             "grant_type": "authorization_code",
@@ -378,11 +362,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             "resource": resource
         ], issuer: issuer, resource: resource)
 
-        let accessToken = try XCTUnwrap(token["access_token"] as? String)
-        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        let accessToken = try #require(token["access_token"] as? String)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
     }
 
-    func testPKCEMismatchRejectsTokenExchange() throws {
+    @Test func pkceMismatchRejectsTokenExchange() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "http://127.0.0.1:1234"
         let resource = "\(issuer)/mcp/test-instance"
@@ -391,7 +375,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://localhost/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
 
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
@@ -405,12 +389,12 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
+        #expect(coordinator.approve(requestID: requestID))
         let status = coordinator.authorizationStatus(requestID: requestID)
-        let redirectURI = try XCTUnwrap(status["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let redirectURI = try #require(status["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidGrant("PKCE verification failed.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": clientID,
@@ -419,12 +403,10 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_verifier": "wrong-verifier",
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("PKCE verification failed."))
         }
     }
 
-    func testAuthorizationCodeAndAccessTokenAreIssuerBound() throws {
+    @Test func authorizationCodeAndAccessTokenAreIssuerBound() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "issuer-bound-verifier"
         let issuer = "https://macremote-one.example"
@@ -436,7 +418,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -451,11 +433,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
-        XCTAssertThrowsError(
+        let issuerMismatch = #expect(throws: (any Error).self) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": clientID,
@@ -464,12 +446,12 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_verifier": verifier,
                 "resource": otherResource
             ], issuer: otherIssuer, resource: otherResource)
-        ) { error in
-            guard case .invalidGrant(let message) = error as? OAuthError else {
-                return XCTFail("Expected invalid_grant issuer mismatch, got \(error)")
-            }
-            XCTAssertTrue(message.contains("Issuer mismatch."))
-            XCTAssertTrue(message.contains("Restart login using one MacRemote URL consistently"))
+        }
+        if case .invalidGrant(let message) = issuerMismatch as? OAuthError {
+            #expect(message.contains("Issuer mismatch."))
+            #expect(message.contains("Restart login using one MacRemote URL consistently"))
+        } else {
+            Issue.record("Expected invalid_grant issuer mismatch, got \(String(describing: issuerMismatch))")
         }
 
         let token = try coordinator.exchangeToken(form: [
@@ -480,13 +462,13 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        let accessToken = try XCTUnwrap(token["access_token"] as? String)
-        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
-        XCTAssertFalse(coordinator.validateAccessToken(accessToken, issuer: otherIssuer, resource: otherResource))
-        XCTAssertFalse(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: "\(issuer)/mcp/other"))
+        let accessToken = try #require(token["access_token"] as? String)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.validateAccessToken(accessToken, issuer: otherIssuer, resource: otherResource) == false)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: "\(issuer)/mcp/other") == false)
     }
 
-    func testAuthorizationCodeAndAccessTokenAreResourceBound() throws {
+    @Test func authorizationCodeAndAccessTokenAreResourceBound() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "resource-bound-verifier"
         let issuer = "https://macremote.example"
@@ -497,7 +479,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -512,11 +494,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidGrant("Resource mismatch.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": clientID,
@@ -525,8 +507,6 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_verifier": verifier,
                 "resource": otherResource
             ], issuer: issuer, resource: otherResource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("Resource mismatch."))
         }
 
         let token = try coordinator.exchangeToken(form: [
@@ -537,13 +517,13 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        let accessToken = try XCTUnwrap(token["access_token"] as? String)
-        XCTAssertEqual(token["resource"] as? String, resource)
-        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
-        XCTAssertFalse(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: otherResource))
+        let accessToken = try #require(token["access_token"] as? String)
+        #expect(token["resource"] as? String == resource)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: otherResource) == false)
     }
 
-    func testAuthorizationCodeExchangeAcceptsPublicClientOmittingRepeatedFields() throws {
+    @Test func authorizationCodeExchangeAcceptsPublicClientOmittingRepeatedFields() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "public-client-verifier"
         let issuer = "https://macremote.example"
@@ -553,7 +533,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -568,11 +548,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        let pendingApproval = try XCTUnwrap(coordinator.approvalSnapshot().first)
-        XCTAssertEqual(pendingApproval.resource, resource)
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let pendingApproval = try #require(coordinator.approvalSnapshot().first)
+        #expect(pendingApproval.resource == resource)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
         let token = try coordinator.exchangeToken(form: [
             "grant_type": "authorization_code",
@@ -581,12 +561,12 @@ final class OAuthCoordinatorTests: XCTestCase {
             "resource": "\(resource)/"
         ], issuer: issuer, resource: resource)
 
-        let accessToken = try XCTUnwrap(token["access_token"] as? String)
-        XCTAssertEqual(token["resource"] as? String, resource)
-        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: "\(resource)/"))
+        let accessToken = try #require(token["access_token"] as? String)
+        #expect(token["resource"] as? String == resource)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: "\(resource)/"))
     }
 
-    func testAuthorizationCodeExchangeRejectsMismatchedRepeatedClientMetadata() throws {
+    @Test func authorizationCodeExchangeRejectsMismatchedRepeatedClientMetadata() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "metadata-mismatch-verifier"
         let issuer = "https://macremote.example"
@@ -596,7 +576,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -611,11 +591,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidGrant("Client or redirect URI mismatch.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": "macremote-client-wrong",
@@ -624,8 +604,6 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_verifier": verifier,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("Client or redirect URI mismatch."))
         }
 
         let token = try coordinator.exchangeToken(form: [
@@ -636,10 +614,10 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        XCTAssertNotNil(token["access_token"] as? String)
+        #expect((token["access_token"] as? String) != nil)
     }
 
-    func testConfidentialClientModeDisablesDynamicRegistration() throws {
+    @Test func confidentialClientModeDisablesDynamicRegistration() throws {
         let credentials = OAuthConfidentialClientCredentials(
             clientID: "macremote-oauth-confidential",
             clientSecret: "client-secret"
@@ -648,26 +626,21 @@ final class OAuthCoordinatorTests: XCTestCase {
             clientAuthentication: .confidentialClientRequired(credentials)
         )
 
-        XCTAssertFalse(coordinator.supportsDynamicClientRegistration())
-        XCTAssertEqual(
-            coordinator.tokenEndpointAuthMethodsSupported(),
+        #expect(coordinator.supportsDynamicClientRegistration() == false)
+        #expect(
+            coordinator.tokenEndpointAuthMethodsSupported() ==
             ["client_secret_basic", "client_secret_post"]
         )
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidRequest("Dynamic client registration is disabled while OAuth client credentials are required.")) {
             try coordinator.registerClient(from: [
                 "client_name": "Dynamic Client",
                 "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
                 "scope": "mcp:tools"
             ])
-        ) { error in
-            XCTAssertEqual(
-                error as? OAuthError,
-                .invalidRequest("Dynamic client registration is disabled while OAuth client credentials are required.")
-            )
         }
     }
 
-    func testConfidentialAuthorizationCodeAndRefreshRequireClientSecretPost() throws {
+    @Test func confidentialAuthorizationCodeAndRefreshRequireClientSecretPost() throws {
         let credentials = OAuthConfidentialClientCredentials(
             clientID: "macremote-oauth-confidential",
             clientSecret: "correct-secret"
@@ -694,14 +667,14 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        let pending = try XCTUnwrap(coordinator.approvalSnapshot().first { $0.id == requestID })
-        XCTAssertEqual(pending.clientID, credentials.clientID)
-        XCTAssertTrue(pending.clientTrustID.hasPrefix("macremote-confidential-"))
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let pending = try #require(coordinator.approvalSnapshot().first { $0.id == requestID })
+        #expect(pending.clientID == credentials.clientID)
+        #expect(pending.clientTrustID.hasPrefix("macremote-confidential-"))
+        #expect(coordinator.approve(requestID: requestID))
+        let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidClient("Client authentication required.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": credentials.clientID,
@@ -710,11 +683,9 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_verifier": verifier,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidClient("Client authentication required."))
         }
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidClient("Client authentication failed.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": credentials.clientID,
@@ -724,8 +695,6 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_verifier": verifier,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidClient("Client authentication failed."))
         }
 
         let token = try coordinator.exchangeToken(form: [
@@ -737,19 +706,17 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        let accessToken = try XCTUnwrap(token["access_token"] as? String)
-        let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
-        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
-        XCTAssertEqual(coordinator.connectedClientSnapshot().first?.redirectURIs, [redirectURI])
+        let accessToken = try #require(token["access_token"] as? String)
+        let refreshToken = try #require(token["refresh_token"] as? String)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.connectedClientSnapshot().first?.redirectURIs == [redirectURI])
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidClient("Client authentication failed.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidClient("Client authentication failed."))
         }
 
         let rotated = try coordinator.exchangeToken(form: [
@@ -759,10 +726,10 @@ final class OAuthCoordinatorTests: XCTestCase {
             "refresh_token": refreshToken,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        XCTAssertNotNil(rotated["access_token"] as? String)
+        #expect((rotated["access_token"] as? String) != nil)
     }
 
-    func testMultipleConfidentialCredentialsAppearAsSeparateConnectedClients() throws {
+    @Test func multipleConfidentialCredentialsAppearAsSeparateConnectedClients() throws {
         let claude = OAuthConfidentialClientCredentials(
             clientID: "macremote-oauth-claude",
             clientSecret: "claude-secret"
@@ -792,17 +759,17 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        XCTAssertTrue(coordinator.validateAccessToken(claudeToken.accessToken, issuer: issuer, resource: resource))
-        XCTAssertTrue(coordinator.validateAccessToken(raycastToken.accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.validateAccessToken(claudeToken.accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.validateAccessToken(raycastToken.accessToken, issuer: issuer, resource: resource))
 
         let clients = coordinator.connectedClientSnapshot()
-        XCTAssertEqual(Set(clients.map(\.id)), [claude.clientID, raycast.clientID])
-        XCTAssertEqual(Set(clients.map(\.name)), ["Claude", "Raycast"])
-        XCTAssertEqual(clients.first { $0.id == claude.clientID }?.redirectURIs, ["https://claude.ai/api/mcp/auth_callback"])
-        XCTAssertEqual(clients.first { $0.id == raycast.clientID }?.redirectURIs, ["raycast://oauth"])
+        #expect(Set(clients.map(\.id)) == [claude.clientID, raycast.clientID])
+        #expect(Set(clients.map(\.name)) == ["Claude", "Raycast"])
+        #expect(clients.first { $0.id == claude.clientID }?.redirectURIs == ["https://claude.ai/api/mcp/auth_callback"])
+        #expect(clients.first { $0.id == raycast.clientID }?.redirectURIs == ["raycast://oauth"])
     }
 
-    func testPublicClientRejectsUnexpectedClientSecret() throws {
+    @Test func publicClientRejectsUnexpectedClientSecret() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "public-secret-verifier"
         let issuer = "https://macremote.example"
@@ -813,7 +780,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": [redirectURI],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -827,11 +794,11 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidRequest("Public clients must not send client_secret.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "authorization_code",
                 "client_id": clientID,
@@ -841,12 +808,10 @@ final class OAuthCoordinatorTests: XCTestCase {
                 "code_verifier": verifier,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidRequest("Public clients must not send client_secret."))
         }
     }
 
-    func testAccessTokenCanValidateAgainstExplicitEquivalentResourceSet() throws {
+    @Test func accessTokenCanValidateAgainstExplicitEquivalentResourceSet() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "https://macremote.example"
         let resource = "\(issuer)/mcp/test-instance"
@@ -860,33 +825,33 @@ final class OAuthCoordinatorTests: XCTestCase {
             resource: resource
         )
 
-        XCTAssertNotNil(coordinator.clientContext(
+        #expect(coordinator.clientContext(
             forAccessToken: issued.accessToken,
             issuer: issuer,
             acceptedResources: [aliasResource, resource]
-        ))
-        XCTAssertNil(coordinator.clientContext(
+        ) != nil)
+        #expect(coordinator.clientContext(
             forAccessToken: issued.accessToken,
             issuer: issuer,
             acceptedResources: [aliasResource]
-        ))
-        XCTAssertNil(coordinator.clientContext(
+        ) == nil)
+        #expect(coordinator.clientContext(
             forAccessToken: issued.accessToken,
             issuer: issuer,
             acceptedResources: [otherResource]
-        ))
+        ) == nil)
     }
 
-    func testUnregisteredRedirectURIIsRejected() throws {
+    @Test func unregisteredRedirectURIIsRejected() throws {
         let coordinator = OAuthCoordinator()
         let client = try coordinator.registerClient(from: [
             "client_name": "Redirect Test",
             "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidRequest("Unregistered redirect_uri.")) {
             try coordinator.beginAuthorization(
                 queryItems: [
                     "response_type": "code",
@@ -899,12 +864,10 @@ final class OAuthCoordinatorTests: XCTestCase {
                 issuer: "http://127.0.0.1:1234",
                 resource: "http://127.0.0.1:1234/mcp/test-instance"
             )
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidRequest("Unregistered redirect_uri."))
         }
     }
 
-    func testRefreshTokenRotates() throws {
+    @Test func refreshTokenRotates() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "refresh-verifier"
         let issuer = "http://127.0.0.1:1234"
@@ -914,7 +877,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -927,9 +890,9 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
         let token = try coordinator.exchangeToken(form: [
             "grant_type": "authorization_code",
             "client_id": clientID,
@@ -938,24 +901,24 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
+        let refreshToken = try #require(token["refresh_token"] as? String)
         let rotated = try coordinator.exchangeToken(form: [
             "grant_type": "refresh_token",
             "refresh_token": refreshToken,
             "resource": "\(resource)/"
         ], issuer: issuer, resource: resource)
-        XCTAssertNotNil(rotated["access_token"] as? String)
-        XCTAssertEqual(rotated["resource"] as? String, resource)
-        XCTAssertThrowsError(
+        #expect((rotated["access_token"] as? String) != nil)
+        #expect(rotated["resource"] as? String == resource)
+        #expect(throws: (any Error).self) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        )
+        }
     }
 
-    func testRefreshTokenIsIssuerBound() throws {
+    @Test func refreshTokenIsIssuerBound() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "refresh-issuer-verifier"
         let issuer = "https://macremote-one.example"
@@ -967,7 +930,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -980,9 +943,9 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
         let token = try coordinator.exchangeToken(form: [
             "grant_type": "authorization_code",
             "client_id": clientID,
@@ -991,20 +954,20 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
+        let refreshToken = try #require(token["refresh_token"] as? String)
 
-        XCTAssertThrowsError(
+        let issuerMismatch = #expect(throws: (any Error).self) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken,
                 "resource": otherResource
             ], issuer: otherIssuer, resource: otherResource)
-        ) { error in
-            guard case .invalidGrant(let message) = error as? OAuthError else {
-                return XCTFail("Expected invalid_grant issuer mismatch, got \(error)")
-            }
-            XCTAssertTrue(message.contains("Issuer mismatch."))
-            XCTAssertTrue(message.contains("Restart login using one MacRemote URL consistently"))
+        }
+        if case .invalidGrant(let message) = issuerMismatch as? OAuthError {
+            #expect(message.contains("Issuer mismatch."))
+            #expect(message.contains("Restart login using one MacRemote URL consistently"))
+        } else {
+            Issue.record("Expected invalid_grant issuer mismatch, got \(String(describing: issuerMismatch))")
         }
 
         let rotated = try coordinator.exchangeToken(form: [
@@ -1012,10 +975,10 @@ final class OAuthCoordinatorTests: XCTestCase {
             "refresh_token": refreshToken,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        XCTAssertNotNil(rotated["access_token"] as? String)
+        #expect((rotated["access_token"] as? String) != nil)
     }
 
-    func testRefreshTokenIsResourceBoundWithoutConsumingOnMismatch() throws {
+    @Test func refreshTokenIsResourceBoundWithoutConsumingOnMismatch() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "refresh-resource-verifier"
         let issuer = "https://macremote.example"
@@ -1026,7 +989,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -1040,9 +1003,9 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
         let token = try coordinator.exchangeToken(form: [
             "grant_type": "authorization_code",
             "client_id": clientID,
@@ -1051,16 +1014,14 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
+        let refreshToken = try #require(token["refresh_token"] as? String)
 
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidGrant("Resource mismatch.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken,
                 "resource": otherResource
             ], issuer: issuer, resource: otherResource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("Resource mismatch."))
         }
 
         let rotated = try coordinator.exchangeToken(form: [
@@ -1068,10 +1029,10 @@ final class OAuthCoordinatorTests: XCTestCase {
             "refresh_token": refreshToken,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        XCTAssertNotNil(rotated["access_token"] as? String)
+        #expect((rotated["access_token"] as? String) != nil)
     }
 
-    func testRevokeAllGrantsInvalidatesTokensAndRegisteredClients() throws {
+    @Test func revokeAllGrantsInvalidatesTokensAndRegisteredClients() throws {
         let coordinator = OAuthCoordinator()
         let verifier = "revoke-verifier"
         let issuer = "https://macremote.example"
@@ -1081,7 +1042,7 @@ final class OAuthCoordinatorTests: XCTestCase {
             "redirect_uris": ["http://127.0.0.1/callback"],
             "scope": "mcp:tools"
         ])
-        let clientID = try XCTUnwrap(client["client_id"] as? String)
+        let clientID = try #require(client["client_id"] as? String)
         let requestID = try coordinator.beginAuthorization(
             queryItems: [
                 "response_type": "code",
@@ -1095,9 +1056,9 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertTrue(coordinator.approve(requestID: requestID))
-        let redirectURI = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-        let code = try XCTUnwrap(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
         let token = try coordinator.exchangeToken(form: [
             "grant_type": "authorization_code",
             "client_id": clientID,
@@ -1106,29 +1067,27 @@ final class OAuthCoordinatorTests: XCTestCase {
             "code_verifier": verifier,
             "resource": resource
         ], issuer: issuer, resource: resource)
-        let accessToken = try XCTUnwrap(token["access_token"] as? String)
-        let refreshToken = try XCTUnwrap(token["refresh_token"] as? String)
-        XCTAssertTrue(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
+        let accessToken = try #require(token["access_token"] as? String)
+        let refreshToken = try #require(token["refresh_token"] as? String)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
 
         let summary = coordinator.revokeAllGrants()
 
-        XCTAssertEqual(summary.clients, 1)
-        XCTAssertEqual(summary.authorizations, 1)
-        XCTAssertEqual(summary.accessTokens, 1)
-        XCTAssertEqual(summary.refreshTokens, 1)
-        XCTAssertEqual(summary.total, 4)
-        XCTAssertTrue(coordinator.approvalSnapshot().isEmpty)
-        XCTAssertFalse(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource))
-        XCTAssertThrowsError(
+        #expect(summary.clients == 1)
+        #expect(summary.authorizations == 1)
+        #expect(summary.accessTokens == 1)
+        #expect(summary.refreshTokens == 1)
+        #expect(summary.total == 4)
+        #expect(coordinator.approvalSnapshot().isEmpty)
+        #expect(coordinator.validateAccessToken(accessToken, issuer: issuer, resource: resource) == false)
+        #expect(throws: OAuthError.invalidGrant("Invalid refresh token.")) {
             try coordinator.exchangeToken(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken,
                 "resource": resource
             ], issuer: issuer, resource: resource)
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidGrant("Invalid refresh token."))
         }
-        XCTAssertThrowsError(
+        #expect(throws: OAuthError.invalidRequest("Unknown client_id.")) {
             try coordinator.beginAuthorization(
                 queryItems: [
                     "response_type": "code",
@@ -1142,12 +1101,10 @@ final class OAuthCoordinatorTests: XCTestCase {
                 issuer: issuer,
                 resource: resource
             )
-        ) { error in
-            XCTAssertEqual(error as? OAuthError, .invalidRequest("Unknown client_id."))
         }
     }
 
-    func testRevokeClientInvalidatesOnlyThatClientAndForcesReregistration() throws {
+    @Test func revokeClientInvalidatesOnlyThatClientAndForcesReregistration() throws {
         let coordinator = OAuthCoordinator()
         let issuer = "https://macremote.example"
         let resource = "\(issuer)/mcp"
@@ -1166,38 +1123,37 @@ final class OAuthCoordinatorTests: XCTestCase {
             issuer: issuer,
             resource: resource
         )
-        XCTAssertEqual(coordinator.connectedClientSnapshot().count, 2)
-        XCTAssertTrue(coordinator.validateAccessToken(first.accessToken, issuer: issuer, resource: resource))
-        XCTAssertTrue(coordinator.validateAccessToken(second.accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.connectedClientSnapshot().count == 2)
+        #expect(coordinator.validateAccessToken(first.accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.validateAccessToken(second.accessToken, issuer: issuer, resource: resource))
 
-        let summary = try XCTUnwrap(coordinator.revokeClient(id: first.clientID))
+        let summary = try #require(coordinator.revokeClient(id: first.clientID))
 
-        XCTAssertEqual(summary.clients, 1)
-        XCTAssertEqual(summary.authorizations, 1)
-        XCTAssertEqual(summary.accessTokens, 1)
-        XCTAssertEqual(summary.refreshTokens, 1)
-        XCTAssertFalse(coordinator.validateAccessToken(first.accessToken, issuer: issuer, resource: resource))
-        XCTAssertTrue(coordinator.validateAccessToken(second.accessToken, issuer: issuer, resource: resource))
-        XCTAssertEqual(coordinator.connectedClientSnapshot().map(\.id), [second.clientID])
-        XCTAssertNil(coordinator.revokeClient(id: first.clientID))
+        #expect(summary.clients == 1)
+        #expect(summary.authorizations == 1)
+        #expect(summary.accessTokens == 1)
+        #expect(summary.refreshTokens == 1)
+        #expect(coordinator.validateAccessToken(first.accessToken, issuer: issuer, resource: resource) == false)
+        #expect(coordinator.validateAccessToken(second.accessToken, issuer: issuer, resource: resource))
+        #expect(coordinator.connectedClientSnapshot().map(\.id) == [second.clientID])
+        #expect(coordinator.revokeClient(id: first.clientID) == nil)
 
         let reregistered = try coordinator.registerClient(from: [
             "client_name": "First Client",
             "redirect_uris": [redirectURI],
             "scope": "mcp:tools"
         ])
-        let reregisteredClientID = try XCTUnwrap(reregistered["client_id"] as? String)
-        XCTAssertNotEqual(reregisteredClientID, first.clientID)
+        let reregisteredClientID = try #require(reregistered["client_id"] as? String)
+        #expect(reregisteredClientID != first.clientID)
     }
 }
 
 private func isolatedOAuthDefaults(
-    file: StaticString = #filePath,
-    line: UInt = #line
+    sourceLocation: SourceLocation = #_sourceLocation
 ) throws -> UserDefaults {
     let suiteName = "MacRemoteOAuthTests-\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suiteName) else {
-        XCTFail("Could not create isolated UserDefaults suite.", file: file, line: line)
+        Issue.record("Could not create isolated UserDefaults suite.", sourceLocation: sourceLocation)
         throw NSError(domain: "MacRemoteTests", code: 1)
     }
     defaults.removePersistentDomain(forName: suiteName)
@@ -1217,7 +1173,7 @@ private func issueApprovedTokens(
         "redirect_uris": [redirectURI],
         "scope": "mcp:tools"
     ])
-    let clientID = try XCTUnwrap(client["client_id"] as? String)
+    let clientID = try #require(client["client_id"] as? String)
     let requestID = try coordinator.beginAuthorization(
         queryItems: [
             "response_type": "code",
@@ -1231,9 +1187,9 @@ private func issueApprovedTokens(
         issuer: issuer,
         resource: resource
     )
-    XCTAssertTrue(coordinator.approve(requestID: requestID))
-    let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-    let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+    #expect(coordinator.approve(requestID: requestID))
+    let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+    let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
     let token = try coordinator.exchangeToken(form: [
         "grant_type": "authorization_code",
         "client_id": clientID,
@@ -1244,8 +1200,8 @@ private func issueApprovedTokens(
     ], issuer: issuer, resource: resource)
     return (
         clientID,
-        try XCTUnwrap(token["access_token"] as? String),
-        try XCTUnwrap(token["refresh_token"] as? String)
+        try #require(token["access_token"] as? String),
+        try #require(token["refresh_token"] as? String)
     )
 }
 
@@ -1270,9 +1226,9 @@ private func issueApprovedConfidentialToken(
         issuer: issuer,
         resource: resource
     )
-    XCTAssertTrue(coordinator.approve(requestID: requestID))
-    let redirect = try XCTUnwrap(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
-    let code = try XCTUnwrap(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+    #expect(coordinator.approve(requestID: requestID))
+    let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+    let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
     let token = try coordinator.exchangeToken(form: [
         "grant_type": "authorization_code",
         "client_id": credentials.clientID,
@@ -1283,7 +1239,7 @@ private func issueApprovedConfidentialToken(
         "resource": resource
     ], issuer: issuer, resource: resource)
     return (
-        try XCTUnwrap(token["access_token"] as? String),
-        try XCTUnwrap(token["refresh_token"] as? String)
+        try #require(token["access_token"] as? String),
+        try #require(token["refresh_token"] as? String)
     )
 }

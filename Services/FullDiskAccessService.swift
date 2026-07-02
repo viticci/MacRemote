@@ -91,50 +91,17 @@ struct FullDiskAccessService: Sendable {
         let protectedTools = tools.filter { $0.permissionRequirements.contains(.fullDiskAccess) }
         let targets = await permissionTargets(environment: environment, tools: protectedTools)
         let signature = Self.confirmationSignature(for: protectedTools, targets: targets)
-        let includesRemCTL = protectedTools.contains(where: Self.isRemCTLTool)
         let requiresManualConfirmation = protectedTools.contains { !Self.isRemCTLTool($0) }
 
-        guard includesRemCTL else {
-            return await openSystemFullDiskAccessSettings(
-                targets: targets,
-                requiresManualConfirmation: requiresManualConfirmation,
-                confirmationSignature: signature
-            )
-        }
-
-        do {
-            let result = try await runner.run(
-                executablePath: RemCTLToolCatalog.executablePath,
-                arguments: ["permissions", "full-disk-access"],
-                timeoutSeconds: 8,
-                outputByteLimit: 128 * 1024,
-                environment: environment
-            )
-
-            if result.succeeded || result.timedOut {
-                return FullDiskAccessReport(
-                    state: .helperOpened,
-                    detail: "Opened the guided Full Disk Access setup. Add every listed target. If System Settings already shows access enabled, relaunch MacRemote so macOS refreshes this process's permission state, then check again.",
-                    targets: targets,
-                    requiresManualConfirmation: requiresManualConfirmation,
-                    confirmationSignature: signature
-                )
-            }
-
-            return FullDiskAccessReport(
-                state: .failed("Could not open guided Full Disk Access setup."),
-                detail: result.stderr.isEmpty ? result.stdout : result.stderr,
-                targets: targets,
-                confirmationSignature: signature
-            )
-        } catch {
-            return FullDiskAccessReport(
-                state: .failed(error.localizedDescription),
-                detail: "Could not launch guided Full Disk Access setup.",
-                targets: targets,
-                confirmationSignature: signature
-            )
-        }
+        // MacRemote's Access Fixer already lists, drags, and copies every
+        // target, so open System Settings directly. Launching `remctl
+        // permissions full-disk-access` here spawned a second, standalone
+        // helper window that duplicated the fixer on every click.
+        return await openSystemFullDiskAccessSettings(
+            targets: targets,
+            requiresManualConfirmation: requiresManualConfirmation,
+            confirmationSignature: signature
+        )
     }
 
     func permissionTargets(environment: [String: String], tools: [ToolDefinition]) async -> [FullDiskAccessTarget] {
@@ -227,7 +194,7 @@ struct FullDiskAccessService: Sendable {
             targets.append(FullDiskAccessTarget(
                 title: bundleURL.lastPathComponent,
                 path: bundleURL.path,
-                subtitle: "Host app. Required because MacRemote launches FDA-required command-line tools.",
+                subtitle: "Required because MacRemote launches command-line tools that need Full Disk Access.",
                 role: .hostApp
             ))
         }

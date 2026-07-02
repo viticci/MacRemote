@@ -1,8 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import MacRemote
 
-final class ToolCallApprovalCoordinatorTests: XCTestCase {
-    func testApprovalWaitsForHostDecisionAndRedactsStdinPreview() async throws {
+struct ToolCallApprovalCoordinatorTests {
+    @Test func approvalWaitsForHostDecisionAndRedactsStdinPreview() async throws {
         let coordinator = ToolCallApprovalCoordinator(timeoutSeconds: 5)
         let tool = ToolDefinition(
             id: "test.remctl",
@@ -27,19 +28,19 @@ final class ToolCallApprovalCoordinatorTests: XCTestCase {
         }
 
         let request = try await waitForPendingApproval(in: coordinator)
-        XCTAssertEqual(request.toolID, "test.remctl")
-        XCTAssertEqual(request.capability, .destructive)
-        XCTAssertTrue(request.argumentsPreview.contains("args=add Test -l Work"))
-        XCTAssertTrue(request.argumentsPreview.contains("stdin=<6 chars>"))
-        XCTAssertFalse(request.argumentsPreview.contains("secret"))
+        #expect(request.toolID == "test.remctl")
+        #expect(request.capability == .destructive)
+        #expect(request.argumentsPreview.contains("args=add Test -l Work"))
+        #expect(request.argumentsPreview.contains("stdin=<6 chars>"))
+        #expect(request.argumentsPreview.contains("secret") == false)
 
-        XCTAssertTrue(coordinator.approve(requestID: request.id))
+        #expect(coordinator.approve(requestID: request.id))
         let approved = await approvalTask.value
-        XCTAssertTrue(approved)
-        XCTAssertEqual(coordinator.approvalSnapshot().first?.state, .approved)
+        #expect(approved)
+        #expect(coordinator.approvalSnapshot().first?.state == .approved)
     }
 
-    func testDeniedApprovalReturnsFalse() async throws {
+    @Test func deniedApprovalReturnsFalse() async throws {
         let coordinator = ToolCallApprovalCoordinator(timeoutSeconds: 5)
         let tool = ToolDefinition(
             id: "test.write",
@@ -58,13 +59,13 @@ final class ToolCallApprovalCoordinatorTests: XCTestCase {
         }
 
         let request = try await waitForPendingApproval(in: coordinator)
-        XCTAssertTrue(coordinator.deny(requestID: request.id))
+        #expect(coordinator.deny(requestID: request.id))
         let approved = await approvalTask.value
-        XCTAssertFalse(approved)
-        XCTAssertEqual(coordinator.approvalSnapshot().first?.state, .denied)
+        #expect(approved == false)
+        #expect(coordinator.approvalSnapshot().first?.state == .denied)
     }
 
-    func testDenyAllPendingResolvesWaitingApprovals() async throws {
+    @Test func denyAllPendingResolvesWaitingApprovals() async throws {
         let coordinator = ToolCallApprovalCoordinator(timeoutSeconds: 30)
         let tool = ToolDefinition(
             id: "test.destructive",
@@ -86,15 +87,14 @@ final class ToolCallApprovalCoordinatorTests: XCTestCase {
         coordinator.denyAllPending()
 
         let approved = await approvalTask.value
-        XCTAssertFalse(approved)
-        XCTAssertEqual(coordinator.approvalSnapshot().first?.state, .denied)
+        #expect(approved == false)
+        #expect(coordinator.approvalSnapshot().first?.state == .denied)
     }
 }
 
 private func waitForPendingApproval(
     in coordinator: ToolCallApprovalCoordinator,
-    file: StaticString = #filePath,
-    line: UInt = #line
+    sourceLocation: SourceLocation = #_sourceLocation
 ) async throws -> ToolCallApprovalRequest {
     for _ in 0..<50 {
         if let request = coordinator.approvalSnapshot().first(where: { $0.state == .pending }) {
@@ -103,6 +103,6 @@ private func waitForPendingApproval(
         try await Task.sleep(nanoseconds: 50_000_000)
     }
 
-    XCTFail("Timed out waiting for pending tool approval.", file: file, line: line)
+    Issue.record("Timed out waiting for pending tool approval.", sourceLocation: sourceLocation)
     throw NSError(domain: "MacRemoteTests", code: 1)
 }

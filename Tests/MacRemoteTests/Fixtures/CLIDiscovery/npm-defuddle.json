@@ -1,0 +1,15 @@
+{
+  "name": "defuddle",
+  "version": "0.10.0",
+  "description": "Extract article content and metadata from web pages.",
+  "main": "dist/index.js",
+  "bin": {
+    "defuddle": "dist/cli.js"
+  },
+  "keywords": [
+    "readability",
+    "article"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/kepano/defuddle"
+}

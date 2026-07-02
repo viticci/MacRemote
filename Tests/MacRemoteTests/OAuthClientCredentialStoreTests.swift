@@ -1,10 +1,12 @@
-import XCTest
+import Foundation
+import Security
+import Testing
 @testable import MacRemote
 
-final class OAuthClientCredentialStoreTests: XCTestCase {
-    func testGenerateLoadAndClearOAuthClientCredentials() throws {
+struct OAuthClientCredentialStoreTests {
+    @Test func generateLoadAndClearOAuthClientCredentials() throws {
         let suiteName = "MacRemoteTests.OAuthClientCredentialStore.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
 
         let service = "com.macstories.MacRemote.tests.oauthClientCredentials.\(UUID().uuidString)"
@@ -19,7 +21,7 @@ final class OAuthClientCredentialStoreTests: XCTestCase {
             defaults.removePersistentDomain(forName: suiteName)
         }
 
-        XCTAssertNil(store.load())
+        #expect(store.load() == nil)
 
         let generated: OAuthClientCredentials
         let second: OAuthClientCredentials
@@ -27,36 +29,37 @@ final class OAuthClientCredentialStoreTests: XCTestCase {
             generated = try store.generate(label: "Claude")
             second = try store.generate(label: "Raycast")
         } catch OAuthClientCredentialStoreError.keychain(errSecInteractionNotAllowed) {
-            throw XCTSkip("Keychain writes are not available to this test runner.")
+            // Keychain writes are not available to this test runner (Swift Testing
+            // has no runtime skip, so pass without exercising the remaining checks).
+            return
         }
-        XCTAssertTrue(generated.clientID.hasPrefix("macremote-oauth-"))
-        XCTAssertEqual(generated.label, "Claude")
-        XCTAssertEqual(second.label, "Raycast")
-        XCTAssertNotEqual(generated.clientID, second.clientID)
-        XCTAssertGreaterThanOrEqual(generated.clientSecret.count, 40)
-        XCTAssertFalse(
-            defaults.dictionaryRepresentation().values.contains {
+        #expect(generated.clientID.hasPrefix("macremote-oauth-"))
+        #expect(generated.label == "Claude")
+        #expect(second.label == "Raycast")
+        #expect(generated.clientID != second.clientID)
+        #expect(generated.clientSecret.count >= 40)
+        #expect(
+            (defaults.dictionaryRepresentation().values.contains {
                 ($0 as? String) == generated.clientSecret
-            }
-        )
+            }) == false)
 
         let reloadedStore = OAuthClientCredentialStore(
             userDefaults: defaults,
             service: service,
             account: account
         )
-        XCTAssertEqual(reloadedStore.load(), generated)
-        XCTAssertEqual(reloadedStore.loadAll(), [generated, second])
+        #expect(reloadedStore.load() == generated)
+        #expect(reloadedStore.loadAll() == [generated, second])
 
-        let rotated = try XCTUnwrap(try reloadedStore.rotate(clientID: second.clientID))
-        XCTAssertEqual(rotated.label, "Raycast")
-        XCTAssertNotEqual(rotated.clientID, second.clientID)
-        XCTAssertEqual(reloadedStore.loadAll(), [generated, rotated])
+        let rotated = try #require(try reloadedStore.rotate(clientID: second.clientID))
+        #expect(rotated.label == "Raycast")
+        #expect(rotated.clientID != second.clientID)
+        #expect(reloadedStore.loadAll() == [generated, rotated])
 
         try reloadedStore.delete(clientID: generated.clientID)
-        XCTAssertEqual(reloadedStore.loadAll(), [rotated])
+        #expect(reloadedStore.loadAll() == [rotated])
 
         reloadedStore.clear()
-        XCTAssertNil(reloadedStore.load())
+        #expect(reloadedStore.load() == nil)
     }
 }
