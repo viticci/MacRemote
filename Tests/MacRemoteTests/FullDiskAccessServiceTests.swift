@@ -284,7 +284,15 @@ struct FullDiskAccessServiceTests {
         #expect(FullDiskAccessService.probeInvocationArguments(forInterpreterAt: "/usr/local/bin/codex", sentinel: sentinel) == nil)
     }
 
-    @Test func protectedSentinelIsAFullDiskAccessGatedLocation() {
-        #expect(FullDiskAccessService.protectedSentinelPath.hasSuffix("/Library/Application Support/com.apple.TCC"))
+    @Test func protectedSentinelPrefersRemindersStoreAndOnlyResolvesExistingPaths() {
+        // The first candidate is the Reminders store — the same directory the
+        // remctl doctor check reads, so chips and Status can never disagree.
+        #expect(FullDiskAccessService.protectedSentinelCandidates.first?.hasSuffix("group.com.apple.reminders/Container_v1/Stores") == true)
+
+        // A resolved sentinel must exist: probing a missing path misreads
+        // "no such directory" as "no access" (the macOS 27 TCC-dir bug).
+        if let sentinel = FullDiskAccessService.resolvedProtectedSentinelPath() {
+            #expect(FileManager.default.fileExists(atPath: sentinel))
+        }
     }
 }

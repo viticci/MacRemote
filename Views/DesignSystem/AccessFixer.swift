@@ -92,6 +92,11 @@ struct TargetRow: View {
 enum AccessFixerState: Equatable {
     case checking
     case required
+    /// Automatic checks passed; the remaining tools can't be proven by
+    /// running them, so one explicit confirmation finishes the setup.
+    /// Mapping this to plain `.required` buried the finish line in the
+    /// Troubleshoot menu and read as an endless permission loop.
+    case confirmSetup
     /// Hosts auto-dismiss on ready, as today.
     case ready
     case failed(String)
@@ -100,6 +105,7 @@ enum AccessFixerState: Equatable {
         switch self {
         case .checking: "Checking"
         case .required: "Required"
+        case .confirmSetup: "Confirm Setup"
         case .ready: "Ready"
         case .failed: "Failed"
         }
@@ -109,6 +115,7 @@ enum AccessFixerState: Equatable {
         switch self {
         case .checking: .working
         case .required: .attention
+        case .confirmSetup: .attention
         case .ready: .ready
         case .failed: .error
         }
@@ -275,8 +282,12 @@ struct AccessFixer: View {
 
     private var numberedStrip: some View {
         VStack(alignment: .leading, spacing: Space.s1) {
-            Text("① Open System Settings   ② Drag rows in   ③ Check Again")
-            Text("macOS caches the old answer, so MacRemote quits and reopens itself once if that's what it takes to see the access you granted.")
+            if state == .confirmSetup {
+                Text("Automatic checks passed. The remaining tools can't be proven without running them — Confirm Setup records that you granted their items above.")
+            } else {
+                Text("① Open System Settings   ② Drag rows in   ③ Check Again")
+                Text("macOS caches the old answer, so MacRemote quits and reopens itself once if that's what it takes to see the access you granted.")
+            }
         }
         .font(TypeRamp.truthNote)
         .foregroundStyle(.secondary)
@@ -309,9 +320,16 @@ struct AccessFixer: View {
                 .buttonStyle(.glass)
                 .disabled(state == .checking)
 
-            Button("Check Again", action: actions.checkAgain)
-                .buttonStyle(.glassProminent)
-                .disabled(state == .checking)
+            if state == .confirmSetup, let confirmSetup = actions.confirmSetup {
+                Button("Check Again", action: actions.checkAgain)
+                    .buttonStyle(.glass)
+                Button("Confirm Setup", action: confirmSetup)
+                    .buttonStyle(.glassProminent)
+            } else {
+                Button("Check Again", action: actions.checkAgain)
+                    .buttonStyle(.glassProminent)
+                    .disabled(state == .checking)
+            }
         }
     }
 }

@@ -714,6 +714,9 @@ final class AppModel {
         if report.isReady {
             fullDiskAccessPrompt = nil
             appendLog(level: .info, "Full Disk Access is ready after relaunching MacRemote.")
+        } else if report.requiresManualConfirmation, report.automaticChecksPassed {
+            presentFullDiskAccessPrompt(reason: .manualCheck)
+            appendLog(level: .info, "Automatic Full Disk Access checks passed — use Confirm Setup for the tools MacRemote can't prove by running them.")
         } else {
             presentFullDiskAccessPrompt(reason: .manualCheck)
             appendLog(level: .warning, "Full Disk Access is still blocked after relaunching. If System Settings shows access enabled, the row may be stale — use Re-add MacRemote in System Settings. \(singleLine(report.detail))")

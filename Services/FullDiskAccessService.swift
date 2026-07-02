@@ -114,10 +114,22 @@ struct FullDiskAccessService: Sendable {
 
     // MARK: - Per-target access probes
 
-    /// A directory every account has that macOS only lets Full Disk Access
-    /// holders read. Listing it proves effective access; being denied proves
-    /// the target's context has none.
-    static let protectedSentinelPath = NSHomeDirectory() + "/Library/Application Support/com.apple.TCC"
+    /// Directories macOS only lets Full Disk Access holders read, most
+    /// relevant first: the Reminders store is the very data remctl needs, so
+    /// the chips can never disagree with the doctor check that gates Status.
+    /// Existence is checked with metadata (allowed without FDA) — probing a
+    /// missing path would misread "no such directory" as "no access".
+    /// macOS 27 no longer creates the per-user TCC directory, which made the
+    /// original single-sentinel probe report Blocked forever.
+    static let protectedSentinelCandidates = [
+        NSHomeDirectory() + "/Library/Group Containers/group.com.apple.reminders/Container_v1/Stores",
+        NSHomeDirectory() + "/Library/Safari",
+        NSHomeDirectory() + "/Library/Application Support/com.apple.TCC"
+    ]
+
+    static func resolvedProtectedSentinelPath() -> String? {
+        protectedSentinelCandidates.first { FileManager.default.fileExists(atPath: $0) }
+    }
 
     /// Fills `accessState` on every target by actually trying a protected
     /// read as that target: in-process for the host app row, a spawned
@@ -126,7 +138,9 @@ struct FullDiskAccessService: Sendable {
     /// attributes their access when they really run.
     private func probedTargets(_ targets: [FullDiskAccessTarget]) async -> [FullDiskAccessTarget] {
         guard !targets.isEmpty else { return targets }
-        let sentinel = Self.protectedSentinelPath
+        // No probeable protected directory on this account: stay .unknown
+        // rather than invent a Blocked verdict.
+        guard let sentinel = Self.resolvedProtectedSentinelPath() else { return targets }
 
         return await withTaskGroup(
             of: (Int, FullDiskAccessTargetAccessState).self,

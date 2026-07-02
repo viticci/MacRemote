@@ -394,7 +394,8 @@ struct WelcomeView: View {
         case .checking: .checking
         case .ready: .ready
         case .failed(let message): .failed(message)
-        case .unknown, .required, .confirmationRequired, .helperOpened: .required
+        case .confirmationRequired: .confirmSetup
+        case .unknown, .required, .helperOpened: .required
         }
     }
 
