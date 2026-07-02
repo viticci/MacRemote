@@ -251,6 +251,45 @@ struct RemCTLArgumentNormalizerTests {
         }
     }
 
+    // remctl rejects a pre-subcommand `--json` outright (argparse exit 2),
+    // so the normalizer relocates it after the subcommand instead of letting
+    // the call die — older catalog actions (pre-v3) emit that form.
+    @Test func relocatesPreCommandJSONFlagAfterSubcommand() async throws {
+        let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["--json", "done", "23829"]
+        ) { _ in nil }
+
+        #expect(normalized == ["done", "23829", "--json"])
+    }
+
+    @Test func relocatedJSONFlagStillResolvesReminderUUIDs() async throws {
+        let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["--json", "edit", "4A0782C7-06B0-494A-B0BA-F399A270BCD4", "-d", "tomorrow"]
+        ) { _ in 23829 }
+
+        #expect(normalized == ["edit", "23829", "-d", "tomorrow", "--json"])
+    }
+
+    @Test func keepsPostCommandJSONFlagInPlace() async throws {
+        let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["edit", "23829", "--json", "-d", "2026-06-24T18:30:00"]
+        ) { _ in nil }
+
+        #expect(normalized == ["edit", "23829", "--json", "-d", "2026-06-24T18:30:00"])
+    }
+
+    @Test func dedupesRelocatedJSONFlagWhenAlreadyPresentAfterCommand() async throws {
+        let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
+            for: remCTLAdapter(),
+            arguments: ["--json", "done", "23829", "--json"]
+        ) { _ in nil }
+
+        #expect(normalized == ["done", "23829", "--json"])
+    }
+
     @Test func leavesOtherGenericCLIsUntouched() async throws {
         let normalized = try await RemCTLArgumentNormalizer.normalizedArguments(
             for: codexAdapter(),

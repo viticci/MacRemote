@@ -50,19 +50,68 @@ const UI_META = {
   actions: [{
     id: "complete", title: "Mark Done", kind: "checkOff",
     toolName: "remctl_run", toolCapability: "destructive",
-    arguments: { args: ["--json", "done", "{id}"] },
+    arguments: { args: ["done", "{id}", "--json"] },
     requiredRowFields: ["id"], completedWhenField: "completed"
   }, {
     id: "reschedule", title: "Reschedule", kind: "rowButton",
     toolName: "remctl_run", toolCapability: "destructive",
-    arguments: { args: ["--json", "edit", "{id}", "-d", "{input.due}"] },
+    arguments: { args: ["edit", "{id}", "-d", "{input.due}", "--json"] },
     requiredRowFields: ["id"],
     inputs: [{ name: "due", title: "New due", placeholder: "tomorrow 9:30" }]
   }, {
     id: "delete", title: "Delete", kind: "rowButton",
     toolName: "remctl_run", toolCapability: "destructive",
-    arguments: { args: ["--json", "delete", "{id}", "--force"] },
+    arguments: { args: ["delete", "{id}", "--force", "--json"] },
     requiredRowFields: ["id"], style: "destructive"
+  }]
+};
+
+const EPISODES = [
+  { uuid: "f0fa0c5d-ce56-4079-9054-dcbe414aaee5", url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/secure/upgradeplus626.mp3",
+    published: "2026-06-29T21:00:00Z", duration: 6213, fileType: "audio/mp3", title: "Unprecedented Weirdness", size: "126583816",
+    playingStatus: 2, playedUpTo: 4137, starred: false, podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Upgrade+ — Private to Federico Viticci", episodeNumber: 626, author: "Relay" },
+  { uuid: "01a894b1-c26c-43e2-9f5d-37e738047670", url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/Moretex_177.mp3",
+    published: "2026-03-23T16:15:00Z", duration: 5042, fileType: "audio/mp3", title: "How Major Life Changes Reshape Creative Workflows, With Quinn Nelson", size: "81196535",
+    playingStatus: 2, playedUpTo: 2285, starred: false, podcastUuid: "aa7f4440-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Moretex — Private to Federico Viticci", episodeNumber: 177, author: "Relay" },
+  { uuid: "92f82cef-d654-4e55-9723-09b0dfd632fd", url: "https://www.patreon.com/api/rss/u/example/e/147791572.mp3",
+    published: "2026-01-09T08:00:00Z", duration: 3696, fileType: "audio/mpeg", title: "The Most Anticipated Games of 2026", size: "59136000",
+    playingStatus: 2, playedUpTo: 300, starred: true, podcastUuid: "0e2b1031-e081-6ef1-8f7b-0266557711f5",
+    podcastTitle: "Remaster", episodeNumber: 104, author: "Relay" }
+];
+
+const POCKET_UI_META = {
+  version: 1,
+  toolTitle: "PocketCTL In Progress",
+  toolName: "pocketctl_in_progress",
+  capability: "readOnly",
+  category: "Podcasts",
+  accent: "#f43e37",
+  table: {
+    columns: [
+      { key: "artwork", title: "", derive: "artwork", sourceKey: "podcastUuid", altKey: "podcastTitle",
+        urlTemplate: "https://static.pocketcasts.com/discover/images/webp/200/{value}.webp" },
+      { key: "title", title: "Episode", primary: true },
+      { key: "podcastTitle", title: "Podcast" },
+      { key: "duration", title: "Duration", derive: "duration", sourceKey: "duration" },
+      { key: "progress", title: "Played", derive: "progress", sourceKey: "playedUpTo", totalKey: "duration" },
+      { key: "url", title: "Link", derive: "link", sourceKey: "url" }
+    ],
+    hiddenColumns: ["uuid", "published", "fileType", "size", "podcastUuid", "playingStatus"]
+  },
+  actions: [{
+    id: "play_next", title: "Play Next", kind: "rowButton",
+    toolName: "pocketctl_run", toolCapability: "destructive",
+    arguments: { args: ["play-next", "{uuid}"] }, requiredRowFields: ["uuid"]
+  }, {
+    id: "play_last", title: "Play Last", kind: "rowButton",
+    toolName: "pocketctl_run", toolCapability: "destructive",
+    arguments: { args: ["play-last", "{uuid}"] }, requiredRowFields: ["uuid"]
+  }, {
+    id: "star", title: "Star", kind: "rowButton",
+    toolName: "pocketctl_run", toolCapability: "destructive",
+    arguments: { args: ["star", "{uuid}"] }, requiredRowFields: ["uuid"]
   }]
 };
 
@@ -76,6 +125,8 @@ function envelope(overrides) {
 
 const FIXTURES = {
   table: { structuredContent: envelope({ stdout: JSON.stringify({ items: REMINDERS }) }), _meta: {"net.viticci.macremote/ui": UI_META} },
+  podcasts: { structuredContent: envelope({ toolID: "preset.pocketctl.in_progress", toolName: "pocketctl_in_progress", stdout: JSON.stringify(EPISODES) }), _meta: {"net.viticci.macremote/ui": POCKET_UI_META} },
+  actionfail: { structuredContent: envelope({ stdout: JSON.stringify({ items: REMINDERS }) }), _meta: {"net.viticci.macremote/ui": UI_META} },
   tree: { structuredContent: envelope({ stdout: JSON.stringify({ database: { path: "/tmp/db", reminders: 412, lists: 9 }, ok: true }) }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Stats", toolName: "remctl_stats", capability: "readOnly"}} },
   terminal: { structuredContent: envelope({ stdout: "Build settings:\n  [1mSDKROOT[0m = [32mMacOSX26.5.sdk[0m\n  [33mwarning:[0m 2 targets skipped\n[34mBuild complete![0m (14.2s)\n[38;2;200;40;40mtruecolor-test red[0m [38;5;46m256-green[0m still-[1mbold[0m" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Swift Build", toolName: "swift_cli", capability: "destructive"}} },
   error: { structuredContent: envelope({ succeeded: false, exitCode: 1, stdout: "", stderr: "error: Reminders store not readable from this process context.\nGrant Full Disk Access and retry." }), isError: true, _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Today", toolName: "remctl_today", capability: "readOnly"}} },
@@ -126,11 +177,19 @@ window.addEventListener("message", (event) => {
   }
   if (msg.method === "tools/call") {
     window.__toolCalls.push(msg.params);
+    // fixture=actionfail: every proxied call fails with a CLI-style stderr,
+    // exercising the widget's visible Failed state + tooltip.
+    const fail = fixtureName === "actionfail";
     setTimeout(() => {
       send({ jsonrpc: "2.0", id: msg.id, result: {
-        structuredContent: envelope({ toolName: msg.params.name, stdout: "{\"ok\": true}" }),
-        content: [{ type: "text", text: "{\"ok\": true}" }],
-        isError: false
+        structuredContent: envelope({
+          toolName: msg.params.name,
+          exitCode: fail ? 2 : 0, succeeded: !fail,
+          stdout: fail ? "" : "{\"ok\": true}",
+          stderr: fail ? "usage: remctl [-h] ...\nremctl: error: unrecognized arguments: --json" : ""
+        }),
+        content: [{ type: "text", text: fail ? "{}" : "{\"ok\": true}" }],
+        isError: fail
       }});
     }, 250);
     return;

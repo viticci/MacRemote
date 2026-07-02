@@ -82,21 +82,69 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     func start() throws -> UInt16 {
-        let selectedPort = try Self.availablePort()
-        guard let nwPort = NWEndpoint.Port(rawValue: selectedPort) else {
-            throw LocalMCPServerError.portUnavailable
-        }
+        // availablePort() probes with a throwaway socket that closes before
+        // NWListener binds, so another process can win the port in between
+        // (TOCTOU) — and NWListener reports EADDRINUSE only asynchronously,
+        // which used to leave a silently dead listener behind (flaky under
+        // parallel test startup). Verify each bind and retry on a fresh port.
+        var lastError: Error = LocalMCPServerError.portUnavailable
+        for _ in 0..<8 {
+            let selectedPort = try Self.availablePort()
+            guard let nwPort = NWEndpoint.Port(rawValue: selectedPort) else {
+                throw LocalMCPServerError.portUnavailable
+            }
 
-        let listener = try NWListener(using: .tcp, on: nwPort)
-        listener.service = nil
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.handle(connection)
+            let listener = try NWListener(using: .tcp, on: nwPort)
+            listener.service = nil
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.handle(connection)
+            }
+
+            switch Self.startAndAwaitReady(listener, queue: queue) {
+            case .success:
+                self.listener = listener
+                self.activePort = selectedPort
+                return selectedPort
+            case .failure(let error):
+                listener.cancel()
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    /// Starts the listener and blocks until Network.framework reports
+    /// `.ready` or `.failed`, so callers never receive a port nobody is
+    /// actually listening on. Readiness is normally a few milliseconds; the
+    /// timeout only guards against a wedged network stack.
+    private static func startAndAwaitReady(
+        _ listener: NWListener,
+        queue: DispatchQueue
+    ) -> Result<Void, Error> {
+        let gate = ListenerReadyGate()
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                gate.resolve(.ready)
+            case .failed(let error):
+                gate.resolve(.failed(error))
+            case .cancelled:
+                gate.resolve(.failed(NWError.posix(.ECANCELED)))
+            default:
+                break
+            }
         }
         listener.start(queue: queue)
-
-        self.listener = listener
-        self.activePort = selectedPort
-        return selectedPort
+        let outcome = gate.awaitOutcome(timeout: 5)
+        listener.stateUpdateHandler = nil
+        switch outcome {
+        case .ready:
+            return .success(())
+        case .failed(let error):
+            return .failure(error)
+        case nil:
+            return .failure(LocalMCPServerError.portUnavailable)
+        }
     }
 
     func stop() {
@@ -846,15 +894,15 @@ final class LocalMCPServer: @unchecked Sendable {
                     "uri": Self.widgetResourceURI,
                     "mimeType": Self.widgetMIMEType,
                     "text": html,
-                    // SEP-1865 sandbox hints: the widget makes zero external
-                    // requests, so the CSP allowlists stay empty (most
-                    // restrictive), and a border suits a data panel.
+                    // SEP-1865 sandbox hints: the widget makes no fetch/XHR
+                    // calls (connect stays empty), and loads images from
+                    // exactly one origin — Pocket Casts episode artwork.
                     "_meta": [
                         "ui": [
                             "prefersBorder": true,
                             "csp": [
                                 "connectDomains": [],
-                                "resourceDomains": []
+                                "resourceDomains": ["https://static.pocketcasts.com"]
                             ],
                             "permissions": [
                                 "clipboardWrite": [:]
@@ -907,13 +955,19 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     /// Per-category widget accent (overrides the widget's default blue/green).
-    /// Reminders read purple to distinguish RemCTL results at a glance.
+    /// Reminders read purple to distinguish RemCTL results at a glance;
+    /// podcasts read Pocket Casts red.
     private static func widgetAccent(for category: ToolCategory) -> String? {
         switch category {
         case .reminders: return "#8b5cf6"   // purple
+        case .podcasts: return "#f43e37"    // Pocket Casts red
         default: return nil
         }
     }
+
+    /// Podcast artwork endpoint (Pocket Casts CDN, keyed by podcast UUID).
+    /// Must stay in sync with the widget resource's CSP `resourceDomains`.
+    static let podcastArtworkURLTemplate = "https://static.pocketcasts.com/discover/images/webp/200/{value}.webp"
 
     /// Per-category table hints: a curated column set (keeps the trailing
     /// action buttons on-screen), a renamed/derived "When" column, and which
@@ -933,6 +987,31 @@ final class LocalMCPServer: @unchecked Sendable {
                 // Explicitly dropped even if a curated set is ignored by an
                 // older widget: id + completed (the check circle shows it).
                 "hiddenColumns": ["id", "completed"]
+            ]
+        case .podcasts:
+            return [
+                // Episode-shaped rows (up-next / in-progress / history).
+                // The widget drops curated columns whose source fields are
+                // absent and falls back to auto columns when too few
+                // survive, so podcast-shaped outputs (subscriptions,
+                // playlists) aren't forced into this episode layout.
+                "columns": [
+                    ["key": "artwork", "title": "", "derive": "artwork",
+                     "sourceKey": "podcastUuid", "altKey": "podcastTitle",
+                     "urlTemplate": podcastArtworkURLTemplate],
+                    ["key": "title", "title": "Episode", "primary": true],
+                    ["key": "podcastTitle", "title": "Podcast"],
+                    ["key": "duration", "title": "Duration", "derive": "duration",
+                     "sourceKey": "duration"],
+                    ["key": "progress", "title": "Played", "derive": "progress",
+                     "sourceKey": "playedUpTo", "totalKey": "duration"],
+                    ["key": "url", "title": "Link", "derive": "link",
+                     "sourceKey": "url"]
+                ],
+                "hiddenColumns": ["uuid", "published", "fileType", "size",
+                                  "podcastUuid", "playingStatus", "episodeType",
+                                  "episodeSeason", "isDeleted", "podcastSlug",
+                                  "slug", "alternateEnclosures", "bookmarks"]
             ]
         default:
             return nil
@@ -1381,7 +1460,9 @@ final class LocalMCPServer: @unchecked Sendable {
         ).data
     }
 
-    private static func staticResourceData(fileName: String) -> Data? {
+    // Internal (not private): CloudflareService reuses the same bundled
+    // favicon assets for the apex-favicon Worker.
+    static func staticResourceData(fileName: String) -> Data? {
         let fileManager = FileManager.default
         let sourceRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1588,6 +1669,35 @@ enum LocalMCPServerError: LocalizedError {
         switch self {
         case .portUnavailable: "Could not allocate a local server port."
         }
+    }
+}
+
+/// One-shot rendezvous between NWListener's state queue and the thread
+/// waiting in `start()`: first resolution wins, later state changes are
+/// ignored (a listener can go `.ready` and later `.cancelled`).
+private final class ListenerReadyGate: @unchecked Sendable {
+    enum Outcome {
+        case ready
+        case failed(NWError)
+    }
+
+    private let semaphore = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var outcome: Outcome?
+
+    func resolve(_ outcome: Outcome) {
+        lock.lock()
+        let isFirst = self.outcome == nil
+        if isFirst { self.outcome = outcome }
+        lock.unlock()
+        if isFirst { semaphore.signal() }
+    }
+
+    func awaitOutcome(timeout: TimeInterval) -> Outcome? {
+        guard semaphore.wait(timeout: .now() + timeout) == .success else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return outcome
     }
 }
 

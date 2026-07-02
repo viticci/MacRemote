@@ -259,7 +259,10 @@ enum RemCTLToolCatalog {
                 title: "Mark Done",
                 kind: .checkOff,
                 targetExecutableBasename: "remctl",  // resolves to any shared flexible RemCTL adapter (built-in or Library-derived)
-                arguments: .object(["args": .array([.string("--json"), .string("done"), .string("{id}")])]),
+                // --json is a per-subcommand flag in remctl's argparse tree;
+                // placed before the subcommand it exits 2 with "unrecognized
+                // arguments" and the action silently no-ops.
+                arguments: .object(["args": .array([.string("done"), .string("{id}"), .string("--json")])]),
                 requiredRowFields: ["id"],
                 completedWhenField: "completed"
             ),
@@ -268,7 +271,7 @@ enum RemCTLToolCatalog {
                 title: "Reschedule",
                 kind: .rowButton,
                 targetExecutableBasename: "remctl",  // resolves to any shared flexible RemCTL adapter (built-in or Library-derived)
-                arguments: .object(["args": .array([.string("--json"), .string("edit"), .string("{id}"), .string("-d"), .string("{input.due}")])]),
+                arguments: .object(["args": .array([.string("edit"), .string("{id}"), .string("-d"), .string("{input.due}"), .string("--json")])]),
                 requiredRowFields: ["id"],
                 inputs: [
                     ToolUIActionInput(name: "due", title: "New due", placeholder: "tomorrow 9:30 \u{b7} +3d \u{b7} 2026-07-10")
@@ -279,7 +282,7 @@ enum RemCTLToolCatalog {
                 title: "Edit Title",
                 kind: .rowButton,
                 targetExecutableBasename: "remctl",  // resolves to any shared flexible RemCTL adapter (built-in or Library-derived)
-                arguments: .object(["args": .array([.string("--json"), .string("edit"), .string("{id}"), .string("--title"), .string("{input.title}")])]),
+                arguments: .object(["args": .array([.string("edit"), .string("{id}"), .string("--title"), .string("{input.title}"), .string("--json")])]),
                 requiredRowFields: ["id"],
                 inputs: [
                     ToolUIActionInput(name: "title", title: "Title", prefillField: "title")
@@ -293,7 +296,7 @@ enum RemCTLToolCatalog {
                 // --force: the CLI's interactive confirmation would hang a
                 // headless MCP call; the widget's two-step confirm plus the
                 // destructive-tool approval flow carry the safety instead.
-                arguments: .object(["args": .array([.string("--json"), .string("delete"), .string("{id}"), .string("--force")])]),
+                arguments: .object(["args": .array([.string("delete"), .string("{id}"), .string("--force"), .string("--json")])]),
                 requiredRowFields: ["id"],
                 style: .destructive
             )

@@ -1906,7 +1906,11 @@ private func waitForServerReady(
 ) async throws {
     let healthURL = base.appendingPathComponent("health")
     var lastError: Error?
-    for _ in 0..<50 {
+    // Parallel suites start dozens of listeners at once; the old flat
+    // 50×20ms (~1s) budget occasionally expired on a loaded machine.
+    // Poll fast at first, then back off — ~8s total before giving up.
+    var delayNanoseconds: UInt64 = 20_000_000
+    for _ in 0..<45 {
         do {
             let response = try await get(url: healthURL)
             if response.statusCode == 200 {
@@ -1915,7 +1919,8 @@ private func waitForServerReady(
         } catch {
             lastError = error
         }
-        try await Task.sleep(nanoseconds: 20_000_000)
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+        delayNanoseconds = min(delayNanoseconds * 3 / 2, 300_000_000)
     }
 
     Issue.record("Timed out waiting for local MCP test server: \(lastError?.localizedDescription ?? "no response")", sourceLocation: sourceLocation)
@@ -2058,9 +2063,23 @@ struct MCPUISupportTests {
             timeoutSeconds: 2,
             outputByteLimit: 1024
         )
+        let podcastsTool = ToolDefinition(
+            id: "test.podcasts",
+            name: "Episodes List",
+            summary: "Return episode rows.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{value}"],
+            parameters: [
+                ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024 * 1024,
+            category: .podcasts
+        )
         let server = LocalMCPServer(
             instanceID: "test-instance",
-            tools: [listTool, mutatorTool],
+            tools: [listTool, mutatorTool, podcastsTool],
             authCoordinator: coordinator,
             toolExecutor: FakeToolExecutor()
         )
@@ -2141,6 +2160,11 @@ struct MCPUISupportTests {
         let itemMeta = try #require(item["_meta"] as? [String: Any])
         let ui = try #require(itemMeta["ui"] as? [String: Any])
         #expect(ui["prefersBorder"] as? Bool == true)
+        // CSP: no fetch/XHR origins; images only from the Pocket Casts CDN
+        // (episode artwork). Must stay in sync with podcastArtworkURLTemplate.
+        let csp = try #require(ui["csp"] as? [String: Any])
+        #expect((csp["connectDomains"] as? [String])?.isEmpty == true)
+        #expect(csp["resourceDomains"] as? [String] == ["https://static.pocketcasts.com"])
 
         let unknown = try await postJSON(
             url: mcp, bearerToken: token,
@@ -2195,6 +2219,44 @@ struct MCPUISupportTests {
         #expect(action["toolCapability"] as? String == "write")
         #expect(action["toolID"] == nil, "internal ids never leak to clients")
         #expect(action["completedWhenField"] as? String == "completed")
+    }
+
+    @Test func podcastToolResultCarriesRedAccentAndEpisodeColumns() async throws {
+        let (server, coordinator) = makeUITestServer()
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "test_podcasts", "arguments": ["value": "x"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        let meta = try #require(result["_meta"] as? [String: Any])
+        let ui = try #require(meta["net.viticci.macremote/ui"] as? [String: Any])
+        // Podcasts category → Pocket Casts red + episode-shaped curated columns.
+        #expect(ui["accent"] as? String == "#f43e37")
+        let table = try #require(ui["table"] as? [String: Any])
+        let columns = try #require(table["columns"] as? [[String: Any]])
+        let byKey = Dictionary(uniqueKeysWithValues: columns.map { ($0["key"] as? String ?? "", $0) })
+        #expect(byKey["artwork"]?["derive"] as? String == "artwork")
+        #expect(byKey["artwork"]?["sourceKey"] as? String == "podcastUuid")
+        #expect((byKey["artwork"]?["urlTemplate"] as? String)?.hasPrefix("https://static.pocketcasts.com/") == true)
+        #expect(byKey["duration"]?["derive"] as? String == "duration")
+        #expect(byKey["progress"]?["derive"] as? String == "progress")
+        #expect(byKey["progress"]?["sourceKey"] as? String == "playedUpTo")
+        #expect(byKey["progress"]?["totalKey"] as? String == "duration")
+        #expect(byKey["url"]?["derive"] as? String == "link")
+        let hidden = try #require(table["hiddenColumns"] as? [String])
+        for dropped in ["uuid", "published", "fileType", "size"] {
+            #expect(hidden.contains(dropped), "\(dropped) should be hidden")
+        }
     }
 
     @Test func oversizedStdoutIsCappedBelowWidgetHydrationCliff() async throws {

@@ -114,7 +114,11 @@ enum RemCTLArgumentNormalizer {
         arguments: [String],
         uuidResolver: @Sendable (String) async throws -> Int?
     ) async throws -> [String] {
-        guard applies(to: tool), let commandIndex = firstCommandIndex(in: arguments) else {
+        guard applies(to: tool) else {
+            return arguments
+        }
+        let arguments = relocatingPreCommandJSONFlag(arguments)
+        guard let commandIndex = firstCommandIndex(in: arguments) else {
             return arguments
         }
 
@@ -147,6 +151,25 @@ enum RemCTLArgumentNormalizer {
 
     private static func firstCommandIndex(in arguments: [String]) -> Int? {
         arguments.firstIndex { commandNames.contains($0) }
+    }
+
+    /// remctl's `--json` is a per-subcommand flag; before the subcommand the
+    /// top-level parser exits 2 with "unrecognized arguments" and the call
+    /// dies before doing anything. Older catalog actions (pre-v3) and stale
+    /// clients emit that form — relocate it after the subcommand instead of
+    /// letting the whole call fail.
+    private static func relocatingPreCommandJSONFlag(_ arguments: [String]) -> [String] {
+        guard let commandIndex = arguments.firstIndex(where: { commandNames.contains($0) }),
+              arguments[..<commandIndex].contains("--json") else {
+            return arguments
+        }
+        var normalized = arguments.enumerated()
+            .filter { !($0.element == "--json" && $0.offset < commandIndex) }
+            .map(\.element)
+        if !normalized.contains("--json") {
+            normalized.append("--json")
+        }
+        return normalized
     }
 
     private static func shouldStripPrivateFlag(arguments: [String], commandIndex: Int) -> Bool {

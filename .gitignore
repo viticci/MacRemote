@@ -6,3 +6,4 @@ tmp-*.png
 __pycache__/
 *.pyc
 .playwright-cli/
+.playwright-mcp/

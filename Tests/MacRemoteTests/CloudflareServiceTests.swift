@@ -617,6 +617,139 @@ struct CloudflareServiceTests {
         )
         #expect(WranglerOAuthTokenProvider.value(named: "missing", in: config) == nil)
     }
+
+    // MARK: - Apex favicon (connector icon)
+
+    private static let testZone = CloudflareZone(
+        id: "zone-id",
+        name: "viticci.net",
+        accountID: "account-id",
+        accountName: "Viticci"
+    )
+
+    @Test func apexFaviconRoutePatternsCoverOnlyFaviconPaths() {
+        #expect(
+            CloudflareService.apexFaviconRoutePatterns(zoneName: "viticci.net") ==
+            ["viticci.net/favicon.ico", "viticci.net/favicon.png"]
+        )
+    }
+
+    @Test func apexFaviconWorkerScriptEmbedsAssetsAndServesNothingElse() {
+        let script = CloudflareService.apexFaviconWorkerScript(icoBase64: "SUNP", pngBase64: "UE5H")
+        #expect(script.contains("\"/favicon.ico\": { b64: \"SUNP\", type: \"image/x-icon\" }"))
+        #expect(script.contains("\"/favicon.png\": { b64: \"UE5H\", type: \"image/png\" }"))
+        // Anything but the two favicon paths must 404 so the Worker can
+        // never shadow real apex content.
+        #expect(script.contains("status: 404"))
+        #expect(script.contains("export default"))
+    }
+
+    @Test func bundledFaviconAssetsAreAvailable() throws {
+        let assets = try #require(CloudflareService.bundledFaviconAssets())
+        #expect(!assets.icoBase64.isEmpty)
+        #expect(!assets.pngBase64.isEmpty)
+    }
+
+    @Test func workerUploadBodyIsWellFormedMultipart() {
+        let body = String(
+            decoding: CloudflareService.workerUploadBody(script: "export default {};", boundary: "B"),
+            as: UTF8.self
+        )
+        #expect(body.contains("--B\r\nContent-Disposition: form-data; name=\"metadata\""))
+        #expect(body.contains("\"main_module\":\"worker.js\""))
+        #expect(body.contains("name=\"worker.js\"; filename=\"worker.js\""))
+        #expect(body.contains("Content-Type: application/javascript+module"))
+        #expect(body.hasSuffix("--B--\r\n"))
+    }
+
+    @Test func provisionApexFaviconSkipsWhenApexAlreadyServesOne() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CloudflareURLProtocolMock.self]
+        CloudflareURLProtocolMock.install([])
+        let service = CloudflareService(
+            session: URLSession(configuration: config),
+            executablePath: { _ in nil },
+            apexFaviconProbe: { _ in true }
+        )
+
+        let outcome = await service.provisionApexFavicon(zone: Self.testZone, apiToken: "test-token")
+
+        #expect(outcome == .skippedExistingFavicon)
+        #expect(CloudflareURLProtocolMock.requestedPaths().isEmpty)
+    }
+
+    @Test func provisionApexFaviconUploadsWorkerCreatesDNSAndRoutes() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CloudflareURLProtocolMock.self]
+        CloudflareURLProtocolMock.install([
+            .success(method: "PUT", path: "/accounts/account-id/workers/scripts/macremote-apex-favicon", result: ["id": "script-id"]),
+            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
+            .success(method: "POST", path: "/zones/zone-id/dns_records", result: ["id": "apex-dns", "type": "AAAA", "proxied": true]),
+            .success(method: "GET", path: "/zones/zone-id/workers/routes", result: []),
+            .success(method: "POST", path: "/zones/zone-id/workers/routes", result: ["id": "route-ico"]),
+            .success(method: "POST", path: "/zones/zone-id/workers/routes", result: ["id": "route-png"])
+        ])
+        let service = CloudflareService(
+            session: URLSession(configuration: config),
+            executablePath: { _ in nil },
+            apexFaviconProbe: { _ in false }
+        )
+
+        let outcome = await service.provisionApexFavicon(zone: Self.testZone, apiToken: "test-token")
+
+        guard case .provisioned(let detail) = outcome else {
+            Issue.record("Expected .provisioned, got \(outcome)")
+            return
+        }
+        #expect(detail.contains("https://viticci.net/favicon.ico"))
+
+        let bodies = CloudflareURLProtocolMock.requestBodies()
+        let dnsBody = try #require(bodies["POST /zones/zone-id/dns_records"])
+        #expect(dnsBody["type"] as? String == "AAAA")
+        #expect(dnsBody["content"] as? String == "100::")
+        #expect(dnsBody["proxied"] as? Bool == true)
+        // The bodies dictionary keeps the last body per endpoint — the
+        // second route POST covers favicon.png.
+        let routeBody = try #require(bodies["POST /zones/zone-id/workers/routes"])
+        #expect(routeBody["pattern"] as? String == "viticci.net/favicon.png")
+        #expect(routeBody["script"] as? String == "macremote-apex-favicon")
+    }
+
+    @Test func provisionApexFaviconLeavesForeignRoutesAndDNSAlone() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CloudflareURLProtocolMock.self]
+        CloudflareURLProtocolMock.install([
+            .success(method: "PUT", path: "/accounts/account-id/workers/scripts/macremote-apex-favicon", result: ["id": "script-id"]),
+            // The apex already has a proxied address record: no DNS write.
+            .success(method: "GET", path: "/zones/zone-id/dns_records", result: [
+                ["id": "existing", "type": "A", "proxied": true]
+            ]),
+            // favicon.ico is routed to someone else's Worker: only the
+            // missing favicon.png route is created, nothing is overwritten.
+            .success(method: "GET", path: "/zones/zone-id/workers/routes", result: [
+                ["id": "other", "pattern": "viticci.net/favicon.ico", "script": "someone-else"]
+            ]),
+            .success(method: "POST", path: "/zones/zone-id/workers/routes", result: ["id": "route-png"])
+        ])
+        let service = CloudflareService(
+            session: URLSession(configuration: config),
+            executablePath: { _ in nil },
+            apexFaviconProbe: { _ in false }
+        )
+
+        let outcome = await service.provisionApexFavicon(zone: Self.testZone, apiToken: "test-token")
+
+        guard case .provisioned(let detail) = outcome else {
+            Issue.record("Expected .provisioned, got \(outcome)")
+            return
+        }
+        #expect(detail.contains("someone-else"))
+        let requests = CloudflareURLProtocolMock.requestedPaths()
+        #expect(!requests.contains("POST /zones/zone-id/dns_records"))
+        #expect(requests.filter { $0 == "POST /zones/zone-id/workers/routes" }.count == 1)
+        let routeBody = try #require(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/workers/routes"])
+        #expect(routeBody["pattern"] as? String == "viticci.net/favicon.png")
+    }
 }
 
 private struct CloudflareMockResponse: Sendable {

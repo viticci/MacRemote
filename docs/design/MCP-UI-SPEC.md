@@ -13,9 +13,10 @@ that led to it is `docs/research/MCP-UI-REPORT.md`.
 
 - **Resource**: `ui://macremote/output`, MIME `text/html;profile=mcp-app`,
   served via standard `resources/list` / `resources/read`. The read result
-  carries `_meta.ui` sandbox hints: `prefersBorder`, empty CSP allowlists
-  (the widget makes zero external requests), and a `clipboardWrite`
-  permission request.
+  carries `_meta.ui` sandbox hints: `prefersBorder`, CSP allowlists
+  (`connectDomains` empty — no fetch/XHR; `resourceDomains` allows exactly
+  `https://static.pocketcasts.com` for podcast artwork), and a
+  `clipboardWrite` permission request.
 - **Tool linkage**: every `tools/list` entry carries
   `"_meta": {"ui": {"resourceUri": "ui://macremote/output"}}` (SEP-1865
   nested form). Hosts without the extension ignore `_meta` entirely.
@@ -43,11 +44,18 @@ user-defined tools.json) — no tool-specific code paths, per AGENTS.md's
 ToolUIAction(
     id: "complete", title: "Mark Done", kind: .checkOff,
     toolID: "remctl.run",
-    arguments: .object(["args": .array([.string("--json"), .string("done"), .string("{id}")])]),
+    arguments: .object(["args": .array([.string("done"), .string("{id}"), .string("--json")])]),
     requiredRowFields: ["id"],
     completedWhenField: "completed"
 )
 ```
+
+Mind the target CLI's flag grammar: remctl's `--json` is a **per-subcommand**
+flag — placed before the subcommand, argparse exits 2 with "unrecognized
+arguments" and the affordance no-ops. This shipped broken once (v2 catalog);
+the `catalogUIActions.v3` migration repairs persisted remctl actions by
+moving a leading `--json` to the end of the args array
+(`AppModel.remCTLActionsWithRepairedJSONFlag`, remctl-targeted actions only).
 
 - `kind`: `.checkOff` (leading Reminders-style circle on table rows) or
   `.rowButton` (trailing button).
@@ -128,18 +136,35 @@ Footer: MacRemote brand, Copy Output, Run Again (replays the exact
 tool's category server-side, `LocalMCPServer.widgetAccent`/`widgetTableHints`):
 
 - `accent` (hex) recolors the accent line, success chip, check circle, and
-  action buttons via `color-mix` tints. RemCTL reminders read purple.
+  action buttons via `color-mix` tints. RemCTL reminders read purple
+  (`#8b5cf6`); PocketCTL podcasts read Pocket Casts red (`#f43e37`).
 - `table.columns` supplies a curated, ordered column set. Each entry is
-  `{key, title, primary?}` or a derived column `{key, title, derive:
-  "datetime", sourceKey, allDayKey}` — the widget formats an ISO date (+
-  all-day flag) into a friendly **When** ("Jul 9, 2:00 PM", all-day → "Jul
-  9", missing → "—"). A curated set keeps the trailing action buttons
-  on-screen instead of scrolled off past raw columns.
+  `{key, title, primary?}` or a derived column with `derive:`
+  - `"datetime"` (`sourceKey`, `allDayKey`) — ISO date (+ all-day flag) into
+    a friendly **When** ("Jul 9, 2:00 PM", all-day → "Jul 9", missing → "—").
+  - `"duration"` (`sourceKey`, seconds) — compact human duration ("1h 43m").
+  - `"progress"` (`sourceKey` played seconds, `totalKey` total seconds) —
+    accent-colored conic-gradient pie + percent label, tooltip "1h 08m of
+    1h 43m played".
+  - `"artwork"` (`sourceKey`, `urlTemplate` with `{value}`, `altKey`) — 28px
+    rounded thumbnail; the value is URL-encoded into the template (podcast
+    artwork off the Pocket Casts CDN, hence the CSP resource domain).
+  - `"link"` (`sourceKey`) — compact "Open ↗" pill (`target="_blank"
+    rel="noopener"`) instead of the raw URL; only http(s) values render.
+  A curated set keeps the trailing action buttons on-screen instead of
+  scrolled off past raw columns. Curated specs whose source fields never
+  appear in the rows are dropped, and if fewer than two survive the widget
+  falls back to auto columns — so the podcasts curation (episode-shaped
+  rows) doesn't distort subscriptions/playlists output.
 - `table.hiddenColumns` drops raw keys when columns aren't fully curated
-  (reminders hide `id` + `completed` — the check circle already shows done).
+  (reminders hide `id` + `completed`; podcasts hide `uuid`, `published`,
+  `fileType`, `size` and other transport fields).
 
 Row action buttons render their label immediately and stay visible (not
-hover-gated), so Reschedule/Delete are discoverable on every surface.
+hover-gated), so Reschedule/Delete are discoverable on every surface. A
+failed action shows a red **Failed** state for a few seconds with the CLI's
+stderr tail in the tooltip — never a silent reset (a silent reset reads as
+"the button does nothing").
 
 ### Wire protocol (verified against spec.types.ts + apps.mdx)
 
@@ -165,9 +190,11 @@ initiates:
   advertisement, tool `_meta`, resource read + sandbox meta, unknown-uri
   error, action encoding with public names, stdout cap.
 - `Widget/test/harness.html`: a host simulator (fixtures: table, tree,
-  terminal, error, empty, truncated; `?theme=dark`). Drive with Playwright:
-  handshake, all six states, check-off → recorded `tools/call` with
-  substituted args → row completion, host theme forcing.
+  terminal, error, empty, truncated, habits, podcasts, actionfail;
+  `?theme=dark`). Drive with Playwright: handshake, all states, check-off →
+  recorded `tools/call` with substituted args → row completion, the podcasts
+  derived columns (artwork/duration/progress/link), the actionfail fixture's
+  visible Failed state, and host theme forcing.
 
 ## Host compatibility
 

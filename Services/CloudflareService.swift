@@ -64,9 +64,37 @@ struct CloudflareCustomDomainDeployment: Equatable, Sendable {
     let tunnelToken: String
     let accessMode: CloudflareAccessMode
     let accessCredentials: CloudflareAccessCredentials?
+    var apexFavicon: CloudflareApexFaviconOutcome?
 
     var publicURL: URL {
         URL(string: "https://\(hostname)")!
+    }
+}
+
+/// Outcome of the optional apex-favicon step. Claude.ai resolves connector
+/// icons through Google's favicon service, which looks up the registrable
+/// domain (the zone apex, not the connector's subdomain) — an apex that
+/// serves nothing means a generic-globe connector icon. This step is
+/// best-effort: it never fails the deploy, it just reports here.
+enum CloudflareApexFaviconOutcome: Equatable, Sendable {
+    case provisioned(String)
+    case skippedExistingFavicon
+    case failed(String)
+
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+
+    var logMessage: String {
+        switch self {
+        case .provisioned(let detail):
+            "Connector icon: \(detail)"
+        case .skippedExistingFavicon:
+            "Connector icon: the domain apex already serves a favicon, so it was left untouched."
+        case .failed(let message):
+            "Connector icon setup was skipped: \(message)"
+        }
     }
 }
 
@@ -129,17 +157,21 @@ struct CloudflareService: Sendable {
     private let tokenProvider: WranglerOAuthTokenProvider
     private let runner: ProcessRunner
     private let executablePath: @Sendable (String) -> String?
+    /// Tests inject this; the default probes the live URL through `session`.
+    private let apexFaviconProbe: (@Sendable (URL) async -> Bool)?
 
     init(
         session: URLSession = .shared,
         tokenProvider: WranglerOAuthTokenProvider = WranglerOAuthTokenProvider(),
         runner: ProcessRunner = ProcessRunner(),
-        executablePath: @escaping @Sendable (String) -> String? = { ExecutableLocator.executablePath(named: $0) }
+        executablePath: @escaping @Sendable (String) -> String? = { ExecutableLocator.executablePath(named: $0) },
+        apexFaviconProbe: (@Sendable (URL) async -> Bool)? = nil
     ) {
         self.session = session
         self.tokenProvider = tokenProvider
         self.runner = runner
         self.executablePath = executablePath
+        self.apexFaviconProbe = apexFaviconProbe
     }
 
     func wranglerPath() -> String? {
@@ -171,7 +203,8 @@ struct CloudflareService: Sendable {
         subdomain: String,
         localServerURL: URL,
         accessMode: CloudflareAccessMode,
-        apiToken: String? = nil
+        apiToken: String? = nil,
+        provisionApexFavicon: Bool = false
     ) async throws -> CloudflareCustomDomainDeployment {
         guard cloudflaredPath() != nil else {
             throw CloudflareServiceError.cloudflaredUnavailable
@@ -261,6 +294,10 @@ struct CloudflareService: Sendable {
         }
 
         let tunnelToken = try await tunnelRunToken(tunnelID: tunnel.id, accountID: zone.accountID, apiToken: apiToken)
+        var apexFavicon: CloudflareApexFaviconOutcome?
+        if provisionApexFavicon {
+            apexFavicon = await self.provisionApexFavicon(zone: zone, apiToken: apiToken)
+        }
         return CloudflareCustomDomainDeployment(
             zone: zone,
             hostname: hostname,
@@ -268,8 +305,203 @@ struct CloudflareService: Sendable {
             tunnelName: tunnelName,
             tunnelToken: tunnelToken,
             accessMode: accessMode,
-            accessCredentials: accessCredentials
+            accessCredentials: accessCredentials,
+            apexFavicon: apexFavicon
         )
+    }
+
+    // MARK: - Apex favicon (connector icon)
+
+    /// Worker name and route patterns are stable so re-deploys update in
+    /// place instead of accumulating scripts or routes.
+    static let apexFaviconWorkerName = "macremote-apex-favicon"
+
+    static func apexFaviconRoutePatterns(zoneName: String) -> [String] {
+        ["\(zoneName)/favicon.ico", "\(zoneName)/favicon.png"]
+    }
+
+    /// A self-contained Worker serving the bundled MacRemote favicon on the
+    /// two favicon paths only — never the rest of the apex, so anything the
+    /// user hosts (or later hosts) there is untouched.
+    static func apexFaviconWorkerScript(icoBase64: String, pngBase64: String) -> String {
+        """
+        // MacRemote apex favicon — serves the connector icon at the zone apex so
+        // Google's favicon service (which Claude.ai uses for connector icons)
+        // can resolve it. Managed by MacRemote; safe to delete.
+        const ASSETS = {
+          "/favicon.ico": { b64: "\(icoBase64)", type: "image/x-icon" },
+          "/favicon.png": { b64: "\(pngBase64)", type: "image/png" }
+        };
+        function bytes(b64) {
+          const bin = atob(b64);
+          const out = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+          return out;
+        }
+        export default {
+          fetch(request) {
+            const asset = ASSETS[new URL(request.url).pathname];
+            if (!asset) return new Response("Not Found", { status: 404 });
+            return new Response(bytes(asset.b64), {
+              headers: { "Content-Type": asset.type, "Cache-Control": "public, max-age=86400" }
+            });
+          }
+        };
+        """
+    }
+
+    static func bundledFaviconAssets() -> (icoBase64: String, pngBase64: String)? {
+        // Same bundled assets the local server serves on the connector host.
+        guard let ico = LocalMCPServer.staticResourceData(fileName: "Favicon.ico"),
+              let png = LocalMCPServer.staticResourceData(fileName: "Favicon.png") else {
+            return nil
+        }
+        return (ico.base64EncodedString(), png.base64EncodedString())
+    }
+
+    /// Multipart body for the Workers script upload (module syntax).
+    static func workerUploadBody(script: String, boundary: String) -> Data {
+        var body = ""
+        body += "--\(boundary)\r\n"
+        body += "Content-Disposition: form-data; name=\"metadata\"\r\n"
+        body += "Content-Type: application/json\r\n\r\n"
+        body += #"{"main_module":"worker.js","compatibility_date":"2025-01-01"}"# + "\r\n"
+        body += "--\(boundary)\r\n"
+        body += "Content-Disposition: form-data; name=\"worker.js\"; filename=\"worker.js\"\r\n"
+        body += "Content-Type: application/javascript+module\r\n\r\n"
+        body += script + "\r\n"
+        body += "--\(boundary)--\r\n"
+        return Data(body.utf8)
+    }
+
+    func provisionApexFavicon(zone: CloudflareZone, apiToken: String? = nil) async -> CloudflareApexFaviconOutcome {
+        let faviconURL = URL(string: "https://\(zone.name)/favicon.ico")!
+        if await apexServesFavicon(at: faviconURL) {
+            return .skippedExistingFavicon
+        }
+        guard let assets = Self.bundledFaviconAssets() else {
+            return .failed("the bundled favicon resources are missing from the app.")
+        }
+        do {
+            try await uploadApexFaviconWorker(
+                accountID: zone.accountID,
+                script: Self.apexFaviconWorkerScript(icoBase64: assets.icoBase64, pngBase64: assets.pngBase64),
+                apiToken: apiToken
+            )
+            var notes: [String] = []
+            if let dnsNote = try await ensureApexAddressRecord(zone: zone, apiToken: apiToken) {
+                notes.append(dnsNote)
+            }
+            notes.append(contentsOf: try await ensureApexFaviconRoutes(zone: zone, apiToken: apiToken))
+            let summary = "now serving the MacRemote favicon at https://\(zone.name)/favicon.ico"
+            return .provisioned(([summary] + notes).joined(separator: " "))
+        } catch let error as CloudflareServiceError {
+            if case .insufficientPermissions = error {
+                return .failed("the API token lacks Workers permissions. Add Account → Workers Scripts: Edit and Zone → Workers Routes: Edit, then deploy again. Everything else deployed normally.")
+            }
+            return .failed(error.localizedDescription)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func apexServesFavicon(at url: URL) async -> Bool {
+        if let apexFaviconProbe {
+            return await apexFaviconProbe(url)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse else {
+            return false
+        }
+        return http.statusCode == 200
+    }
+
+    private func uploadApexFaviconWorker(accountID: String, script: String, apiToken: String?) async throws {
+        let token = try Self.hasToken(apiToken)
+            ? apiToken!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : tokenProvider.token()
+        let url = URL(string: "https://api.cloudflare.com/client/v4/accounts/\(accountID)/workers/scripts/\(Self.apexFaviconWorkerName)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let boundary = "macremote-worker-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Self.workerUploadBody(script: script, boundary: boundary)
+
+        let data = try await send(request, operation: "upload the connector icon Worker")
+        let decoded = try JSONDecoder.cloudflare.decode(CloudflareAPIResponse<CloudflareWorkerScriptDTO>.self, from: data)
+        guard decoded.success else {
+            throw CloudflareServiceError.api(decoded.errorMessage ?? "Cloudflare rejected the Worker upload.")
+        }
+    }
+
+    /// A Workers route only runs on proxied traffic, so the apex needs at
+    /// least one proxied address record. `100::` is the standard discard
+    /// placeholder for Workers-only hostnames — no origin is ever contacted.
+    private func ensureApexAddressRecord(zone: CloudflareZone, apiToken: String?) async throws -> String? {
+        let existing: CloudflareAPIResponse<[CloudflareApexDNSRecordDTO]> = try await request(
+            method: "GET",
+            path: "/zones/\(zone.id)/dns_records",
+            apiToken: apiToken,
+            operation: "read DNS records for \(zone.name)",
+            queryItems: [URLQueryItem(name: "name", value: zone.name)]
+        )
+        let addressRecords = try existing.requiredResult()
+            .filter { ["A", "AAAA", "CNAME"].contains($0.type) }
+        if addressRecords.isEmpty {
+            let _: CloudflareAPIResponse<CloudflareApexDNSRecordDTO> = try await request(
+                method: "POST",
+                path: "/zones/\(zone.id)/dns_records",
+                apiToken: apiToken,
+                operation: "create the apex DNS record for \(zone.name)",
+                body: [
+                    "type": "AAAA",
+                    "name": zone.name,
+                    "content": "100::",
+                    "ttl": 1,
+                    "proxied": true,
+                    "comment": "MacRemote apex favicon (Workers route target)"
+                ]
+            )
+            return nil
+        }
+        if !addressRecords.contains(where: { $0.proxied == true }) {
+            return "Note: the apex DNS record is not proxied (gray cloud), so the favicon Worker will not run until it is."
+        }
+        return nil
+    }
+
+    private func ensureApexFaviconRoutes(zone: CloudflareZone, apiToken: String?) async throws -> [String] {
+        let existing: CloudflareAPIResponse<[CloudflareWorkerRouteDTO]> = try await request(
+            method: "GET",
+            path: "/zones/\(zone.id)/workers/routes",
+            apiToken: apiToken,
+            operation: "list Workers routes for \(zone.name)"
+        )
+        let routes = try existing.requiredResult()
+        var notes: [String] = []
+        for pattern in Self.apexFaviconRoutePatterns(zoneName: zone.name) {
+            if let match = routes.first(where: { $0.pattern == pattern }) {
+                if match.script != Self.apexFaviconWorkerName {
+                    notes.append("Note: \(pattern) is already routed to another Worker (\(match.script ?? "unnamed")) and was left untouched.")
+                }
+                continue
+            }
+            let _: CloudflareAPIResponse<CloudflareWorkerRouteCreatedDTO> = try await request(
+                method: "POST",
+                path: "/zones/\(zone.id)/workers/routes",
+                apiToken: apiToken,
+                operation: "create the Workers route \(pattern)",
+                body: [
+                    "pattern": pattern,
+                    "script": Self.apexFaviconWorkerName
+                ]
+            )
+        }
+        return notes
     }
 
     static func hostname(subdomain: String, zoneName: String) throws -> String {
@@ -689,6 +921,16 @@ struct CloudflareService: Sendable {
             request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         }
 
+        let data = try await send(request, operation: operation)
+        let decoded = try JSONDecoder.cloudflare.decode(T.self, from: data)
+        if let apiResponse = decoded as? AnyCloudflareAPIResponse, !apiResponse.isSuccess {
+            throw CloudflareServiceError.api(apiResponse.errorMessage ?? "Cloudflare API request failed.")
+        }
+        return decoded
+    }
+
+    /// Shared transport + error mapping for JSON and multipart requests.
+    private func send(_ request: URLRequest, operation: String) async throws -> Data {
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CloudflareServiceError.api("Cloudflare returned a non-HTTP response.")
@@ -702,12 +944,7 @@ struct CloudflareService: Sendable {
             }
             throw CloudflareServiceError.api(message)
         }
-
-        let decoded = try JSONDecoder.cloudflare.decode(T.self, from: data)
-        if let apiResponse = decoded as? AnyCloudflareAPIResponse, !apiResponse.isSuccess {
-            throw CloudflareServiceError.api(apiResponse.errorMessage ?? "Cloudflare API request failed.")
-        }
-        return decoded
+        return data
     }
 }
 
@@ -820,6 +1057,26 @@ private struct CloudflareDNSRecordDTO: Decodable {
     let name: String
     let content: String
     let comment: String?
+}
+
+private struct CloudflareApexDNSRecordDTO: Decodable {
+    let id: String
+    let type: String
+    let proxied: Bool?
+}
+
+private struct CloudflareWorkerRouteDTO: Decodable {
+    let id: String
+    let pattern: String
+    let script: String?
+}
+
+private struct CloudflareWorkerRouteCreatedDTO: Decodable {
+    let id: String?
+}
+
+private struct CloudflareWorkerScriptDTO: Decodable {
+    let id: String?
 }
 
 private struct CloudflareServiceTokenDTO: Decodable {

@@ -208,6 +208,29 @@ tr.mrw-row-done td { color: var(--text3); }
 }
 .mrw-check[data-state="done"] svg { opacity: 1; }
 
+/* derived cells: artwork, duration, progress pie, compact link */
+.mrw-td-art { width: 40px; padding-right: 0 !important; }
+.mrw-art {
+  display: block; width: 28px; height: 28px; border-radius: 6px;
+  object-fit: cover; background: var(--line2);
+  box-shadow: inset 0 0 0 .5px var(--line);
+}
+.mrw-progress { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.mrw-pie {
+  width: 14px; height: 14px; border-radius: 50%; flex: none;
+  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--line) 0);
+  box-shadow: inset 0 0 0 .5px var(--line);
+}
+.mrw-progress-label { font-family: var(--mono); font-size: 11px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.mrw-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 560; color: var(--accent);
+  text-decoration: none; padding: 3px 8px; border-radius: 6px;
+  background: var(--accent-tint); white-space: nowrap;
+}
+.mrw-link:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.mrw-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* trailing per-row buttons — always visible so actions are discoverable */
 .mrw-td-actions { width: 1%; text-align: right; white-space: nowrap; }
 .mrw-rowbtn {
@@ -223,6 +246,8 @@ tr.mrw-row-done td { color: var(--text3); }
 .mrw-rowbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mrw-rowbtn[data-state="pending"] { color: var(--text2); background: var(--line2); pointer-events: none; }
 .mrw-rowbtn[data-state="done"] { color: var(--ok); background: var(--ok-tint); pointer-events: none; }
+.mrw-rowbtn[data-state="failed"] { color: var(--bad); background: var(--bad-tint); }
+.mrw-check[data-state="failed"] { border-color: var(--bad-line); }
 @media (hover: none) { .mrw-rowbtn { opacity: 1; transform: none; } }
 
 /* ════════ TREE state ════════ */
@@ -427,6 +452,7 @@ const MacRemoteWidget = (() => {
     alert: () => svg('<svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 4.4v3.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="7" cy="10.3" r=".95" fill="currentColor"/></svg>'),
     scissors: () => svg('<svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1.5 7h11M10.2 4.6 12.5 7l-2.3 2.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2.2 2"/></svg>'),
     emptyCheck: () => svg('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.2 8.6 6.4 11.8 12.8 4.6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    linkArrow: () => svg('<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4 2.5h5.5V8M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
     spinner: () => el('span', 'mrw-spin')
   };
 
@@ -547,17 +573,6 @@ const MacRemoteWidget = (() => {
     return html;
   }
 
-  /* ---------- async affordance helper: idle → pending → done ---------- */
-  function runAffordance(btn, work, onDone) {
-    if (btn.dataset.state === 'pending' || btn.dataset.state === 'done') return;
-    btn.dataset.state = 'pending';
-    const restore = btn.cloneNode(true); // snapshot not needed; we rebuild below
-    Promise.resolve().then(work).then(() => {
-      btn.dataset.state = 'done';
-      onDone && onDone();
-    }).catch(() => { btn.dataset.state = ''; });
-  }
-
   /* ════════ header ════════ */
   function renderHeader(p) {
     const meta = STATUS[p.status] || STATUS.success;
@@ -613,27 +628,102 @@ const MacRemoteWidget = (() => {
     return out;
   }
 
+  // Seconds → compact human duration: "1h 43m", "43m", "58s".
+  function formatSeconds(s) {
+    if (typeof s !== 'number' || !isFinite(s) || s < 0) return null;
+    const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+    if (h) return h + 'h' + (m ? ' ' + String(m).padStart(2, '0') + 'm' : '');
+    if (m) return m + 'm';
+    return Math.round(s) + 's';
+  }
+
+  // Derived cell renderers keyed by a column spec's `derive` field. Each
+  // returns {value(row) -> node|string|null, sortValue(row), tdClass?}.
+  function derivedColumn(spec) {
+    if (spec.derive === 'datetime') return {
+      value: (row) => formatWhen(row[spec.sourceKey], spec.allDayKey ? row[spec.allDayKey] : false),
+      sortValue: (row) => row[spec.sourceKey] || ''
+    };
+    if (spec.derive === 'duration') return {
+      value: (row) => formatSeconds(row[spec.sourceKey]),
+      sortValue: (row) => row[spec.sourceKey]
+    };
+    if (spec.derive === 'artwork') return {
+      tdClass: 'mrw-td-art',
+      value: (row) => {
+        const v = row[spec.sourceKey];
+        if (v == null || v === '') return null;
+        const img = document.createElement('img');
+        img.className = 'mrw-art';
+        img.loading = 'lazy';
+        img.alt = spec.altKey && row[spec.altKey] != null ? String(row[spec.altKey]) : '';
+        img.src = String(spec.urlTemplate || '').replace('{value}', encodeURIComponent(String(v)));
+        img.addEventListener('error', () => { img.style.visibility = 'hidden'; });
+        return img;
+      },
+      sortValue: (row) => (spec.altKey && row[spec.altKey]) || row[spec.sourceKey] || ''
+    };
+    if (spec.derive === 'progress') return {
+      value: (row) => {
+        const played = row[spec.sourceKey], total = spec.totalKey ? row[spec.totalKey] : null;
+        if (typeof played !== 'number' || typeof total !== 'number' || total <= 0) return null;
+        const pct = Math.max(0, Math.min(100, (played / total) * 100));
+        const pie = el('span', 'mrw-pie');
+        pie.style.setProperty('--pct', String(pct));
+        const box = el('span', 'mrw-progress', pie,
+          el('span', 'mrw-progress-label', Math.round(pct) + '%'));
+        box.title = (formatSeconds(played) || '0s') + ' of ' + (formatSeconds(total) || '?') + ' played';
+        return box;
+      },
+      sortValue: (row) => {
+        const played = row[spec.sourceKey], total = spec.totalKey ? row[spec.totalKey] : null;
+        return (typeof played === 'number' && typeof total === 'number' && total > 0) ? played / total : null;
+      }
+    };
+    if (spec.derive === 'link') return {
+      value: (row) => {
+        const raw = row[spec.sourceKey];
+        if (typeof raw !== 'string' || !/^https?:\/\//i.test(raw)) return null;
+        const a = document.createElement('a');
+        a.className = 'mrw-link';
+        a.href = raw; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.title = raw;
+        a.append(I.linkArrow(), 'Open');
+        return a;
+      },
+      sortValue: (row) => row[spec.sourceKey] || ''
+    };
+    return null;
+  }
+
   // Build the column specs the table renders: a curated set from the host
-  // (p.columns, may include a derived "when"), otherwise auto-detected raw
-  // keys minus any p.hiddenColumns.
+  // (p.columns, may include derived columns), otherwise auto-detected raw
+  // keys minus any p.hiddenColumns. Curated specs whose source fields never
+  // appear in the rows are dropped; if too few survive (the rows aren't the
+  // shape this curation was written for), fall back to auto columns.
   function columnSpecsFor(p, rows) {
     if (Array.isArray(p.columns) && p.columns.length) {
-      return p.columns.map((spec, i) => {
-        if (spec.derive === 'datetime') {
+      const hasData = (k) => k != null && rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== '');
+      const curated = p.columns
+        .filter(spec => {
+          const source = spec.derive ? spec.sourceKey : spec.key;
+          if (!hasData(source)) return false;
+          return spec.derive !== 'progress' || !spec.totalKey || hasData(spec.totalKey);
+        })
+        .map((spec, i) => {
+          const derived = spec.derive ? derivedColumn(spec) : null;
+          if (spec.derive && !derived) return null; // unknown derive: skip
           return {
-            key: spec.key, title: spec.title || prettyKey(spec.key),
-            primary: !!spec.primary, isNumeric: false,
-            value: (row) => formatWhen(row[spec.sourceKey], spec.allDayKey ? row[spec.allDayKey] : false),
-            sortValue: (row) => row[spec.sourceKey] || ''
+            key: spec.key, title: spec.title != null ? spec.title : prettyKey(spec.key),
+            primary: spec.primary != null ? !!spec.primary : (!spec.derive && i === 0),
+            isNumeric: !derived && rows.every(r => r[spec.key] == null || typeof r[spec.key] === 'number'),
+            tdClass: derived ? derived.tdClass : null,
+            value: derived ? derived.value : (row) => row[spec.key],
+            sortValue: derived ? derived.sortValue : (row) => row[spec.key]
           };
-        }
-        return {
-          key: spec.key, title: spec.title || prettyKey(spec.key),
-          primary: spec.primary != null ? !!spec.primary : i === 0,
-          isNumeric: rows.every(r => r[spec.key] == null || typeof r[spec.key] === 'number'),
-          value: (row) => row[spec.key], sortValue: (row) => row[spec.key]
-        };
-      });
+        })
+        .filter(Boolean);
+      if (curated.length >= 2) return curated;
     }
     const hidden = new Set(p.hiddenColumns || []);
     const PREFERRED = ['id', 'title', 'name', 'list', 'due', 'date', 'priority', 'completed'];
@@ -690,9 +780,10 @@ const MacRemoteWidget = (() => {
 
     const tbody = el('tbody');
 
-    function cellNode(v, isPrimary, isNum) {
-      const cls = ['', isNum ? 'mrw-td-num' : '', isPrimary ? 'mrw-td-primary' : ''].join(' ').trim();
+    function cellNode(v, isPrimary, isNum, tdClass) {
+      const cls = [tdClass || '', isNum ? 'mrw-td-num' : '', isPrimary ? 'mrw-td-primary' : ''].join(' ').trim();
       if (v == null) { const td = el('td', (cls + ' mrw-td-dim').trim(), '—'); return td; }
+      if (v.nodeType) return el('td', cls || null, v);
       if (typeof v === 'object') return el('td', cls, JSON.stringify(v).slice(0, 60));
       if (typeof v === 'boolean') return el('td', (cls + ' mrw-td-dim').trim(), v ? 'true' : 'false');
       return el('td', cls || null, String(v));
@@ -735,13 +826,19 @@ const MacRemoteWidget = (() => {
               btn.dataset.state = 'done';
               setRowState(row, act.id, 'done');
               tr.classList.add('mrw-row-done');
-            }).catch(() => { btn.dataset.state = ''; setRowState(row, act.id, ''); });
+            }).catch((err) => {
+              // A silent reset reads as "the button does nothing" — flash
+              // the failure and carry the reason in the tooltip.
+              btn.dataset.state = 'failed'; setRowState(row, act.id, '');
+              btn.title = actionFailureTitle(err, act.title || 'Mark complete');
+              setTimeout(() => { if (btn.dataset.state === 'failed') { btn.dataset.state = ''; } }, 3000);
+            });
           });
           tr.append(el('td', 'mrw-td-check', btn));
           }
         }
 
-        columns.forEach((spec) => tr.append(cellNode(spec.value(row), spec.primary, spec.isNumeric)));
+        columns.forEach((spec) => tr.append(cellNode(spec.value(row), spec.primary, spec.isNumeric, spec.tdClass)));
 
         if (buttonActions.length) {
           const td = el('td', 'mrw-td-actions');
@@ -755,6 +852,7 @@ const MacRemoteWidget = (() => {
               if (b.dataset.state === 'pending') { b.append(I.spinner(), act.label || 'Run'); }
               else if (b.dataset.state === 'done') { b.append(I.checkTint(), act.doneLabel || 'Done'); }
               else if (b.dataset.state === 'armed') { b.append('Confirm?'); }
+              else if (b.dataset.state === 'failed') { b.append('Failed'); }
               else b.append(act.label || 'Run');
             };
             label();   // render the idle label immediately
@@ -762,7 +860,15 @@ const MacRemoteWidget = (() => {
               b.dataset.state = 'pending'; setRowState(row, act.id, 'pending'); label();
               invoke(act.id, row, inputValues).then(() => {
                 b.dataset.state = 'done'; setRowState(row, act.id, 'done'); label();
-              }).catch(() => { b.dataset.state = ''; setRowState(row, act.id, ''); label(); });
+              }).catch((err) => {
+                // Show the failure instead of silently resetting; the
+                // tooltip carries stderr so the user can see why.
+                b.dataset.state = 'failed'; setRowState(row, act.id, ''); label();
+                b.title = actionFailureTitle(err, act.label || 'Run');
+                setTimeout(() => {
+                  if (b.dataset.state === 'failed') { b.dataset.state = ''; label(); }
+                }, 3500);
+              });
             };
             b.addEventListener('click', () => {
               if (b.dataset.state === 'pending' || b.dataset.state === 'done') return;
@@ -789,6 +895,10 @@ const MacRemoteWidget = (() => {
     function setRowState(row, actionId, s) {
       const cur = actionState.get(row.__mrwIdx) || {};
       cur[actionId] = s; actionState.set(row.__mrwIdx, cur);
+    }
+    function actionFailureTitle(err, actionTitle) {
+      const detail = err && err.message && err.message !== 'action failed' ? ' — ' + err.message : '';
+      return actionTitle + ' failed' + detail;
     }
     function invoke(actionId, row, inputValues) {
       const clean = { ...row };
@@ -1222,7 +1332,13 @@ function renderResult() {
         name: raw.toolName,
         arguments: substitute(raw.arguments, row, inputValues)
       }).then(r => {
-        if (r && r.isError === true) { throw new Error("action failed"); }
+        if (r && r.isError === true) {
+          // Surface the CLI's own words: the widget shows this in the
+          // failed button's tooltip instead of resetting silently.
+          const env = r.structuredContent || {};
+          const detail = String(env.stderr || env.stdout || "").trim().split("\n").pop() || "";
+          throw new Error(detail.slice(0, 200) || "action failed");
+        }
       });
     },
     onRunAgain: meta.toolName

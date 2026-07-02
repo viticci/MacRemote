@@ -198,6 +198,64 @@ struct CatalogCategoryMigrationTests {
     }
 }
 
+/// v3 catalog-actions migration: repair the persisted `--json`-before-
+/// subcommand argument order that made every remctl widget action exit 2
+/// in argparse and silently no-op (check-off, Reschedule, Edit, Delete).
+struct CatalogUIActionsRepairTests {
+    @Test func movesLeadingJSONFlagToEndForRemCTLActions() throws {
+        let broken = [
+            ToolUIAction(
+                id: "complete", title: "Mark Done", kind: .checkOff,
+                targetExecutableBasename: "remctl",
+                arguments: .object(["args": .array([.string("--json"), .string("done"), .string("{id}")])]),
+                requiredRowFields: ["id"], completedWhenField: "completed"
+            ),
+            ToolUIAction(
+                id: "reschedule", title: "Reschedule", kind: .rowButton,
+                targetExecutableBasename: "remctl",
+                arguments: .object(["args": .array([.string("--json"), .string("edit"), .string("{id}"), .string("-d"), .string("{input.due}")])]),
+                requiredRowFields: ["id"],
+                inputs: [ToolUIActionInput(name: "due", title: "New due")]
+            )
+        ]
+
+        let repaired = try #require(AppModel.remCTLActionsWithRepairedJSONFlag(broken))
+        #expect(repaired[0].arguments == .object(["args": .array([.string("done"), .string("{id}"), .string("--json")])]))
+        #expect(repaired[1].arguments == .object(["args": .array([.string("edit"), .string("{id}"), .string("-d"), .string("{input.due}"), .string("--json")])]))
+        // Non-argument fields survive the rebuild.
+        #expect(repaired[0].completedWhenField == "completed")
+        #expect(repaired[1].inputs?.first?.name == "due")
+        #expect(repaired[1].kind == .rowButton)
+    }
+
+    @Test func repairsToolIDTargetedRemCTLActions() throws {
+        let broken = ToolUIAction(
+            id: "complete", title: "Mark Done", kind: .checkOff,
+            toolID: "remctl.run",
+            arguments: .object(["args": .array([.string("--json"), .string("done"), .string("{id}")])]),
+            requiredRowFields: ["id"]
+        )
+
+        let repaired = try #require(AppModel.remCTLActionsWithRepairedJSONFlag([broken]))
+        #expect(repaired[0].arguments == .object(["args": .array([.string("done"), .string("{id}"), .string("--json")])]))
+    }
+
+    @Test func returnsNilWhenNothingNeedsRepair() {
+        // The shipping catalog must itself be in the repaired form.
+        #expect(AppModel.remCTLActionsWithRepairedJSONFlag(RemCTLToolCatalog.reminderRowUIActions) == nil)
+    }
+
+    @Test func leavesNonRemCTLActionsAlone() {
+        // A different CLI may legitimately take `--json` first — never reorder.
+        let other = ToolUIAction(
+            id: "x", title: "X", kind: .rowButton,
+            targetExecutableBasename: "somecli",
+            arguments: .object(["args": .array([.string("--json"), .string("do")])])
+        )
+        #expect(AppModel.remCTLActionsWithRepairedJSONFlag([other]) == nil)
+    }
+}
+
 /// Imported-server rows only spin for a real matching candidate — comparing
 /// optionals directly read `nil == nil` as importing, so servers whose
 /// original config disappeared showed "Importing tools…" forever.

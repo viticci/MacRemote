@@ -122,7 +122,10 @@ final class AppModel {
     private static let catalogCategoryMigrationKey = "MacRemote.migration.catalogCategories.v1"
     // v2: v1 ran before RemCTL Library presets carried uiActions, so it
     // stamped nothing onto reminder tools. Re-run once with the fix.
-    private static let catalogUIActionsMigrationKey = "MacRemote.migration.catalogUIActions.v2"
+    // v3: v2's remctl actions put `--json` before the subcommand, where
+    // argparse exits 2 and every widget affordance silently no-ops. Re-run
+    // once to repair the persisted argument order.
+    private static let catalogUIActionsMigrationKey = "MacRemote.migration.catalogUIActions.v3"
     private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
     private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
     private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"
@@ -1634,9 +1637,16 @@ final class AppModel {
                     subdomain: subdomain,
                     localServerURL: localServerURL,
                     accessMode: accessMode,
-                    apiToken: apiToken
+                    apiToken: apiToken,
+                    // Serve the MacRemote favicon at the zone apex (via a
+                    // scoped Worker) so Claude.ai's connector icon resolves.
+                    // Best-effort: skipped if the apex already has a favicon.
+                    provisionApexFavicon: true
                 )
                 lastCloudflareDeployment = deployment
+                if let apexFavicon = deployment.apexFavicon {
+                    appendLog(level: apexFavicon.isFailure ? .warning : .info, apexFavicon.logMessage)
+                }
                 try tunnelService.startNamedTunnel(deployment: deployment) { [weak self] event in
                     Task { @MainActor in
                         self?.handleTunnelEvent(event)
@@ -2638,10 +2648,15 @@ final class AppModel {
         }
 
         var updated = 0
-        for index in tools.indices where tools[index].origin == .userDefined && tools[index].uiActions == nil && !tools[index].isMCPBridge {
-            let key = Self.categoryMigrationKey(name: tools[index].name, executablePath: tools[index].executablePath)
-            if let actions = presetActions[key] {
-                tools[index] = tools[index].withUIActions(actions)
+        for index in tools.indices where tools[index].origin == .userDefined && !tools[index].isMCPBridge {
+            if tools[index].uiActions == nil {
+                let key = Self.categoryMigrationKey(name: tools[index].name, executablePath: tools[index].executablePath)
+                if let actions = presetActions[key] {
+                    tools[index] = tools[index].withUIActions(actions)
+                    updated += 1
+                }
+            } else if let repaired = Self.remCTLActionsWithRepairedJSONFlag(tools[index].uiActions ?? []) {
+                tools[index] = tools[index].withUIActions(repaired)
                 updated += 1
             }
         }
@@ -2657,6 +2672,46 @@ final class AppModel {
         } catch {
             appendLog(level: .error, "Could not save widget actions: \(error.localizedDescription)")
         }
+    }
+
+    /// Pure core of the v3 repair: remctl parses `--json` per-subcommand,
+    /// but earlier catalog actions emitted it as argv[0], where argparse
+    /// exits 2 ("unrecognized arguments: --json") and every widget
+    /// affordance — check-off, Reschedule, Edit Title, Delete — silently
+    /// no-oped. Moves a leading "--json" to the end of the args array for
+    /// remctl-targeted actions only; a different CLI that legitimately takes
+    /// `--json` first must not be reordered. Returns nil when nothing
+    /// needed repair.
+    nonisolated static func remCTLActionsWithRepairedJSONFlag(_ actions: [ToolUIAction]) -> [ToolUIAction]? {
+        var repairedAny = false
+        let repaired = actions.map { action -> ToolUIAction in
+            let targetsRemCTL = action.targetExecutableBasename == "remctl"
+                || (action.toolID?.hasPrefix("remctl.") ?? false)
+            guard targetsRemCTL,
+                  case .object(var payload) = action.arguments,
+                  case .array(var args) = payload["args"] ?? JSONValue.null,
+                  args.first == .string("--json") else {
+                return action
+            }
+            args.removeFirst()
+            args.append(.string("--json"))
+            payload["args"] = .array(args)
+            repairedAny = true
+            return ToolUIAction(
+                id: action.id,
+                title: action.title,
+                kind: action.kind,
+                toolID: action.toolID,
+                targetExecutableBasename: action.targetExecutableBasename,
+                arguments: .object(payload),
+                requiredRowFields: action.requiredRowFields,
+                completedWhenField: action.completedWhenField,
+                completedWhenEquals: action.completedWhenEquals,
+                style: action.style,
+                inputs: action.inputs
+            )
+        }
+        return repairedAny ? repaired : nil
     }
 
     struct CatalogCategoryReference: Sendable {
