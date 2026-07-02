@@ -185,12 +185,24 @@ private struct AppCard: View {
 
     // MARK: Bulk verbs
 
+    /// Every currently shared tool already has an Always Allow rule. The verb
+    /// would be a no-op, so state stands in its place — clicking "Allow All"
+    /// again because the grant was easy to forget is exactly what this avoids.
+    private var allCurrentToolsAllowed: Bool {
+        !sharedToolIDs.isEmpty && allowedSharedCount == sharedToolIDs.count
+    }
+
     private var verbRow: some View {
         HStack(spacing: Space.s2) {
-            Button("Allow All Current Tools", systemImage: "checkmark.shield") {
-                isConfirmingAllowAll = true
+            if allCurrentToolsAllowed {
+                StateChip("All \(sharedToolIDs.count) shared tools already allowed", systemImage: "checkmark.seal.fill", role: .ready)
+                    .help("\(client.name) runs every currently shared tool without asking. Sharing a new tool brings the Allow All verb back.")
+            } else {
+                Button("Allow All Current Tools", systemImage: "checkmark.shield") {
+                    isConfirmingAllowAll = true
+                }
+                .disabled(appModel.tools.isEmpty)
             }
-            .disabled(appModel.tools.isEmpty)
 
             Button("Revoke All Always-Allows", systemImage: "xmark.shield") {
                 revokeAllAllowances()
