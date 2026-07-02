@@ -59,7 +59,12 @@ struct TargetRow: View {
         }
         .padding(Space.s3)
         .background(.quaternary.opacity(0.4), in: AppShape.mono)
-        .draggable(URL(fileURLWithPath: target.path))
+        // NSItemProvider(object: NSURL) drags a REFERENCE to the real file,
+        // like Finder does. SwiftUI's `.draggable(URL)` stages a COPY of the
+        // dragged bundle under ~/Library/Caches/com.apple.SwiftUI.Drag-*, so
+        // System Settings granted Full Disk Access to a throwaway copy of
+        // MacRemote.app and the real app never gained access.
+        .onDrag { NSItemProvider(object: URL(fileURLWithPath: target.path) as NSURL) }
         .help("Drag this row into Full Disk Access, or copy the path and use Command-Shift-G.")
     }
 

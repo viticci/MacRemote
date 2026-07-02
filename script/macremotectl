@@ -280,18 +280,26 @@ def command_install(args: argparse.Namespace) -> int:
         copied_to = str(target)
 
     if args.launch:
-        run(["/usr/bin/open", "-n", str(built_app)])
+        # Never open dist (it would re-register with LaunchServices and
+        # poison Full Disk Access grants); launch the installed copy.
+        launch_target = Path(copied_to) if copied_to else Path("/Applications") / f"{APP_NAME}.app"
+        if not launch_target.exists():
+            die(f"{launch_target} does not exist. Pass --copy-to-applications or run script/build_and_run.sh.")
+        run(["/usr/bin/open", "-n", str(launch_target)])
 
     print(json.dumps({"built_app": str(built_app), "copied_to": copied_to, "launched": args.launch}, indent=2))
     return 0
 
 
 def command_open(args: argparse.Namespace) -> int:
-    built_app = app_bundle(args.repo_root)
-    if not built_app.exists():
-        die("dist/MacRemote.app does not exist. Run `script/macremotectl install` first.")
-    run(["/usr/bin/open", "-n", str(built_app)])
-    return 0
+    # Launch the installed copy, never dist: opening dist registers a second
+    # bundle with LaunchServices, which poisons Full Disk Access grants and
+    # System Settings' Quit & Reopen targeting.
+    installed = Path("/Applications") / f"{APP_NAME}.app"
+    if installed.exists():
+        run(["/usr/bin/open", "-n", str(installed)])
+        return 0
+    die(f"{installed} does not exist. Run `script/build_and_run.sh` to build and install it.")
 
 
 def command_status(args: argparse.Namespace) -> int:

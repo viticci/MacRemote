@@ -143,6 +143,11 @@ install_app() {
   rm -rf "$INSTALL_BUNDLE"
   mv "$INSTALL_BUNDLE.new" "$INSTALL_BUNDLE"
   echo "Installed $INSTALL_BUNDLE" >&2
+  # Keep /Applications the ONLY LaunchServices registration. A registered
+  # dist copy gives System Settings' FDA "Quit & Reopen" (and any bundle-id
+  # launch) an ambiguous target.
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -u "$APP_BUNDLE" >/dev/null 2>&1 || true
 }
 
 open_app() {
