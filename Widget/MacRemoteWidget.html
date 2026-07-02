@@ -644,6 +644,12 @@ const MacRemoteWidget = (() => {
     return out;
   }
 
+  // "day" × 4 → "days"; leaves units already ending in s alone.
+  function pluralUnit(unit, count) {
+    const u = String(unit);
+    return count === 1 || u.endsWith('s') ? u : u + 's';
+  }
+
   // Seconds → compact human duration: "1h 43m", "43m", "58s".
   function formatSeconds(s) {
     if (typeof s !== 'number' || !isFinite(s) || s < 0) return null;
@@ -651,6 +657,18 @@ const MacRemoteWidget = (() => {
     if (h) return h + 'h' + (m ? ' ' + String(m).padStart(2, '0') + 'm' : '');
     if (m) return m + 'm';
     return Math.round(s) + 's';
+  }
+
+  // Resolve a field key against a row. Keys may be dot-paths into nested
+  // objects ("currentStreak.length") — habit rows nest streak and goal.
+  function fieldValue(row, key) {
+    if (key == null) return null;
+    let v = row;
+    for (const part of String(key).split('.')) {
+      if (v === null || v === undefined || typeof v !== 'object') return null;
+      v = v[part];
+    }
+    return v === undefined ? null : v;
   }
 
   // Derived cell renderers keyed by a column spec's `derive` field. Each
@@ -662,8 +680,8 @@ const MacRemoteWidget = (() => {
     const sources = [].concat(spec.sourceKey || []);
     const pick = (row) => {
       for (const k of sources) {
-        const v = row[k];
-        if (v !== null && v !== undefined && v !== '') return v;
+        const v = fieldValue(row, k);
+        if (v !== null && v !== '') return v;
       }
       return null;
     };
@@ -673,6 +691,16 @@ const MacRemoteWidget = (() => {
     };
     if (spec.derive === 'duration') return {
       value: (row) => formatSeconds(pick(row)),
+      sortValue: (row) => pick(row)
+    };
+    // A count with a unit ("4 days", "1 rep") — habit streaks.
+    if (spec.derive === 'quantity') return {
+      value: (row) => {
+        const n = pick(row);
+        if (typeof n !== 'number' || !isFinite(n)) return null;
+        const unit = spec.unitKey ? fieldValue(row, spec.unitKey) : null;
+        return unit ? n + ' ' + pluralUnit(unit, n) : String(n);
+      },
       sortValue: (row) => pick(row)
     };
     if (spec.derive === 'artwork') return {
@@ -690,21 +718,30 @@ const MacRemoteWidget = (() => {
       },
       sortValue: (row) => (spec.altKey && row[spec.altKey]) || pick(row) || ''
     };
+    // Pie + label. `format: "seconds"` (podcast playback) labels with a
+    // percent and a played-time tooltip; the default treats the values as
+    // counts (habit goals) and labels with the fraction ("1/1", "3/8").
     if (spec.derive === 'progress') return {
       value: (row) => {
-        const played = pick(row), total = spec.totalKey ? row[spec.totalKey] : null;
-        if (typeof played !== 'number' || typeof total !== 'number' || total <= 0) return null;
-        const pct = Math.max(0, Math.min(100, (played / total) * 100));
+        const done = pick(row), total = spec.totalKey ? fieldValue(row, spec.totalKey) : null;
+        if (typeof done !== 'number' || typeof total !== 'number' || total <= 0) return null;
+        const pct = Math.max(0, Math.min(100, (done / total) * 100));
         const pie = el('span', 'mrw-pie');
         pie.style.setProperty('--pct', String(pct));
-        const box = el('span', 'mrw-progress', pie,
-          el('span', 'mrw-progress-label', Math.round(pct) + '%'));
-        box.title = (formatSeconds(played) || '0s') + ' of ' + (formatSeconds(total) || '?') + ' played';
+        const seconds = spec.format === 'seconds';
+        const label = seconds ? Math.round(pct) + '%' : done + '/' + total;
+        const box = el('span', 'mrw-progress', pie, el('span', 'mrw-progress-label', label));
+        if (seconds) {
+          box.title = (formatSeconds(done) || '0s') + ' of ' + (formatSeconds(total) || '?') + ' played';
+        } else {
+          const unit = spec.unitKey ? fieldValue(row, spec.unitKey) : null;
+          box.title = done + ' of ' + total + (unit ? ' ' + pluralUnit(unit, total) : '');
+        }
         return box;
       },
       sortValue: (row) => {
-        const played = pick(row), total = spec.totalKey ? row[spec.totalKey] : null;
-        return (typeof played === 'number' && typeof total === 'number' && total > 0) ? played / total : null;
+        const done = pick(row), total = spec.totalKey ? fieldValue(row, spec.totalKey) : null;
+        return (typeof done === 'number' && typeof total === 'number' && total > 0) ? done / total : null;
       }
     };
     if (spec.derive === 'link') return {
@@ -731,7 +768,10 @@ const MacRemoteWidget = (() => {
   function columnSpecsFor(p, rows) {
     if (Array.isArray(p.columns) && p.columns.length) {
       const hasData = (keys) => [].concat(keys || [])
-        .some(k => rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== ''));
+        .some(k => rows.some(r => {
+          const v = fieldValue(r, k);
+          return v !== null && v !== '';
+        }));
       const curated = p.columns
         .filter(spec => {
           const source = spec.derive ? spec.sourceKey : spec.key;
@@ -744,7 +784,7 @@ const MacRemoteWidget = (() => {
           // subtitleKey renders a dim second line inside the cell (episode
           // title over podcast name); sorting stays on the main value.
           const subtitle = !spec.derive && spec.subtitleKey ? (row) => {
-            const v = row[spec.subtitleKey];
+            const v = fieldValue(row, spec.subtitleKey);
             return v == null || v === '' ? null : String(v);
           } : null;
           const plainValue = (row) => {

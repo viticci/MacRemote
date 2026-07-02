@@ -99,7 +99,7 @@ const POCKET_UI_META = {
         urlTemplate: "https://static.pocketcasts.com/discover/images/webp/200/{value}.webp" },
       { key: "title", title: "Episode", primary: true, subtitleKey: "podcastTitle" },
       { key: "duration", title: "Duration", derive: "duration", sourceKey: "duration" },
-      { key: "progress", title: "Played", derive: "progress", sourceKey: "playedUpTo", totalKey: "duration" },
+      { key: "progress", title: "Played", derive: "progress", sourceKey: "playedUpTo", totalKey: "duration", format: "seconds" },
       { key: "url", title: "Link", derive: "link", sourceKey: "url" }
     ],
     hiddenColumns: ["uuid", "published", "fileType", "size", "podcastUuid", "podcast", "podcastTitle", "playingStatus"]
@@ -153,10 +153,23 @@ const FIXTURES = {
   empty: { structuredContent: envelope({ stdout: "" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Sync", toolName: "sync_tool", capability: "write"}} },
   truncated: { structuredContent: envelope({ stdout: "partial output…", truncatedStdout: true }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Log Dump", toolName: "log_dump", capability: "readOnly"}} },
   habits: { structuredContent: envelope({ toolName: "habitctl_today", stdout: JSON.stringify([
-    { id: "-OwFK1", name: "Listen to one new song", status: "inprogress", type: "good" },
-    { id: "-OwFK2", name: "Morning walk", status: "completed", type: "good" },
-    { id: "-OwFK3", name: "Read 20 pages", status: "inprogress", type: "good" }
-  ]) }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "HabitCTL Today", toolName: "habitctl_today", capability: "readOnly", actions: [{
+    { id: "-OwFK1", name: "Listen to one new song", status: "inprogress", type: "good", color: "#2A67F4",
+      timeOfDayIds: ["afternoon"], currentStreak: { length: 1, unit: "day" },
+      progress: { current: 0, target: 1, unit: "rep", periodicity: "daily" }, logInfo: { type: "manual" } },
+    { id: "-OwFK2", name: "Morning walk", status: "completed", type: "good", color: "#299240",
+      timeOfDayIds: ["morning"], currentStreak: { length: 12, unit: "day" },
+      progress: { current: 1, target: 1, unit: "rep", periodicity: "daily" }, logInfo: { type: "manual" } },
+    { id: "-OwFK3", name: "Drink water", status: "inprogress", type: "good", color: "#E0861D",
+      timeOfDayIds: ["morning", "afternoon"], currentStreak: { length: 4, unit: "day" },
+      progress: { current: 3, target: 8, unit: "glasses", periodicity: "daily" }, logInfo: { type: "manual" } }
+  ]) }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "HabitCTL Today", toolName: "habitctl_today", capability: "readOnly", category: "Habits", accent: "#2a9df4", table: {
+    columns: [
+      { key: "name", title: "Habit", primary: true },
+      { key: "streak", title: "Streak", derive: "quantity", sourceKey: "currentStreak.length", unitKey: "currentStreak.unit" },
+      { key: "goal", title: "Goal", derive: "progress", sourceKey: "progress.current", totalKey: "progress.target", unitKey: "progress.unit" }
+    ],
+    hiddenColumns: ["id", "status", "color", "iconNamed", "timeOfDayIds", "type", "logInfo"]
+  }, actions: [{
     id: "check", title: "Mark Complete", kind: "checkOff",
     toolName: "habitctl_run", toolCapability: "destructive",
     arguments: { args: ["check", "{id}"] },

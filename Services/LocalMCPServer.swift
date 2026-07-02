@@ -970,11 +970,12 @@ final class LocalMCPServer: @unchecked Sendable {
 
     /// Per-category widget accent (overrides the widget's default blue/green).
     /// Reminders read purple to distinguish RemCTL results at a glance;
-    /// podcasts read Pocket Casts red.
+    /// podcasts read Pocket Casts red; habits read Habitify blue.
     private static func widgetAccent(for category: ToolCategory) -> String? {
         switch category {
         case .reminders: return "#8b5cf6"   // purple
         case .podcasts: return "#f43e37"    // Pocket Casts red
+        case .habits: return "#2a9df4"      // Habitify blue
         default: return nil
         }
     }
@@ -1023,7 +1024,8 @@ final class LocalMCPServer: @unchecked Sendable {
                     ["key": "duration", "title": "Duration", "derive": "duration",
                      "sourceKey": "duration"],
                     ["key": "progress", "title": "Played", "derive": "progress",
-                     "sourceKey": "playedUpTo", "totalKey": "duration"],
+                     "sourceKey": "playedUpTo", "totalKey": "duration",
+                     "format": "seconds"],
                     ["key": "url", "title": "Link", "derive": "link",
                      "sourceKey": "url"]
                 ],
@@ -1032,6 +1034,27 @@ final class LocalMCPServer: @unchecked Sendable {
                                   "playingStatus", "episodeType",
                                   "episodeSeason", "isDeleted", "podcastSlug",
                                   "slug", "alternateEnclosures", "bookmarks"]
+            ]
+        case .habits:
+            return [
+                // Habit-shaped rows (habitctl today/journal/habits). The
+                // leading check circle comes from the checkOff action
+                // (`habitctl check <id>`, completed when status ==
+                // "completed"); streak and goal read the nested habitctl
+                // fields via dot-paths. Goal renders the count fraction
+                // ("1/1", "3/8") — habit goals are reps, not seconds.
+                "columns": [
+                    ["key": "name", "title": "Habit", "primary": true],
+                    ["key": "streak", "title": "Streak", "derive": "quantity",
+                     "sourceKey": "currentStreak.length",
+                     "unitKey": "currentStreak.unit"],
+                    ["key": "goal", "title": "Goal", "derive": "progress",
+                     "sourceKey": "progress.current",
+                     "totalKey": "progress.target",
+                     "unitKey": "progress.unit"]
+                ],
+                "hiddenColumns": ["id", "status", "color", "iconNamed",
+                                  "timeOfDayIds", "type", "logInfo"]
             ]
         default:
             return nil

@@ -2,9 +2,10 @@
 
 MacRemote implements the **MCP Apps extension (SEP-1865, spec 2026-01-26)**
 with one shared widget that attaches **selectively**: only tools whose
-category has curated presentation hints link it — RemCTL reminders and
-PocketCTL podcasts today. Every other tool returns the plain
-text/structured result and the host renders its own native display.
+category has curated presentation hints link it — RemCTL reminders,
+PocketCTL podcasts, and HabitCTL habits today. Every other tool returns
+the plain text/structured result and the host renders its own native
+display.
 
 **Why selective (decision 2026-07-02, supersedes the original
 render-everything design):** for uncurated output the widget degrades to a
@@ -15,8 +16,8 @@ artwork, actions. Eligibility is derived, not listed:
 `LocalMCPServer.widgetEligible(category:)` returns true exactly when the
 category has an accent or table hints, so adding a curated category
 automatically opts it in. Declared `uiActions` on ineligible tools stay
-inert data until their category earns hints (habitctl's check-off is
-currently dormant for this reason).
+inert data until their category earns hints (habitctl's check-off sat
+dormant this way until `.habits` was curated the same evening).
 
 One widget still covers every eligible tool because all tools — process
 adapters, Fixed Commands, and both MCP bridge flavors — return the same
@@ -157,15 +158,20 @@ tool's category server-side, `LocalMCPServer.widgetAccent`/`widgetTableHints`):
 
 - `accent` (hex) recolors the accent line, success chip, check circle, and
   action buttons via `color-mix` tints. RemCTL reminders read purple
-  (`#8b5cf6`); PocketCTL podcasts read Pocket Casts red (`#f43e37`).
+  (`#8b5cf6`); PocketCTL podcasts read Pocket Casts red (`#f43e37`);
+  HabitCTL habits read Habitify blue (`#2a9df4`).
 - `table.columns` supplies a curated, ordered column set. Each entry is
   `{key, title, primary?}` or a derived column with `derive:`
   - `"datetime"` (`sourceKey`, `allDayKey`) — ISO date (+ all-day flag) into
     a friendly **When** ("Jul 9, 2:00 PM", all-day → "Jul 9", missing → "—").
   - `"duration"` (`sourceKey`, seconds) — compact human duration ("1h 43m").
-  - `"progress"` (`sourceKey` played seconds, `totalKey` total seconds) —
-    accent-colored conic-gradient pie + percent label, tooltip "1h 08m of
-    1h 43m played".
+  - `"quantity"` (`sourceKey` count, `unitKey`) — a pluralized count
+    ("4 days", "1 rep") — habit streaks.
+  - `"progress"` (`sourceKey`, `totalKey`, optional `format` + `unitKey`) —
+    accent-colored conic-gradient pie. `format: "seconds"` labels with a
+    percent and a played-time tooltip ("1h 08m of 1h 43m played" —
+    podcasts); the default treats values as counts and labels with the
+    fraction ("3/8", tooltip "3 of 8 glasses" — habit goals).
   - `"artwork"` (`sourceKey`, `urlTemplate` with `{value}`, `altKey`) — 28px
     rounded thumbnail; the value is URL-encoded into the template (podcast
     artwork off the Pocket Casts CDN, hence the CSP resource domain).
@@ -173,10 +179,12 @@ tool's category server-side, `LocalMCPServer.widgetAccent`/`widgetTableHints`):
     rel="noopener"`) instead of the raw URL; only http(s) values render.
   Every `sourceKey` may be a string or an array of fallback keys — commands
   of the same CLI can spell the same fact differently (pocketctl up-next
-  calls the podcast uuid `podcast`, in-progress `podcastUuid`). A plain
-  column may carry `subtitleKey`: its value renders as a dim second line in
-  the cell (episode title over podcast name) and in the card, sorting stays
-  on the main value.
+  calls the podcast uuid `podcast`, in-progress `podcastUuid`) — and every
+  field key may be a dot-path into nested objects (habitctl's
+  `currentStreak.length`, `progress.target`). A plain column may carry
+  `subtitleKey`: its value renders as a dim second line in the cell
+  (episode title over podcast name) and in the card, sorting stays on the
+  main value.
   A curated set keeps the trailing action buttons on-screen instead of
   scrolled off past raw columns. Curated specs whose source fields never
   appear in the rows are dropped, and if fewer than two survive the widget

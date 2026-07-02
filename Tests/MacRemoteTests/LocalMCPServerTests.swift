@@ -2202,6 +2202,67 @@ struct MCPUISupportTests {
         #expect(seenEligible == 2)
     }
 
+    @Test func habitToolResultCarriesBlueAccentAndHabitColumns() async throws {
+        let coordinator = OAuthCoordinator()
+        let habitsTool = ToolDefinition(
+            id: "test.habits",
+            name: "Habits Today",
+            summary: "Return habit rows.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{value}"],
+            parameters: [
+                ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024 * 1024,
+            category: .habits
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [habitsTool],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "test_habits", "arguments": ["value": "x"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        let meta = try #require(result["_meta"] as? [String: Any])
+        let ui = try #require(meta["net.viticci.macremote/ui"] as? [String: Any])
+        // Habits category → Habitify blue + habit-shaped curated columns
+        // (streak quantity + goal fraction via nested dot-path fields).
+        #expect(ui["accent"] as? String == "#2a9df4")
+        let table = try #require(ui["table"] as? [String: Any])
+        let columns = try #require(table["columns"] as? [[String: Any]])
+        let byKey = Dictionary(uniqueKeysWithValues: columns.map { ($0["key"] as? String ?? "", $0) })
+        #expect(byKey["name"]?["primary"] as? Bool == true)
+        #expect(byKey["streak"]?["derive"] as? String == "quantity")
+        #expect(byKey["streak"]?["sourceKey"] as? String == "currentStreak.length")
+        #expect(byKey["streak"]?["unitKey"] as? String == "currentStreak.unit")
+        #expect(byKey["goal"]?["derive"] as? String == "progress")
+        #expect(byKey["goal"]?["sourceKey"] as? String == "progress.current")
+        #expect(byKey["goal"]?["totalKey"] as? String == "progress.target")
+        // No "format": habit goals label as count fractions, unlike the
+        // podcasts played column which sets format=seconds.
+        #expect(byKey["goal"]?["format"] == nil)
+        let hidden = try #require(table["hiddenColumns"] as? [String])
+        for dropped in ["id", "status", "color", "iconNamed", "timeOfDayIds"] {
+            #expect(hidden.contains(dropped), "\(dropped) should be hidden")
+        }
+    }
+
     @Test func plainCategoryToolResultCarriesNoWidgetMeta() async throws {
         let (server, coordinator) = makeUITestServer()
         let port = try server.start()
@@ -2357,6 +2418,9 @@ struct MCPUISupportTests {
         #expect(byKey["progress"]?["derive"] as? String == "progress")
         #expect(byKey["progress"]?["sourceKey"] as? String == "playedUpTo")
         #expect(byKey["progress"]?["totalKey"] as? String == "duration")
+        // seconds format → percent label + played-time tooltip (habit
+        // goals omit it and label as count fractions instead).
+        #expect(byKey["progress"]?["format"] as? String == "seconds")
         #expect(byKey["url"]?["derive"] as? String == "link")
         let hidden = try #require(table["hiddenColumns"] as? [String])
         for dropped in ["uuid", "published", "fileType", "size", "podcast", "podcastTitle"] {
