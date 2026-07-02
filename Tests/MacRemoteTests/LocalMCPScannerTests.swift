@@ -79,6 +79,47 @@ struct LocalMCPScannerTests {
         #expect(tools[1].capability == .write)
     }
 
+    @Test func scansUserScopedClaudeStdioServerFromClaudeJSON() async throws {
+        // `claude mcp add --scope user` (e.g. the Safari MCP) writes a stdio
+        // server at the top level of ~/.claude.json — not ~/.mcp.json — and it
+        // never shows in `claude mcp list`'s HTTP-only output. The scanner must
+        // read ~/.claude.json to surface it.
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+
+        let serverURL = home.appendingPathComponent("mock-stdio-mcp")
+        try Data(Self.mockStdioMCPServer.utf8).write(to: serverURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: serverURL.path)
+
+        let claudeJSON: [String: Any] = [
+            "mcpServers": [
+                "safari-mcp-stp": [
+                    "type": "stdio",
+                    "command": serverURL.path,
+                    "args": ["--fixture"]
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: claudeJSON)
+        try data.write(to: home.appendingPathComponent(".claude.json"))
+
+        let scanner = LocalMCPScanner(
+            homeDirectory: home,
+            executablePath: { _ in nil },
+            stdioBridgeClient: MCPStdioBridgeClient(environment: ExecutableLocator.toolEnvironment)
+        )
+
+        let candidates = await scanner.scan(includeRemote: false, probe: true)
+        let candidate = try #require(candidates.first { $0.displayName == "safari-mcp-stp" })
+        #expect(candidate.transport == .stdio)
+        #expect(candidate.bridgeable)
+        #expect(candidate.command == serverURL.path)
+        #expect(candidate.args == ["--fixture"])
+        #expect(candidate.probe?.tools.map(\.name) == ["echo"])
+    }
+
     @Test func scansCodexStdioServerProbesToolsAndBuildsBridgeDefinitions() async throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

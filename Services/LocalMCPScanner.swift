@@ -370,7 +370,13 @@ struct LocalMCPScanner: Sendable {
     }
 
     private func scanClaudeCodeMCPServers() -> [LocalMCPServerCandidate] {
-        scanJSONMCPFile(homeDirectory.appendingPathComponent(".mcp.json"), source: "claude_code", rootKey: "mcpServers")
+        // Project-scoped servers live in ~/.mcp.json; user-scoped servers from
+        // `claude mcp add --scope user` (e.g. the Safari MCP) land at the top
+        // level of ~/.claude.json. Both use the `mcpServers` key. Runtime
+        // `claude mcp list` only surfaces HTTP servers, so the JSON read is the
+        // path that catches stdio servers like safaridriver --mcp.
+        scanJSONMCPFile(homeDirectory.appendingPathComponent(".mcp.json"), source: "claude_code", rootKey: "mcpServers") +
+            scanJSONMCPFile(homeDirectory.appendingPathComponent(".claude.json"), source: "claude_code", rootKey: "mcpServers")
     }
 
     private func scanClaudeExtensions() -> [LocalMCPServerCandidate] {
