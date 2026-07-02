@@ -208,20 +208,18 @@ tr.mrw-row-done td { color: var(--text3); }
 }
 .mrw-check[data-state="done"] svg { opacity: 1; }
 
-/* trailing per-row buttons — revealed on hover, always on touch */
+/* trailing per-row buttons — always visible so actions are discoverable */
 .mrw-td-actions { width: 1%; text-align: right; white-space: nowrap; }
 .mrw-rowbtn {
   all: unset; font-size: 11px; font-weight: 560; color: var(--accent);
   padding: 3.5px 9px; border-radius: 6px; cursor: pointer;
   background: var(--accent-tint);
-  opacity: 0; transform: translateX(2px);
-  transition: opacity .14s ease, transform .14s ease, background-color .14s ease;
+  transition: background-color .14s ease;
   -webkit-tap-highlight-color: transparent;
   display: inline-flex; align-items: center; gap: 5px;
+  margin-left: 4px;
 }
-tr:hover .mrw-rowbtn, .mrw-rowbtn:focus-visible,
-.mrw-rowbtn[data-state="pending"], .mrw-rowbtn[data-state="done"] { opacity: 1; transform: none; }
-.mrw-rowbtn:hover { background: light-dark(rgba(0,113,227,.15), rgba(10,132,255,.24)); }
+.mrw-rowbtn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .mrw-rowbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mrw-rowbtn[data-state="pending"] { color: var(--text2); background: var(--line2); pointer-events: none; }
 .mrw-rowbtn[data-state="done"] { color: var(--ok); background: var(--ok-tint); pointer-events: none; }
@@ -561,19 +559,63 @@ const MacRemoteWidget = (() => {
   }
 
   /* ════════ TABLE state ════════ */
-  function renderTable(p, rows) {
+  // Format an ISO date (+ all-day flag) into a friendly "When": "Jul 9" for
+  // all-day, "Jul 9, 2:00 PM" with a time, "Jul 9, 2027" across years.
+  function formatWhen(iso, allDay) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    const now = new Date();
+    const dateOpts = { month: 'short', day: 'numeric' };
+    if (d.getFullYear() !== now.getFullYear()) dateOpts.year = 'numeric';
+    let out = d.toLocaleDateString(undefined, dateOpts);
+    if (!allDay) out += ', ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return out;
+  }
+
+  // Build the column specs the table renders: a curated set from the host
+  // (p.columns, may include a derived "when"), otherwise auto-detected raw
+  // keys minus any p.hiddenColumns.
+  function columnSpecsFor(p, rows) {
+    if (Array.isArray(p.columns) && p.columns.length) {
+      return p.columns.map((spec, i) => {
+        if (spec.derive === 'datetime') {
+          return {
+            key: spec.key, title: spec.title || prettyKey(spec.key),
+            primary: !!spec.primary, isNumeric: false,
+            value: (row) => formatWhen(row[spec.sourceKey], spec.allDayKey ? row[spec.allDayKey] : false),
+            sortValue: (row) => row[spec.sourceKey] || ''
+          };
+        }
+        return {
+          key: spec.key, title: spec.title || prettyKey(spec.key),
+          primary: spec.primary != null ? !!spec.primary : i === 0,
+          isNumeric: rows.every(r => r[spec.key] == null || typeof r[spec.key] === 'number'),
+          value: (row) => row[spec.key], sortValue: (row) => row[spec.key]
+        };
+      });
+    }
+    const hidden = new Set(p.hiddenColumns || []);
     const PREFERRED = ['id', 'title', 'name', 'list', 'due', 'date', 'priority', 'completed'];
     const seen = [];
     for (const r of rows) for (const k of Object.keys(r)) if (!seen.includes(k)) seen.push(k);
-    const cols = seen
-      .filter(k => rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== ''))
+    return seen
+      .filter(k => !hidden.has(k) && rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== ''))
       .sort((a, b) => {
         const pa = PREFERRED.indexOf(a), pb = PREFERRED.indexOf(b);
         return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
       })
-      .slice(0, 8);
-    const numeric = Object.fromEntries(cols.map(c =>
-      [c, rows.every(r => r[c] == null || typeof r[c] === 'number')]));
+      .slice(0, 8)
+      .map((c, i) => ({
+        key: c, title: prettyKey(c), primary: i === 0,
+        isNumeric: rows.every(r => r[c] == null || typeof r[c] === 'number'),
+        value: (row) => row[c], sortValue: (row) => row[c]
+      }));
+  }
+
+  function renderTable(p, rows) {
+    const columns = columnSpecsFor(p, rows);
+    const specByKey = Object.fromEntries(columns.map(c => [c.key, c]));
 
     rows.forEach((r, i) => Object.defineProperty(r, '__mrwIdx', { value: i, enumerable: false }));
     const actionState = new Map();          // rowIdx -> { actionId -> state }
@@ -588,20 +630,20 @@ const MacRemoteWidget = (() => {
     const thead = el('thead'); const headRow = el('tr');
     if (checkActions.length) headRow.append(el('th', 'mrw-td-check'));
     const ths = {};
-    for (const c of cols) {
+    for (const spec of columns) {
       const glyph = el('span', 'mrw-sort-glyph', '▲');
-      const btn = el('button', 'mrw-th-btn', prettyKey(c), glyph);
+      const btn = el('button', 'mrw-th-btn', spec.title, glyph);
       btn.type = 'button';
-      const th = el('th', numeric[c] ? 'mrw-td-num' : null, btn);
+      const th = el('th', spec.isNumeric ? 'mrw-td-num' : null, btn);
       btn.addEventListener('click', () => {
-        if (sort.key === c) sort.dir *= -1; else { sort.key = c; sort.dir = 1; }
+        if (sort.key === spec.key) sort.dir *= -1; else { sort.key = spec.key; sort.dir = 1; }
         for (const [k, t] of Object.entries(ths)) {
           if (k === sort.key) { t.setAttribute('aria-sort', sort.dir > 0 ? 'ascending' : 'descending'); t.querySelector('.mrw-sort-glyph').textContent = sort.dir > 0 ? '▲' : '▼'; }
           else t.removeAttribute('aria-sort');
         }
         paintRows();
       });
-      ths[c] = th; headRow.append(th);
+      ths[spec.key] = th; headRow.append(th);
     }
     if (buttonActions.length) headRow.append(el('th', 'mrw-td-actions'));
     thead.append(headRow);
@@ -618,11 +660,11 @@ const MacRemoteWidget = (() => {
 
     function paintRows() {
       const ordered = rows.slice();
-      if (sort.key) {
-        const k = sort.key;
+      if (sort.key && specByKey[sort.key]) {
+        const sv = specByKey[sort.key].sortValue;
         ordered.sort((a, b) => {
-          const av = a[k], bv = b[k];
-          if (av == null) return 1; if (bv == null) return -1;
+          const av = sv(a), bv = sv(b);
+          if (av == null || av === '') return 1; if (bv == null || bv === '') return -1;
           if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sort.dir;
           return String(av).localeCompare(String(bv), undefined, { numeric: true }) * sort.dir;
         });
@@ -641,7 +683,7 @@ const MacRemoteWidget = (() => {
           const btn = el('button', 'mrw-check');
           btn.type = 'button';
           btn.title = act.title || 'Mark complete';
-          btn.setAttribute('aria-label', (act.title || 'Mark complete') + ': ' + String(row[cols[0]] ?? ''));
+          btn.setAttribute('aria-label', (act.title || 'Mark complete') + ': ' + String((columns[0] && columns[0].value(row)) ?? ''));
           btn.append(I.check());
           btn.dataset.state = alreadyDone ? 'done' : (rowSt[act.id] || '');
           if (alreadyDone || rowSt[act.id] === 'done') tr.classList.add('mrw-row-done');
@@ -659,7 +701,7 @@ const MacRemoteWidget = (() => {
           }
         }
 
-        cols.forEach((c, ci) => tr.append(cellNode(row[c], ci === 0, numeric[c])));
+        columns.forEach((spec) => tr.append(cellNode(spec.value(row), spec.primary, spec.isNumeric)));
 
         if (buttonActions.length) {
           const td = el('td', 'mrw-td-actions');
@@ -675,6 +717,7 @@ const MacRemoteWidget = (() => {
               else if (b.dataset.state === 'armed') { b.append('Confirm?'); }
               else b.append(act.label || 'Run');
             };
+            label();   // render the idle label immediately
             const fire = (inputValues) => {
               b.dataset.state = 'pending'; setRowState(row, act.id, 'pending'); label();
               invoke(act.id, row, inputValues).then(() => {
@@ -925,6 +968,15 @@ const MacRemoteWidget = (() => {
     const p = Object.assign({ stdout: '', stderr: '', status: 'success', tool: { name: 'tool' } }, payload);
     const state = detectState(p);
     const root = el('div', 'mrw');
+    // Per-tool accent (e.g. RemCTL purple): recolor the accent AND the success
+    // status line/chip so the whole card reads in the tool's color.
+    if (p.accent) {
+      root.style.setProperty('--accent', p.accent);
+      root.style.setProperty('--accent-tint', 'color-mix(in srgb, ' + p.accent + ' 14%, transparent)');
+      root.style.setProperty('--ok', p.accent);
+      root.style.setProperty('--ok-line', p.accent);
+      root.style.setProperty('--ok-tint', 'color-mix(in srgb, ' + p.accent + ' 16%, transparent)');
+    }
     const card = el('article', 'mrw-card');
     card.dataset.status = p.status;
     card.setAttribute('aria-label', p.tool.name + ' — ' + (STATUS[p.status] || STATUS.success).label);
@@ -1080,11 +1132,15 @@ function renderResult() {
   for (const a of actions) { byId[a.id] = a; }
   const check = actions.find(a => a.kind === "checkOff") || null;
 
+  const table = meta.table || {};
   MacRemoteWidget.mount(rootEl, {
     tool: { name: meta.toolTitle || env.toolName || "Tool" },
     status: env.timedOut ? "timeout" : (env.succeeded ? "success" : "failed"),
     durationMs: typeof env.durationSeconds === "number" ? env.durationSeconds * 1000 : null,
     exitCode: typeof env.exitCode === "number" ? env.exitCode : null,
+    accent: meta.accent || null,
+    columns: table.columns || null,
+    hiddenColumns: table.hiddenColumns || null,
     stdout: env.stdout || "",
     stderr: env.stderr || "",
     truncated: env.truncatedStdout

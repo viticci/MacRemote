@@ -879,6 +879,12 @@ final class LocalMCPServer: @unchecked Sendable {
             "capability": tool.capability.rawValue,
             "category": tool.category.title
         ]
+        if let accent = Self.widgetAccent(for: tool.category) {
+            payload["accent"] = accent
+        }
+        if let table = Self.widgetTableHints(for: tool.category) {
+            payload["table"] = table
+        }
         if let actions = tool.uiActions, !actions.isEmpty {
             let encodedActions: [[String: Any]] = actions.compactMap { action in
                 guard let targetTool = resolveActionTarget(action, in: tools),
@@ -898,6 +904,39 @@ final class LocalMCPServer: @unchecked Sendable {
             }
         }
         return payload
+    }
+
+    /// Per-category widget accent (overrides the widget's default blue/green).
+    /// Reminders read purple to distinguish RemCTL results at a glance.
+    private static func widgetAccent(for category: ToolCategory) -> String? {
+        switch category {
+        case .reminders: return "#8b5cf6"   // purple
+        default: return nil
+        }
+    }
+
+    /// Per-category table hints: a curated column set (keeps the trailing
+    /// action buttons on-screen), a renamed/derived "When" column, and which
+    /// raw columns to drop. The widget falls back to auto columns without this.
+    private static func widgetTableHints(for category: ToolCategory) -> [String: Any]? {
+        switch category {
+        case .reminders:
+            return [
+                // Leading check circle + trailing actions are added by the
+                // widget; these are the visible data columns, in order.
+                "columns": [
+                    ["key": "when", "title": "When", "derive": "datetime",
+                     "sourceKey": "dueDate", "allDayKey": "allDay"],
+                    ["key": "title", "title": "Task", "primary": true],
+                    ["key": "list", "title": "List"]
+                ],
+                // Explicitly dropped even if a curated set is ignored by an
+                // older widget: id + completed (the check circle shows it).
+                "hiddenColumns": ["id", "completed"]
+            ]
+        default:
+            return nil
+        }
     }
 
     /// Stable built-in catalogs address targets by id; preset-derived tools

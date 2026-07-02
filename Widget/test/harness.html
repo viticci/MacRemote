@@ -25,18 +25,28 @@ const theme = params.get("theme") || "light";
 if (theme === "dark") { document.body.classList.add("dark"); }
 
 const REMINDERS = [
-  { id: 101, title: "Publish MacRemote article", list: "Editorial", due: "2026-07-02", priority: 1, completed: false },
-  { id: 102, title: "Record podcast segment", list: "Podcasts", due: "2026-07-02", priority: 0, completed: false },
-  { id: 103, title: "Reply to WWDC follow-ups", list: "Emails", due: "2026-07-03", priority: 2, completed: true },
-  { id: 104, title: "Order studio cables", list: "Shopping", due: null, priority: 0, completed: false }
+  { id: 23901, title: "Publish MacRemote article", list: "Editorial", dueDate: "2026-07-09T14:00:00", allDay: false, priority: "high", completed: false, flagged: false, urgent: true, subtaskCount: 0 },
+  { id: 23902, title: "Record podcast segment", list: "Podcasts", dueDate: "2026-07-09T14:30:00", allDay: false, priority: "none", completed: false, flagged: false, urgent: false, subtaskCount: 0 },
+  { id: 23903, title: "Reply to WWDC follow-ups", list: "Emails", dueDate: "2026-07-10T09:00:00", allDay: false, priority: "medium", completed: true, flagged: false, urgent: false, subtaskCount: 0 },
+  { id: 23904, title: "Order studio cables", list: "Shopping", dueDate: null, allDay: false, priority: "none", completed: false, flagged: false, urgent: false, subtaskCount: 0 },
+  { id: 23905, title: "Family dinner", list: "Family", dueDate: "2026-07-11T00:00:00", allDay: true, priority: "none", completed: false, flagged: true, urgent: false, subtaskCount: 5 }
 ];
 
 const UI_META = {
   version: 1,
-  toolTitle: "Today",
-  toolName: "remctl_today",
+  toolTitle: "Upcoming",
+  toolName: "remctl_upcoming",
   capability: "readOnly",
   category: "Reminders",
+  accent: "#8b5cf6",
+  table: {
+    columns: [
+      { key: "when", title: "When", derive: "datetime", sourceKey: "dueDate", allDayKey: "allDay" },
+      { key: "title", title: "Task", primary: true },
+      { key: "list", title: "List" }
+    ],
+    hiddenColumns: ["id", "completed"]
+  },
   actions: [{
     id: "complete", title: "Mark Done", kind: "checkOff",
     toolName: "remctl_run", toolCapability: "destructive",

@@ -111,6 +111,23 @@ Adaptive states from the envelope:
 Footer: MacRemote brand, Copy Output, Run Again (replays the exact
 `ui/notifications/tool-input` arguments).
 
+**Per-result presentation hints** in `CallToolResult._meta` (derived from the
+tool's category server-side, `LocalMCPServer.widgetAccent`/`widgetTableHints`):
+
+- `accent` (hex) recolors the accent line, success chip, check circle, and
+  action buttons via `color-mix` tints. RemCTL reminders read purple.
+- `table.columns` supplies a curated, ordered column set. Each entry is
+  `{key, title, primary?}` or a derived column `{key, title, derive:
+  "datetime", sourceKey, allDayKey}` — the widget formats an ISO date (+
+  all-day flag) into a friendly **When** ("Jul 9, 2:00 PM", all-day → "Jul
+  9", missing → "—"). A curated set keeps the trailing action buttons
+  on-screen instead of scrolled off past raw columns.
+- `table.hiddenColumns` drops raw keys when columns aren't fully curated
+  (reminders hide `id` + `completed` — the check circle already shows done).
+
+Row action buttons render their label immediately and stay visible (not
+hover-gated), so Reschedule/Delete are discoverable on every surface.
+
 ### Wire protocol (verified against spec.types.ts + apps.mdx)
 
 Raw JSON-RPC 2.0 objects over `postMessage` with `window.parent`; the View

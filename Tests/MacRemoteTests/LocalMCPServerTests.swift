@@ -2032,6 +2032,7 @@ struct MCPUISupportTests {
             capability: .readOnly,
             timeoutSeconds: 2,
             outputByteLimit: 1024 * 1024,
+            category: .reminders,
             uiActions: [
                 ToolUIAction(
                     id: "complete",
@@ -2177,6 +2178,15 @@ struct MCPUISupportTests {
         let ui = try #require(meta["net.viticci.macremote/ui"] as? [String: Any])
         #expect(ui["toolTitle"] as? String == "Reminders List")
         #expect(ui["toolName"] as? String == "test_reminders")
+        // Reminders category → purple accent + curated table hints.
+        #expect(ui["accent"] as? String == "#8b5cf6")
+        let table = try #require(ui["table"] as? [String: Any])
+        #expect((table["hiddenColumns"] as? [String])?.contains("id") == true)
+        #expect((table["hiddenColumns"] as? [String])?.contains("completed") == true)
+        let columns = try #require(table["columns"] as? [[String: Any]])
+        #expect(columns.first?["key"] as? String == "when")
+        #expect(columns.first?["derive"] as? String == "datetime")
+        #expect(columns.first?["sourceKey"] as? String == "dueDate")
         let actions = try #require(ui["actions"] as? [[String: Any]])
         let action = try #require(actions.first)
         #expect(action["id"] as? String == "complete")
