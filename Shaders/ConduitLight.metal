@@ -92,7 +92,8 @@ static inline half4 auroraUnion(float2 p, float time, half4 tint,
     // ---- Union silhouette (metaball weld, shrunk 1.5pt to stay under glass)
     float dA = sdCapsuleRect(p, aOrigin, aSize);
     float dB = sdCapsuleRect(p, bOrigin, bSize);
-    float d = smin(dA, dB, aSize.y * 0.55);
+    // Wide blend: a tight radius left concave cusps at the neck sides.
+    float d = smin(dA, dB, aSize.y * 1.05);
     half mask = half(smoothstep(0.0, -1.5, d));             // 1 inside, soft edge
 
     if (mask <= 0.001h || intensity <= 0.001) { return half4(0.0h); }
@@ -197,7 +198,7 @@ kernel void previewGrid(texture2d<half, access::write> out [[texture(0)]],
     // Show the union silhouette as pale glass so the PNG reads like the hero.
     float dA = sdCapsuleRect(p, aOrigin, aSize);
     float dB = sdCapsuleRect(p, bOrigin, bSize);
-    float d = smin(dA, dB, aSize.y * 0.55);
+    float d = smin(dA, dB, aSize.y * 1.05);
     half glass = half(smoothstep(1.0, -1.0, d));
     half3 bg = mix(half3(0.93h, 0.95h, 0.93h), half3(0.85h, 0.92h, 0.86h), glass);
     half3 rgb = bg * (1.0h - lit.a) + lit.rgb;
