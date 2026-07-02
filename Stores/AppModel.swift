@@ -1657,6 +1657,12 @@ final class AppModel {
                     level: .info,
                     "Deployed Cloudflare custom domain tunnel for \(deployment.hostname) with \(deployment.accessMode.protectionTitle)."
                 )
+                if deployment.accessMode.requiresCloudflareAccess {
+                    appendLog(
+                        level: .warning,
+                        "Cloudflare Access now guards /mcp on \(deployment.hostname). Clients that can't send custom headers — including Claude.ai connectors — will be blocked; redeploy with Dynamic OAuth to serve them."
+                    )
+                }
             } catch {
                 let message = error.localizedDescription
                 tunnelStatus = tunnelService.status(localServerURL: localServerURL)

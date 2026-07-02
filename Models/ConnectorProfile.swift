@@ -63,9 +63,9 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
         case .macRemoteOAuthOnly:
             "Compatibility mode for apps that can't send a client ID and secret."
         case .serviceTokenHeaders:
-            "Cloudflare Access service-token headers plus MacRemote OAuth."
+            "Cloudflare Access service-token headers plus MacRemote OAuth. Only for clients that can send custom headers (Raycast) — Claude.ai connectors can't, and Access will block them at /mcp."
         case .serviceTokenAuthorizationHeader:
-            "One Cloudflare Access header plus MacRemote OAuth."
+            "One Cloudflare Access header plus MacRemote OAuth. Only for clients that can send custom headers — Claude.ai connectors can't, and Access will block them at /mcp."
         }
     }
 
