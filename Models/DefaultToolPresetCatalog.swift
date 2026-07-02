@@ -1675,7 +1675,7 @@ enum DefaultToolPresetCatalog {
                 name: "Grok Session CLI",
                 summary: "Run grok-session by passing argv directly to list, resume, and inspect saved Grok agent sessions.",
                 executablePath: grokSession,
-                category: .developer,
+                category: .ai,
                 timeoutSeconds: 60
             ))
         }

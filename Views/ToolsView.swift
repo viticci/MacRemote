@@ -573,7 +573,7 @@ struct ToolsView: View {
         if let server = section.server {
             ImportedServerRow(
                 server: server,
-                isImporting: appModel.localMCPWorkingServerID == server.candidate?.id,
+                isImporting: appModel.isImportingLocalMCPServer(candidateID: server.candidate?.id),
                 error: rowErrors[section.id] ?? importError(for: server.candidate?.id),
                 expandAll: $expandAll,
                 shareAllBinding: Binding(

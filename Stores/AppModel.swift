@@ -119,6 +119,7 @@ final class AppModel {
     private static let disabledToolIDsKey = "MacRemote.disabledToolIDs"
     private static let confirmedFullDiskAccessSignatureKey = "MacRemote.confirmedFullDiskAccessSignature"
     private static let fullDiskAccessRelaunchPendingKey = "MacRemote.fullDiskAccessRelaunchPending"
+    private static let catalogCategoryMigrationKey = "MacRemote.migration.catalogCategories.v1"
     private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
     private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
     private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"
@@ -247,6 +248,7 @@ final class AppModel {
             }
         }
 
+        migrateStaleCatalogCategoriesIfNeeded()
         installApprovalCoordinators()
         tunnelStatus = tunnelService.status(localServerURL: nil)
         if let startupError {
@@ -954,6 +956,15 @@ final class AppModel {
                 appendLog(level: .error, "Local MCP import failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// True only while THIS candidate imports. Comparing optionals directly
+    /// (`localMCPWorkingServerID == server.candidate?.id`) read `nil == nil`
+    /// as importing, so servers whose original config disappeared spun on
+    /// "Importing tools…" forever.
+    func isImportingLocalMCPServer(candidateID: String?) -> Bool {
+        guard let candidateID else { return false }
+        return localMCPWorkingServerID == candidateID
     }
 
     func setLocalMCPBridgeServerEnabled(bridgeIdentity: String, enabled: Bool) -> String? {
@@ -2563,6 +2574,68 @@ final class AppModel {
 
     private static var toolEnvironment: [String: String] {
         ExecutableLocator.toolEnvironment
+    }
+
+    // MARK: - One-time catalog category reconciliation
+
+    /// Tools added before a catalog preset moved category (e.g. Claude Code
+    /// and Codex CLI predating AI & Agents) keep their stale persisted
+    /// category forever, since preset-derived tools carry random ids and no
+    /// preset linkage. Reconcile once, keyed by preset name + executable
+    /// basename; the marker keeps later user-chosen categories authoritative.
+    private func migrateStaleCatalogCategoriesIfNeeded() {
+        guard !userDefaults.bool(forKey: Self.catalogCategoryMigrationKey) else { return }
+        userDefaults.set(true, forKey: Self.catalogCategoryMigrationKey)
+
+        let presets = DefaultToolPresetCatalog.presets.map {
+            CatalogCategoryReference(name: $0.name, executablePath: $0.executablePath, category: $0.category)
+        }
+        let updates = Self.staleCatalogCategoryUpdates(tools: tools, presets: presets)
+        guard !updates.isEmpty else { return }
+
+        for index in tools.indices {
+            if let category = updates[tools[index].id] {
+                tools[index] = tools[index].withCategory(category)
+            }
+        }
+        do {
+            try persistUserDefinedTools()
+            appendLog(level: .info, "Updated the category of \(updates.count) tool\(updates.count == 1 ? "" : "s") to match the current library (e.g. AI & Agents).")
+        } catch {
+            appendLog(level: .error, "Could not save updated tool categories: \(error.localizedDescription)")
+        }
+    }
+
+    struct CatalogCategoryReference: Sendable {
+        let name: String
+        let executablePath: String
+        let category: ToolCategory
+    }
+
+    /// Pure core of the migration: tool id → corrected category, for
+    /// user-defined tools whose name and executable basename exactly match a
+    /// catalog preset that now lives in a different category.
+    nonisolated static func staleCatalogCategoryUpdates(
+        tools: [ToolDefinition],
+        presets: [CatalogCategoryReference]
+    ) -> [String: ToolCategory] {
+        var presetCategories: [String: ToolCategory] = [:]
+        for preset in presets {
+            presetCategories[categoryMigrationKey(name: preset.name, executablePath: preset.executablePath)] = preset.category
+        }
+
+        var updates: [String: ToolCategory] = [:]
+        for tool in tools where tool.origin == .userDefined && !tool.isMCPBridge {
+            let key = categoryMigrationKey(name: tool.name, executablePath: tool.executablePath)
+            if let category = presetCategories[key], tool.category != category {
+                updates[tool.id] = category
+            }
+        }
+        return updates
+    }
+
+    private nonisolated static func categoryMigrationKey(name: String, executablePath: String) -> String {
+        "\(name)\u{1f}\(URL(fileURLWithPath: executablePath).lastPathComponent)"
     }
 
     private func appendTool(_ tool: ToolDefinition) {

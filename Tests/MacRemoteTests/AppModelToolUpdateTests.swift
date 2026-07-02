@@ -146,6 +146,62 @@ struct AppModelToolUpdateTests {
 
 // MARK: - Helpers
 
+/// One-time catalog category reconciliation: preset-derived tools carry
+/// random ids, so stale categories (tools added before a preset moved to
+/// AI & Agents) are matched by name + executable basename.
+struct CatalogCategoryMigrationTests {
+    @Test func staleCategoriesFollowTheCatalogWithoutTouchingOthers() throws {
+        let presets = [
+            AppModel.CatalogCategoryReference(name: "Claude Code", executablePath: "/Users/someone/.local/bin/claude", category: .ai),
+            AppModel.CatalogCategoryReference(name: "Codex CLI", executablePath: "/opt/homebrew/bin/codex", category: .ai),
+            AppModel.CatalogCategoryReference(name: "Git Status", executablePath: "/usr/bin/git", category: .developer)
+        ]
+
+        let staleClaude = try makeTool(id: "custom.1", name: "Claude Code", executablePath: "/Users/viticci/.local/bin/claude", category: .developer)
+        let correctCodex = try makeTool(id: "custom.2", name: "Codex CLI", executablePath: "/Users/viticci/.local/bin/codex", category: .ai)
+        let unrelated = try makeTool(id: "custom.3", name: "My Claude Wrapper", executablePath: "/Users/viticci/.local/bin/claude", category: .developer)
+        let gitStatus = try makeTool(id: "custom.4", name: "Git Status", executablePath: "/usr/bin/git", category: .developer)
+
+        let updates = AppModel.staleCatalogCategoryUpdates(
+            tools: [staleClaude, correctCodex, unrelated, gitStatus],
+            presets: presets
+        )
+
+        // Stale Claude Code flips (basename match survives a different home
+        // directory); already-correct, renamed, and same-category tools don't.
+        #expect(updates == ["custom.1": .ai])
+    }
+
+    private func makeTool(id: String, name: String, executablePath: String, category: ToolCategory) throws -> ToolDefinition {
+        var draft = ToolDefinitionDraft()
+        draft.name = name
+        draft.summary = "Test tool"
+        draft.executablePath = executablePath
+        draft.category = category
+        return try draft.makeTool(id: id)
+    }
+}
+
+/// Imported-server rows only spin for a real matching candidate — comparing
+/// optionals directly read `nil == nil` as importing, so servers whose
+/// original config disappeared showed "Importing tools…" forever.
+struct LocalMCPImportSpinnerTests {
+    @MainActor
+    @Test func missingCandidateNeverReadsAsImporting() throws {
+        let context = try makeToolUpdateContext()
+        defer { context.tearDown() }
+        let model = context.model
+
+        #expect(model.localMCPWorkingServerID == nil)
+        #expect(!model.isImportingLocalMCPServer(candidateID: nil))
+
+        model.localMCPWorkingServerID = "server-a"
+        #expect(!model.isImportingLocalMCPServer(candidateID: nil))
+        #expect(!model.isImportingLocalMCPServer(candidateID: "server-b"))
+        #expect(model.isImportingLocalMCPServer(candidateID: "server-a"))
+    }
+}
+
 private struct ToolUpdateContext {
     let model: AppModel
     let storeURL: URL

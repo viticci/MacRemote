@@ -445,6 +445,27 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let mcpStdioBridge: MCPStdioBridgeConfiguration?
     let provenance: ToolProvenance?
 
+    func withCategory(_ category: ToolCategory) -> ToolDefinition {
+        ToolDefinition(
+            id: id,
+            name: name,
+            summary: summary,
+            executablePath: executablePath,
+            argumentPattern: argumentPattern,
+            parameters: parameters,
+            capability: capability,
+            timeoutSeconds: timeoutSeconds,
+            outputByteLimit: outputByteLimit,
+            origin: origin,
+            category: category,
+            permissionRequirements: permissionRequirements,
+            backend: backend,
+            mcpBridge: mcpBridge,
+            mcpStdioBridge: mcpStdioBridge,
+            provenance: provenance
+        )
+    }
+
     var preview: String {
         if let mcpBridge {
             return "\(mcpBridge.serverURL) → \(mcpBridge.toolName)"
