@@ -723,7 +723,13 @@ final class LocalMCPServer: @unchecked Sendable {
                 "isError": !outcome.succeeded
             ]
             if let uiMeta = resultUIMeta(for: tool, tools: tools) {
-                result["_meta"] = [Self.resultUIMetaKey: uiMeta]
+                result["_meta"] = [
+                    Self.resultUIMetaKey: uiMeta,
+                    // Mirror the resource link on the result too — some host
+                    // paths resolve the widget from CallToolResult._meta.
+                    Self.toolUIMetaKey: ["resourceUri": Self.widgetResourceURI],
+                    "ui/resourceUri": Self.widgetResourceURI
+                ]
             }
             return jsonRPCResult(id: id, result: result)
         } catch let error as ToolValidationError {
@@ -921,8 +927,12 @@ final class LocalMCPServer: @unchecked Sendable {
             "annotations": annotations(for: tool)
         ]
         if widgetAvailable {
+            // Both forms, like the official Apps SDK: the nested form is
+            // normative, the flat form is the pre-GA key some hosts still
+            // read. Belt and braces until the ecosystem settles.
             json["_meta"] = [
-                Self.toolUIMetaKey: ["resourceUri": Self.widgetResourceURI]
+                Self.toolUIMetaKey: ["resourceUri": Self.widgetResourceURI],
+                "ui/resourceUri": Self.widgetResourceURI
             ]
         }
         return json

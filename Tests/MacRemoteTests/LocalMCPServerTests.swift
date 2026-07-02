@@ -2100,6 +2100,8 @@ struct MCPUISupportTests {
             let meta = try #require(tool["_meta"] as? [String: Any], "every tool links the widget")
             let ui = try #require(meta["ui"] as? [String: Any])
             #expect(ui["resourceUri"] as? String == "ui://macremote/output")
+            // Deprecated flat form rides along for hosts that still read it.
+            #expect(meta["ui/resourceUri"] as? String == "ui://macremote/output")
         }
     }
 
