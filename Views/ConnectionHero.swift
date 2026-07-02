@@ -51,8 +51,14 @@ struct ConnectionHero: View {
 
     var body: some View {
         VStack(spacing: isCompact ? Space.s3 : Space.s4) {
-            GlassEffectContainer(spacing: Space.s6) {
-                VStack(spacing: isCompact ? Space.s2 : Space.s3) {
+            // Wider container spacing blends the Public pill and URL capsule
+            // from further apart, so the connecting neck reads as one poured
+            // form with gentle shoulders instead of a pinched weld.
+            GlassEffectContainer(spacing: Space.s8) {
+                // Tighter gap between the pill and the URL capsule: a shorter
+                // span means the glass merges into a wider, gentler neck
+                // rather than a pinched taper.
+                VStack(spacing: isCompact ? Space.s1 : Space.s2) {
                     statusCapsule
                         .onGeometryChange(for: CGRect.self) { proxy in
                             proxy.frame(in: .named(Self.heroSpace))
