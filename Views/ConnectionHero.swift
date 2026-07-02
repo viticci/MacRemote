@@ -91,6 +91,14 @@ struct ConnectionHero: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.5), value: text)
                 .padding(.horizontal, isCompact ? Space.s4 : Space.s5)
                 .padding(.vertical, isCompact ? Space.s2 : Space.s3)
+                .background {
+                    // "Liquid Light Conduit" — a color layer between the glass
+                    // and the text, never a second glass surface (GUIDELINES §3).
+                    if showsConduit {
+                        ConduitLightLayer(tint: StatusRole.ready.tint)
+                            .transition(.opacity)
+                    }
+                }
                 .glassEffect(.regular.tint(glassTint), in: .capsule)
                 .glassEffectID("hero.url", in: glassNamespace)
                 .glassEffectUnion(id: "hero.urlGroup", namespace: glassNamespace)
@@ -270,6 +278,14 @@ struct ConnectionHero: View {
 
     private var showsCopy: Bool {
         if case .publicRunning = state { return true }
+        return false
+    }
+
+    /// The conduit is decoration for the full hero only. The compact hero
+    /// (onboarding S4/S5) skips it: its two lanes sit ~9 pt apart and would
+    /// smear into shimmer at that size.
+    private var showsConduit: Bool {
+        if case .publicRunning = state { return !isCompact }
         return false
     }
 

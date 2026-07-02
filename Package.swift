@@ -56,7 +56,12 @@ let package = Package(
                 "SECURITY.md",
                 "Resources",
                 "script",
-                "Tests"
+                "Tests",
+                // Compiled out-of-band by script/compile_shaders.sh (no Metal
+                // compiler on the CLT host). Shaders/default.metallib is picked
+                // up as a bundle resource automatically; ShaderLibrary.bundle(
+                // .module) loads the bundle's default library by that name.
+                "Shaders/ConduitLight.metal"
             ],
             sources: [
                 "App",
@@ -65,6 +70,9 @@ let package = Package(
                 "Stores",
                 "Support",
                 "Views"
+            ],
+            resources: [
+                .copy("Shaders/default.metallib")
             ]
         ),
         .testTarget(

@@ -37,6 +37,11 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+# SwiftPM resource bundle (carries Shaders/default.metallib for Bundle.module).
+BUILD_RESOURCE_BUNDLE="$(swift build --show-bin-path)/${APP_NAME}_${APP_NAME}.bundle"
+if [[ -d "$BUILD_RESOURCE_BUNDLE" ]]; then
+  cp -R "$BUILD_RESOURCE_BUNDLE" "$APP_RESOURCES/"
+fi
 if [[ -f "$SOURCE_ICON" ]]; then
   cp "$SOURCE_ICON" "$APP_RESOURCES/AppIcon.icns"
 fi
