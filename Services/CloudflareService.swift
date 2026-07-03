@@ -7,63 +7,15 @@ struct CloudflareZone: Identifiable, Hashable, Sendable {
     let accountName: String
 }
 
-struct CloudflareAccessCredentials: Equatable, Sendable {
-    let clientID: String
-    let clientSecret: String
-    static let singleHeaderName = "CF-Access-Service-Token"
-
-    var standardHeadersJSON: String {
-        let payload = [
-            "CF-Access-Client-Id": clientID,
-            "CF-Access-Client-Secret": clientSecret
-        ]
-        return Self.prettyJSONString(payload)
-    }
-
-    var singleHeaderValue: String {
-        let payload = [
-            "cf-access-client-id": clientID,
-            "cf-access-client-secret": clientSecret
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return text
-    }
-
-    var singleHeaderJSON: String {
-        Self.prettyJSONString([Self.singleHeaderName: singleHeaderValue])
-    }
-
-    func headersJSON(for mode: CloudflareAccessMode) -> String? {
-        switch mode {
-        case .oauthClientSecret, .macRemoteOAuthOnly:
-            nil
-        case .serviceTokenHeaders:
-            standardHeadersJSON
-        case .serviceTokenAuthorizationHeader:
-            singleHeaderJSON
-        }
-    }
-
-    private static func prettyJSONString(_ payload: [String: String]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return text
-    }
-}
-
 struct CloudflareCustomDomainDeployment: Equatable, Sendable {
     let zone: CloudflareZone
     let hostname: String
     let tunnelID: String
     let tunnelName: String
     let tunnelToken: String
-    let accessMode: CloudflareAccessMode
-    let accessCredentials: CloudflareAccessCredentials?
+    /// Set when the deploy found (or failed to check for) a leftover
+    /// Cloudflare Access app from a pre-2026-07 MacRemote deploy.
+    var legacyAccessCleanup: String?
     var apexFavicon: CloudflareApexFaviconOutcome?
 
     var publicURL: URL {
@@ -101,7 +53,6 @@ enum CloudflareApexFaviconOutcome: Equatable, Sendable {
 struct CloudflareCustomDomainDraft: Equatable, Sendable {
     var selectedZoneID: String?
     var subdomain: String = "macremote"
-    var accessMode: CloudflareAccessMode = .serviceTokenHeaders
     var apiToken: String = ""
 
     var trimmedAPIToken: String {
@@ -116,13 +67,12 @@ enum CloudflareServiceError: LocalizedError, Equatable {
     case invalidSubdomain
     case zoneRequired
     case existingDNSRecord(String)
-    case existingAccessApplication(String)
     case missingAPIToken
     case insufficientPermissions(String)
     case missingAPIResult
     case api(String)
 
-    static let apiTokenPermissions = "Account Cloudflare Tunnel Read and Write; and for the selected zone: Zone Read, DNS Read and Write, Access Apps and Policies Read and Write, and Access Service Tokens Read and Write"
+    static let apiTokenPermissions = "Account Cloudflare Tunnel Read and Write; and for the selected zone: Zone Read, and DNS Read and Write"
 
     var errorDescription: String? {
         switch self {
@@ -138,8 +88,6 @@ enum CloudflareServiceError: LocalizedError, Equatable {
             "Select a Cloudflare domain first."
         case .existingDNSRecord(let hostname):
             "A non-MacRemote DNS record already exists for \(hostname)."
-        case .existingAccessApplication(let hostname):
-            "A non-MacRemote Cloudflare Access application already exists for \(hostname)."
         case .missingAPIToken:
             "Paste a Cloudflare API token before deploying. Required permissions: \(Self.apiTokenPermissions)."
         case .insufficientPermissions(let operation):
@@ -202,7 +150,6 @@ struct CloudflareService: Sendable {
         zone: CloudflareZone,
         subdomain: String,
         localServerURL: URL,
-        accessMode: CloudflareAccessMode,
         apiToken: String? = nil,
         provisionApexFavicon: Bool = false
     ) async throws -> CloudflareCustomDomainDeployment {
@@ -218,22 +165,15 @@ struct CloudflareService: Sendable {
         try await preflightPermissions(
             zone: zone,
             hostname: hostname,
-            accessMode: accessMode,
             apiToken: apiToken
         )
 
         let tunnelName = Self.tunnelName(hostname: hostname)
-        let existingAccessApp = try await existingAccessApplication(hostname: hostname, zoneID: zone.id, apiToken: apiToken)
-        if !accessMode.requiresCloudflareAccess, let existingAccessApp {
-            guard Self.isMacRemoteAccessApplication(existingAccessApp) else {
-                throw CloudflareServiceError.existingAccessApplication(hostname)
-            }
-            try await deleteAccessApplication(
-                appID: existingAccessApp.id,
-                zoneID: zone.id,
-                apiToken: apiToken
-            )
-        }
+        let legacyAccessCleanup = await removeLegacyAccessApplication(
+            hostname: hostname,
+            zoneID: zone.id,
+            apiToken: apiToken
+        )
 
         let tunnel: CloudflareTunnelDTO
         if let existing = try await existingTunnel(named: tunnelName, accountID: zone.accountID, apiToken: apiToken) {
@@ -251,48 +191,6 @@ struct CloudflareService: Sendable {
         )
         try await ensureDNSRecord(zoneID: zone.id, hostname: hostname, tunnelID: tunnel.id, apiToken: apiToken)
 
-        let accessCredentials: CloudflareAccessCredentials?
-        if accessMode.requiresCloudflareAccess {
-            let app: CloudflareAccessApplicationDTO
-            if let existing = existingAccessApp {
-                guard Self.isMacRemoteAccessApplication(existing) else {
-                    throw CloudflareServiceError.existingAccessApplication(hostname)
-                }
-                app = try await updateAccessApplication(
-                    appID: existing.id,
-                    hostname: hostname,
-                    accessMode: accessMode,
-                    zoneID: zone.id,
-                    apiToken: apiToken
-                )
-            } else {
-                app = try await createAccessApplication(
-                    hostname: hostname,
-                    accessMode: accessMode,
-                    zoneID: zone.id,
-                    apiToken: apiToken
-                )
-            }
-            let serviceToken = try await createServiceToken(
-                zoneID: zone.id,
-                hostname: hostname,
-                apiToken: apiToken
-            )
-            try await createServiceAuthPolicy(
-                zoneID: zone.id,
-                appID: app.id,
-                hostname: hostname,
-                serviceTokenID: serviceToken.id,
-                apiToken: apiToken
-            )
-            accessCredentials = CloudflareAccessCredentials(
-                clientID: serviceToken.clientId,
-                clientSecret: serviceToken.clientSecret
-            )
-        } else {
-            accessCredentials = nil
-        }
-
         let tunnelToken = try await tunnelRunToken(tunnelID: tunnel.id, accountID: zone.accountID, apiToken: apiToken)
         var apexFavicon: CloudflareApexFaviconOutcome?
         if provisionApexFavicon {
@@ -304,8 +202,7 @@ struct CloudflareService: Sendable {
             tunnelID: tunnel.id,
             tunnelName: tunnelName,
             tunnelToken: tunnelToken,
-            accessMode: accessMode,
-            accessCredentials: accessCredentials,
+            legacyAccessCleanup: legacyAccessCleanup,
             apexFavicon: apexFavicon
         )
     }
@@ -573,7 +470,6 @@ struct CloudflareService: Sendable {
     private func preflightPermissions(
         zone: CloudflareZone,
         hostname: String,
-        accessMode: CloudflareAccessMode,
         apiToken: String?
     ) async throws {
         let _: CloudflareAPIResponse<[CloudflareTunnelDTO]> = try await request(
@@ -593,25 +489,6 @@ struct CloudflareService: Sendable {
             queryItems: [
                 URLQueryItem(name: "type", value: "CNAME"),
                 URLQueryItem(name: "name", value: hostname)
-            ]
-        )
-        let _: CloudflareAPIResponse<[CloudflareAccessApplicationDTO]> = try await request(
-            method: "GET",
-            path: "/zones/\(zone.id)/access/apps",
-            apiToken: apiToken,
-            operation: "list Cloudflare Access applications",
-            queryItems: [
-                URLQueryItem(name: "per_page", value: "1")
-            ]
-        )
-        guard accessMode.requiresCloudflareAccess else { return }
-        let _: CloudflareAPIResponse<[CloudflareServiceTokenListDTO]> = try await request(
-            method: "GET",
-            path: "/zones/\(zone.id)/access/service_tokens",
-            apiToken: apiToken,
-            operation: "list Cloudflare Access service tokens",
-            queryItems: [
-                URLQueryItem(name: "per_page", value: "1")
             ]
         )
     }
@@ -719,18 +596,30 @@ struct CloudflareService: Sendable {
         ]
     }
 
-    private func createServiceToken(zoneID: String, hostname: String, apiToken: String?) async throws -> CloudflareServiceTokenDTO {
-        let response: CloudflareAPIResponse<CloudflareServiceTokenDTO> = try await request(
-            method: "POST",
-            path: "/zones/\(zoneID)/access/service_tokens",
-            apiToken: apiToken,
-            operation: "create Cloudflare Access service token",
-            body: [
-                "name": "MacRemote \(hostname)",
-                "duration": "8760h"
-            ]
-        )
-        return try response.requiredResult()
+    // MARK: - Legacy Cloudflare Access cleanup
+
+    /// Pre-2026-07 MacRemote could put a Cloudflare Access wall on `/mcp*`.
+    /// Access support is gone, so a deploy removes MacRemote's own leftover
+    /// Access app — otherwise old deploys stay walled off with no way to fix
+    /// it from the app. Best-effort: current API tokens no longer carry
+    /// Access permissions, and a failed check must never fail the deploy.
+    private func removeLegacyAccessApplication(
+        hostname: String,
+        zoneID: String,
+        apiToken: String?
+    ) async -> String? {
+        do {
+            guard let app = try await existingAccessApplication(hostname: hostname, zoneID: zoneID, apiToken: apiToken) else {
+                return nil
+            }
+            guard Self.isMacRemoteAccessApplication(app) else {
+                return "A Cloudflare Access application not created by MacRemote guards \(hostname). MacRemote left it untouched; remove it in the Zero Trust dashboard if apps can't connect."
+            }
+            try await deleteAccessApplication(appID: app.id, zoneID: zoneID, apiToken: apiToken)
+            return "Removed the Cloudflare Access app that an earlier MacRemote version put on \(hostname)/mcp — sign-in is now handled by MacRemote alone."
+        } catch {
+            return nil
+        }
     }
 
     private func existingAccessApplication(hostname: String, zoneID: String, apiToken: String?) async throws -> CloudflareAccessApplicationDTO? {
@@ -757,39 +646,6 @@ struct CloudflareService: Sendable {
         app.name?.hasPrefix("MacRemote ") == true
     }
 
-    private func createAccessApplication(
-        hostname: String,
-        accessMode: CloudflareAccessMode,
-        zoneID: String,
-        apiToken: String?
-    ) async throws -> CloudflareAccessApplicationDTO {
-        let response: CloudflareAPIResponse<CloudflareAccessApplicationDTO> = try await request(
-            method: "POST",
-            path: "/zones/\(zoneID)/access/apps",
-            apiToken: apiToken,
-            operation: "create Cloudflare Access application",
-            body: accessApplicationBody(hostname: hostname, accessMode: accessMode)
-        )
-        return try response.requiredResult()
-    }
-
-    private func updateAccessApplication(
-        appID: String,
-        hostname: String,
-        accessMode: CloudflareAccessMode,
-        zoneID: String,
-        apiToken: String?
-    ) async throws -> CloudflareAccessApplicationDTO {
-        let response: CloudflareAPIResponse<CloudflareAccessApplicationDTO> = try await request(
-            method: "PUT",
-            path: "/zones/\(zoneID)/access/apps/\(appID)",
-            apiToken: apiToken,
-            operation: "update Cloudflare Access application",
-            body: accessApplicationBody(hostname: hostname, accessMode: accessMode)
-        )
-        return try response.requiredResult()
-    }
-
     private func deleteAccessApplication(
         appID: String,
         zoneID: String,
@@ -801,94 +657,6 @@ struct CloudflareService: Sendable {
             apiToken: apiToken,
             operation: "delete Cloudflare Access application"
         )
-    }
-
-    private func accessApplicationBody(hostname: String, accessMode: CloudflareAccessMode) -> [String: Any] {
-        var body: [String: Any] = [
-            "name": "MacRemote \(hostname)",
-            "domain": Self.accessApplicationDomain(hostname: hostname),
-            "type": "self_hosted",
-            "app_launcher_visible": false,
-            "session_duration": "24h"
-        ]
-        if let headerName = accessMode.readServiceTokensFromHeader {
-            body["read_service_tokens_from_header"] = headerName
-        }
-        return body
-    }
-
-    private func createServiceAuthPolicy(
-        zoneID: String,
-        appID: String,
-        hostname: String,
-        serviceTokenID: String,
-        apiToken: String?
-    ) async throws {
-        let policies = try await accessPolicies(zoneID: zoneID, appID: appID, apiToken: apiToken)
-        if let existing = policies.first(where: {
-            $0.name?.hasPrefix("MacRemote Service Token") == true ||
-            $0.name?.hasPrefix("MacRemote Raycast Service Token") == true
-        }),
-           let policyID = existing.id {
-            let precedence = existing.precedence ?? Self.nextAccessPolicyPrecedence(after: policies)
-            let _: CloudflareAPIResponse<CloudflareAccessPolicyDTO> = try await request(
-                method: "PUT",
-                path: "/zones/\(zoneID)/access/apps/\(appID)/policies/\(policyID)",
-                apiToken: apiToken,
-                operation: "update Cloudflare Access service-auth policy",
-                body: serviceAuthPolicyBody(serviceTokenID: serviceTokenID, precedence: precedence)
-            )
-            return
-        }
-
-        let _: CloudflareAPIResponse<CloudflareAccessPolicyDTO> = try await request(
-            method: "POST",
-            path: "/zones/\(zoneID)/access/apps/\(appID)/policies",
-            apiToken: apiToken,
-            operation: "create Cloudflare Access service-auth policy",
-            body: serviceAuthPolicyBody(
-                serviceTokenID: serviceTokenID,
-                precedence: Self.nextAccessPolicyPrecedence(after: policies)
-            )
-        )
-    }
-
-    private func accessPolicies(zoneID: String, appID: String, apiToken: String?) async throws -> [CloudflareAccessPolicyDTO] {
-        let response: CloudflareAPIResponse<[CloudflareAccessPolicyDTO]> = try await request(
-            method: "GET",
-            path: "/zones/\(zoneID)/access/apps/\(appID)/policies",
-            apiToken: apiToken,
-            operation: "list Cloudflare Access policies",
-            queryItems: [
-                URLQueryItem(name: "per_page", value: "50")
-            ]
-        )
-        return try response.requiredResult()
-    }
-
-    private func serviceAuthPolicyBody(serviceTokenID: String, precedence: Int) -> [String: Any] {
-        [
-            "name": "MacRemote Service Token",
-            "decision": "non_identity",
-            "precedence": precedence,
-            "session_duration": "24h",
-            "include": [
-                [
-                    "service_token": [
-                        "token_id": serviceTokenID
-                    ]
-                ]
-            ]
-        ] as [String: Any]
-    }
-
-    private static func nextAccessPolicyPrecedence(after policies: [CloudflareAccessPolicyDTO]) -> Int {
-        let used = Set(policies.compactMap(\.precedence))
-        var candidate = 1
-        while used.contains(candidate) {
-            candidate += 1
-        }
-        return candidate
     }
 
     private func tunnelRunToken(tunnelID: String, accountID: String, apiToken: String?) async throws -> String {
@@ -1079,27 +847,11 @@ private struct CloudflareWorkerScriptDTO: Decodable {
     let id: String?
 }
 
-private struct CloudflareServiceTokenDTO: Decodable {
-    let id: String
-    let clientId: String
-    let clientSecret: String
-}
-
-private struct CloudflareServiceTokenListDTO: Decodable {
-    let id: String
-    let name: String?
-}
-
+/// Kept only for the legacy Access cleanup step.
 private struct CloudflareAccessApplicationDTO: Decodable {
     let id: String
     let name: String?
     let domain: String?
-}
-
-private struct CloudflareAccessPolicyDTO: Decodable {
-    let id: String?
-    let name: String?
-    let precedence: Int?
 }
 
 private extension JSONDecoder {

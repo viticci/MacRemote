@@ -288,6 +288,11 @@ final class OAuthCoordinator: @unchecked Sendable {
         }
     }
 
+    /// The Single Header sign-in mode: one MacRemote-generated bearer token,
+    /// valid for any issuer/resource this server answers for. Only the SHA-256
+    /// of the token is held here.
+    static let staticHeaderClientID = "macremote-header-token"
+
     private let lock = NSLock()
     private let changeHandler: ChangeHandler?
     private let grantStore: OAuthGrantStore?
@@ -296,6 +301,8 @@ final class OAuthCoordinator: @unchecked Sendable {
     private var authorizations: [UUID: PendingAuthorization] = [:]
     private var accessTokensByHash: [String: AccessTokenRecord] = [:]
     private var refreshTokensByHash: [String: RefreshTokenRecord] = [:]
+    private var staticHeaderTokenHash: String?
+    private var staticHeaderClientName = "Single Header Client"
 
     init(
         clientAuthentication: OAuthClientAuthenticationPolicy = .dynamicPublicClients,
@@ -531,6 +538,16 @@ final class OAuthCoordinator: @unchecked Sendable {
         }
     }
 
+    /// Installs (or clears, with `nil`) the Single Header bearer token. The
+    /// cleartext never persists here — only its hash, compared against the
+    /// same SHA-256 digest used for OAuth access tokens.
+    func updateStaticHeaderToken(_ token: String?, clientName: String = "Single Header Client") {
+        lock.withLock {
+            staticHeaderTokenHash = token.map(Self.sha256Hex)
+            staticHeaderClientName = clientName
+        }
+    }
+
     func validateAccessToken(_ token: String, issuer: String, resource: String, requiredScope: String = "mcp:tools") -> Bool {
         clientContext(forAccessToken: token, issuer: issuer, resource: resource, requiredScope: requiredScope) != nil
     }
@@ -562,7 +579,20 @@ final class OAuthCoordinator: @unchecked Sendable {
 
         return lock.withLock {
             pruneExpiredTokens(now: now)
-            guard let record = accessTokensByHash[tokenHash] else { return nil }
+            guard let record = accessTokensByHash[tokenHash] else {
+                if let staticHeaderTokenHash, staticHeaderTokenHash == tokenHash {
+                    return AuthenticatedClientContext(
+                        clientID: Self.staticHeaderClientID,
+                        clientTrustID: Self.staticHeaderClientID,
+                        clientName: staticHeaderClientName,
+                        issuer: issuer,
+                        resource: canonicalAcceptedResources.sorted()[0],
+                        scopes: [requiredScope],
+                        accessTokenExpiresAt: .distantFuture
+                    )
+                }
+                return nil
+            }
             guard record.expiresAt > now,
                   record.issuer == issuer,
                   canonicalAcceptedResources.contains(record.resource),

@@ -34,6 +34,8 @@ MacRemote keeps exactly one precious object alive: **this Mac's remote connectio
 | D16 | **Setup guidance after skip** — MC's dismissable checklist vs GO's self-retiring Guide. | MC's **Setup checklist card**, upgraded with GO's mechanics: it **collapses to an "All set ✓" capsule** the first time all steps pass (the graduation moment); a later readiness regression re-expands **only the failing row**, debounced 30 s, escalating once to a notification on repeat; regression expansion never displaces the hero while a public link is live. | Commercial + purist + power-operator all grafted the self-retiring mechanic; prosumer fatal #5 capped regression above the hero. |
 | D17 | **Hero status typography** — MC's `.largeTitle` status word. | `.title2` semibold status word; URL in `.title3` monospaced. | Purist flagged `.largeTitle` as flirting with the in-content-title ban (Rule 8). |
 | D18 | **Server-stop semantics for pending requests.** | Pending requests **resolve to Denied with reason "Server stopped"** (one grouped Activity line; history rows keep the reason). Any pending row whose verbs cannot act renders disabled with "Start the server to respond." No verb ever silently no-ops. | Merges MC's resolution semantics (parity graft) with DC's disabled-with-reason (purist graft). |
+| D19 | **Connection card layout** (2026-07-03) — the three full-width stacked cards wasted horizontal space when collapsed. | **Collapsed cards render as compact `StatusTile`s in an adaptive `LazyVGrid`** (min 240, max 420, `Space.s4` gaps); opening a tile expands that card **full-width below the grid**. Expanded content is byte-for-byte the previous card content — D1, the deploy form, and the Verify verbs are untouched. Tiles keep the Card material recipe (quaternary fill, concentric 12, never glass); hover is a quiet fill shift, no lift. | HIG: content cards use standard materials, adaptive grids reflow with the window (Layout); Liquid Glass stays out of the content layer (Materials). |
+| D20 | **Cloudflare Access removed** (2026-07-03) — the Access-gated sign-in modes were too convoluted to set up and blocked Claude.ai connectors at /mcp. | **Three sign-in methods, all enforced by MacRemote's own server:** OAuth Client Secret · Dynamic OAuth · **Single Header** (a MacRemote-generated bearer token sent as one `Authorization` header; validated by `OAuthCoordinator`, not the edge). Persisted Access modes migrate to Dynamic OAuth; deploys best-effort remove the leftover MacRemote Access app. Deploy stages drop *Protect endpoint* (four stages). | Federico's call 2026-07-03. One enforcement surface (the app) instead of two (app + Cloudflare Zero Trust). |
 
 ### 1.3 Grafts applied (source: idea)
 
@@ -162,13 +164,14 @@ Absorbs Dashboard (17) + Tunnel (36). Hard tier budget — above the fold: hero 
 │              │        ╰──────────────────────────────────────────────────────╯        │
 │              │            [ Stop Sharing ]   [ Stop Server ]                           │
 │              │   166 tools shared · 68 read-only · 98 ask first · 3 apps              │
+│              │  ┌ Address ──────────── ▸ ┐ ┌ Verify ───────────── ▸ ┐  ← tile grid   │
+│              │  │ Your Domain · Deployed ✓│ │ ✓ Quick Test · Jul 1   │   (collapsed   │
+│              │  └─────────────────────────┘ └────────────────────────┘    cards, D19) │
 │              │  ┌ Readiness ──────────────────────────────── All clear ✓ ▾ ┐          │
 │              │  │ ✓ Full Disk Access   ✓ Privacy Permissions  ✓ Local Server│         │
 │              │  │ ✓ Public URL         ✓ Shared Tools         ⚠ API Key     │         │
 │              │  │   (every row clickable in every state — D1)  [Check Readiness]      │
 │              │  └────────────────────────────────────────────────────────────┘        │
-│              │  ┌ Address — Your Domain · macremote.viticci.net · Deployed ✓  ▸ ┐     │
-│              │  ┌ Verify — Last test: Quick Test passed · Jul 1, 21:56         ▸ ┐     │
 │              │  Recent Activity (5 rows) ······················ [Open Activity]        │
 └──────────────┴─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -193,15 +196,15 @@ States (compound-state honesty — never average two states):
 
 Sub-facts line (Tier 1): each count is a live control — tool counts open Tools filtered; the **ask-first count opens a popover** listing gated tool *names*, capped with "and 62 more…" expander (kills the comma-wall); the apps count opens Apps.
 
-### 4.2 Readiness card
+### 4.2 Readiness card (open by default; collapses to a grid tile — D19)
 
 The real `SmokeReadiness` six-check machine replaces the fake Security Gates: Full Disk Access · Privacy Permissions · Local Server · Public URL · Shared Tools · **Anthropic API Key (labeled "Optional — for the full test")**. Each row: state glyph (`ready/checking/warning/blocked`), title, live detail string, **expandable in every state (D1)** — FDA expands the Access Fixer inline (all remediation actions); Privacy expands Check Access + Open Reminders Privacy deep link + requirement chips. **Check Readiness** runs the sequential preflight sweep (§8.3). A trailing ⓘ opens the **"How MacRemote protects this Mac"** popover carrying the eight former Security-Gates assurances, honestly framed as design guarantees ("By design: loopback-only server · no arbitrary shell commands · direct-argv adapters · one forwarded port · approval before tokens · per-call approval for writes · confirmed tunnel starts · Full Disk Access checked before start"). The card self-retires to "All clear ✓" per D16.
 
-### 4.3 Address card (collapsed by default; summary states mode + hostname + deploy state)
+### 4.3 Address card (collapsed by default into a grid tile — D19; tile states mode + hostname + deploy state)
 
-Expanded: two radio rows — **Instant Link** ("a temporary trycloudflare.com address; changes every time you go public") and **Your Domain** ("a stable address on a domain you own"). The Your-Domain form: **Load Domains** · Status · Domain picker · Subdomain field · live Hostname preview · **Sign-in method as a read-only row → "Change in Settings…"** (D11) · API Token `SecureField` with caption "MacRemote never stores this token — you'll paste it again next launch" · the ordered deploy-hint line (`customDomainDeployHint`) · **Deploy Your Domain** (disabled until the token is present — button and hint finally agree) · deploy progress as **five named stages**: *Check Cloudflare access → Create tunnel → Configure DNS → Protect endpoint → Start* — a failure lands on its stage, human line first, raw API text in a copyable mono disclosure; token errors add a "What your API token needs" popover (structured checklist) · post-deploy proof grid (Hostname / Tunnel / Protection) · mode-titled **Copy Credentials**. A ⓘ popover holds the Why-Cloudflare explainer. Instant-link running state adds: "This address changes when you go public again."
+Expanded: two radio rows — **Instant Link** ("a temporary trycloudflare.com address; changes every time you go public") and **Your Domain** ("a stable address on a domain you own"). The Your-Domain form: **Load Domains** · Status · Domain picker · Subdomain field · live Hostname preview · **Sign-in method as a read-only row → "Change in Settings…"** (D11) · API Token `SecureField` with caption "MacRemote never stores this token — you'll paste it again next launch" · the ordered deploy-hint line (`customDomainDeployHint`) · **Deploy Your Domain** (disabled until the token is present — button and hint finally agree) · deploy progress as **four named stages**: *Check Cloudflare access → Create tunnel → Configure DNS → Start* — a failure lands on its stage, human line first, raw API text in a copyable mono disclosure; token errors add a "What your API token needs" popover (structured checklist) · post-deploy proof grid (Hostname / Tunnel / Sign-in) · **Copy Header** when Single Header is the sign-in method. A ⓘ popover holds the Why-Cloudflare explainer. Instant-link running state adds: "This address changes when you go public again."
 
-### 4.4 Verify card (collapsed by default; summary = last result + time)
+### 4.4 Verify card (collapsed by default into a grid tile — D19; tile = pass/fail glyph + last result + time)
 
 Expanded: status line + last-result summary; visible buttons **Run Quick Test** · **Run Full Test** · **Test a Tool…** (picker defaulting to `remctl.today`, wired to `runToolTest` — D9), gated by readiness exactly as today; a **More ⌄ menu**: Copy Quick Test Command, Copy Full Test Command, Copy Last Result (redacted `clipboardText` proof), Refresh Tunnel Status, **Testing Guide** (in-app help sheet). "Last result" grid (Status/Mode/URL/Tool count/Result/technical markers, mono) behind [Details]. Copy Test Commands are dual-homed (also Server menu, §2.3).
 

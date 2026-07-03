@@ -284,6 +284,62 @@ extension Card where Summary == EmptyView {
     }
 }
 
+// MARK: - StatusTile (GUIDELINES §2 — a collapsed Card in grid form)
+
+/// The compact, grid-sized face of a collapsed section card. Same material
+/// recipe as `Card` (quaternary fill, concentric 12, never glass); the whole
+/// tile is one button that opens the full card. Hover is a quiet fill shift —
+/// content-layer tiles don't lift or glow.
+struct StatusTile<Summary: View>: View {
+    private let title: String
+    private let systemImage: String
+    private let open: () -> Void
+    private let summary: Summary
+
+    @State private var isHovering = false
+
+    init(
+        title: String,
+        systemImage: String,
+        open: @escaping () -> Void,
+        @ViewBuilder summary: () -> Summary
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.open = open
+        self.summary = summary()
+    }
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: Space.s2) {
+                HStack(spacing: Space.s2) {
+                    Image(systemName: systemImage)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text(title)
+                        .font(TypeRamp.cardTitle)
+                    Spacer(minLength: Space.s1)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                summary
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(Space.s4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(.quaternary.opacity(isHovering ? 0.55 : 0.4), in: AppShape.card)
+            .contentShape(AppShape.card)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(title)
+        .accessibilityValue("Collapsed")
+        .accessibilityHint("Opens the \(title) card")
+    }
+}
+
 // MARK: - KeyValueGrid (GUIDELINES §2 — aligned label + mono value rows)
 
 struct KeyValueRow: Identifiable, Equatable {

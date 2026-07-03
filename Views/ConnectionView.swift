@@ -9,6 +9,7 @@ struct ConnectionView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var expandAll = DetailsExpandAll()
+    @SceneStorage("connection.readinessCollapsed") private var isReadinessCollapsed = false
     @SceneStorage("connection.addressCollapsed") private var isAddressCollapsed = true
     @SceneStorage("connection.verifyCollapsed") private var isVerifyCollapsed = true
 
@@ -27,10 +28,17 @@ struct ConnectionView: View {
                         heroSection
                         subFactsLine
                         SetupChecklistSection()
-                        ConnectionReadinessCard()
-                            .id("connection.readiness")
-                        ConnectionAddressCard(isCollapsed: $isAddressCollapsed)
-                        ConnectionVerifyCard(isCollapsed: $isVerifyCollapsed, expandAll: $expandAll)
+                        statusTileGrid
+                        if !isReadinessCollapsed {
+                            ConnectionReadinessCard(isCollapsed: $isReadinessCollapsed)
+                                .id("connection.readiness")
+                        }
+                        if !isAddressCollapsed {
+                            ConnectionAddressCard(isCollapsed: $isAddressCollapsed)
+                        }
+                        if !isVerifyCollapsed {
+                            ConnectionVerifyCard(isCollapsed: $isVerifyCollapsed, expandAll: $expandAll)
+                        }
                         activityStrip
                     }
                     .padding(Space.s5)
@@ -40,11 +48,13 @@ struct ConnectionView: View {
                 .onChange(of: appModel.readinessRowToExpand) { _, row in
                     guard row != nil else { return }
                     withAnimation(.snappy) {
+                        isReadinessCollapsed = false
                         proxy.scrollTo("connection.readiness", anchor: .top)
                     }
                 }
                 .onAppear {
                     guard appModel.readinessRowToExpand != nil else { return }
+                    isReadinessCollapsed = false
                     proxy.scrollTo("connection.readiness", anchor: .top)
                 }
             }
@@ -79,6 +89,32 @@ struct ConnectionView: View {
         }
         .sheet(isPresented: $appModel.isTestingGuidePresented) {
             ConnectionTestingGuideSheet()
+        }
+    }
+
+    // MARK: Status tile grid (collapsed cards live here; open cards render full-width below)
+
+    private var statusTileGrid: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 240, maximum: 420), spacing: Space.s4, alignment: .topLeading)],
+            alignment: .leading,
+            spacing: Space.s4
+        ) {
+            if isReadinessCollapsed {
+                ConnectionReadinessTile {
+                    withAnimation(.snappy) { isReadinessCollapsed = false }
+                }
+            }
+            if isAddressCollapsed {
+                ConnectionAddressTile {
+                    withAnimation(.snappy) { isAddressCollapsed = false }
+                }
+            }
+            if isVerifyCollapsed {
+                ConnectionVerifyTile {
+                    withAnimation(.snappy) { isVerifyCollapsed = false }
+                }
+            }
         }
     }
 

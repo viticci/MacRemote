@@ -1,11 +1,26 @@
 import Foundation
 import SwiftUI
 
-enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
+/// How a remote MCP client signs in to MacRemote. Every mode is enforced by
+/// MacRemote's own server — nothing is gated at the tunnel edge.
+enum ConnectorAuthMode: String, CaseIterable, Identifiable, Sendable {
     case oauthClientSecret
     case macRemoteOAuthOnly
-    case serviceTokenHeaders
-    case serviceTokenAuthorizationHeader
+    case singleHeaderToken
+
+    /// Resolves a persisted raw value, migrating the retired Cloudflare
+    /// Access modes (pre-2026-07). Both of those modes also ran MacRemote
+    /// OAuth, so Dynamic OAuth keeps those clients connected once the edge
+    /// wall is gone.
+    static func from(persistedRawValue rawValue: String) -> ConnectorAuthMode? {
+        if let mode = ConnectorAuthMode(rawValue: rawValue) {
+            return mode
+        }
+        if rawValue == "serviceTokenHeaders" || rawValue == "serviceTokenAuthorizationHeader" {
+            return .macRemoteOAuthOnly
+        }
+        return nil
+    }
 
     var id: String { rawValue }
 
@@ -13,8 +28,7 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .oauthClientSecret: "OAuth Client Secret"
         case .macRemoteOAuthOnly: "Dynamic OAuth"
-        case .serviceTokenHeaders: "Access Headers"
-        case .serviceTokenAuthorizationHeader: "Single Header"
+        case .singleHeaderToken: "Single Header"
         }
     }
 
@@ -22,8 +36,7 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .oauthClientSecret: "Secret"
         case .macRemoteOAuthOnly: "Dynamic"
-        case .serviceTokenHeaders: "Headers"
-        case .serviceTokenAuthorizationHeader: "Single"
+        case .singleHeaderToken: "Header"
         }
     }
 
@@ -31,29 +44,12 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .oauthClientSecret: "key.fill"
         case .macRemoteOAuthOnly: "person.badge.key"
-        case .serviceTokenHeaders: "key.horizontal"
-        case .serviceTokenAuthorizationHeader: "key.card"
-        }
-    }
-
-    var requiresCloudflareAccess: Bool {
-        switch self {
-        case .serviceTokenHeaders, .serviceTokenAuthorizationHeader:
-            true
-        case .oauthClientSecret, .macRemoteOAuthOnly:
-            false
+        case .singleHeaderToken: "key.card"
         }
     }
 
     var requiresOAuthClientSecret: Bool {
         self == .oauthClientSecret
-    }
-
-    var readServiceTokensFromHeader: String? {
-        switch self {
-        case .serviceTokenAuthorizationHeader: "CF-Access-Service-Token"
-        case .oauthClientSecret, .macRemoteOAuthOnly, .serviceTokenHeaders: nil
-        }
     }
 
     var detail: String {
@@ -62,23 +58,8 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
             "MacRemote's own sign-in with the generated client ID and secret. New apps still need your approval to connect."
         case .macRemoteOAuthOnly:
             "Compatibility mode for apps that can't send a client ID and secret."
-        case .serviceTokenHeaders:
-            "Cloudflare Access service-token headers plus MacRemote OAuth. Only for clients that can send custom headers (Raycast) — Claude.ai connectors can't, and Access will block them at /mcp."
-        case .serviceTokenAuthorizationHeader:
-            "One Cloudflare Access header plus MacRemote OAuth. Only for clients that can send custom headers — Claude.ai connectors can't, and Access will block them at /mcp."
-        }
-    }
-
-    var deployDetail: String {
-        switch self {
-        case .oauthClientSecret:
-            "No Cloudflare Access app is created."
-        case .macRemoteOAuthOnly:
-            "No Cloudflare Access app is created."
-        case .serviceTokenHeaders:
-            "Creates Cloudflare Access credentials for two HTTP headers."
-        case .serviceTokenAuthorizationHeader:
-            "Creates Cloudflare Access credentials for one custom HTTP header."
+        case .singleHeaderToken:
+            "MacRemote generates a secret token the app sends as one Authorization header. For apps that can send custom headers but can't finish an OAuth sign-in."
         }
     }
 
@@ -88,10 +69,8 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
             "OAuth client secret"
         case .macRemoteOAuthOnly:
             "Dynamic OAuth only"
-        case .serviceTokenHeaders:
-            "Access headers + MacRemote OAuth"
-        case .serviceTokenAuthorizationHeader:
-            "Single Access header + MacRemote OAuth"
+        case .singleHeaderToken:
+            "Single header token"
         }
     }
 
@@ -101,9 +80,7 @@ enum CloudflareAccessMode: String, CaseIterable, Identifiable, Sendable {
             "Copy OAuth Credentials"
         case .macRemoteOAuthOnly:
             "Copy OAuth URL"
-        case .serviceTokenHeaders:
-            "Copy Headers"
-        case .serviceTokenAuthorizationHeader:
+        case .singleHeaderToken:
             "Copy Header"
         }
     }
@@ -153,57 +130,52 @@ enum ConnectorProviderProfile: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var recommendedAccessMode: CloudflareAccessMode {
+    var recommendedAuthMode: ConnectorAuthMode {
         switch self {
-        case .raycast: .serviceTokenHeaders
+        case .raycast: .macRemoteOAuthOnly
         case .claude, .notion, .generic: .oauthClientSecret
         }
     }
 
-    func status(for mode: CloudflareAccessMode) -> ConnectorCompatibility {
+    func status(for mode: ConnectorAuthMode) -> ConnectorCompatibility {
         switch (self, mode) {
-        case (.raycast, .serviceTokenHeaders),
+        case (.raycast, .macRemoteOAuthOnly),
              (.claude, .oauthClientSecret),
              (.notion, .oauthClientSecret),
              (.generic, .oauthClientSecret):
             .recommended
         case (.raycast, .oauthClientSecret),
-             (.raycast, .macRemoteOAuthOnly),
-             (.raycast, .serviceTokenAuthorizationHeader),
+             (.raycast, .singleHeaderToken),
              (.claude, .macRemoteOAuthOnly),
              (.notion, .macRemoteOAuthOnly),
              (.generic, .macRemoteOAuthOnly),
-             (.generic, .serviceTokenHeaders),
-             (.generic, .serviceTokenAuthorizationHeader):
+             (.generic, .singleHeaderToken):
             .works
-        case (.notion, .serviceTokenAuthorizationHeader):
-            .limited
-        case (.claude, .serviceTokenHeaders),
-             (.claude, .serviceTokenAuthorizationHeader),
-             (.notion, .serviceTokenHeaders):
+        case (.claude, .singleHeaderToken),
+             (.notion, .singleHeaderToken):
             .blocked
         }
     }
 
-    func setupLine(for mode: CloudflareAccessMode) -> String {
+    func setupLine(for mode: ConnectorAuthMode) -> String {
         switch status(for: mode) {
         case .recommended:
             switch self {
             case .raycast:
-                "Use Dynamic OAuth and copied Access headers."
+                "Add MacRemote's URL and approve the sign-in request when Raycast asks."
             case .claude:
                 "Paste MacRemote's OAuth client ID and secret into Claude."
             case .notion:
                 "Paste MacRemote's OAuth client ID and secret into Notion."
             case .generic:
-                "Start with OAuth Client Secret; add Access only if the app sends headers."
+                "Start with OAuth Client Secret; use Single Header only for apps that can't sign in."
             }
         case .works:
-            "Works if the app sends the selected Access credential."
+            "Works — connect, then approve the request in MacRemote."
         case .limited:
             "Works only if the app can send this header and still finish signing in."
         case .blocked:
-            "Use \(recommendedAccessMode.title) for \(title)."
+            "This app can't send custom headers. Use \(recommendedAuthMode.title) for \(title)."
         }
     }
 }

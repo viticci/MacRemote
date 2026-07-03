@@ -1,12 +1,11 @@
 import SwiftUI
 
-// MARK: - DeployStageList (SPEC §4.3 — five named stages, failure lands on its stage)
+// MARK: - DeployStageList (SPEC §4.3 — four named stages, failure lands on its stage)
 
 enum DeployStage: Int, CaseIterable, Identifiable {
     case checkAccess
     case createTunnel
     case configureDNS
-    case protectEndpoint
     case start
 
     var id: Int { rawValue }
@@ -16,7 +15,6 @@ enum DeployStage: Int, CaseIterable, Identifiable {
         case .checkAccess: "Check Cloudflare access"
         case .createTunnel: "Create tunnel"
         case .configureDNS: "Configure DNS"
-        case .protectEndpoint: "Protect endpoint"
         case .start: "Start"
         }
     }

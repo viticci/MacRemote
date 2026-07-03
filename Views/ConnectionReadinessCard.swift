@@ -7,7 +7,7 @@ struct ConnectionReadinessCard: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @SceneStorage("connection.readinessCollapsed") private var isCollapsed = false
+    @Binding var isCollapsed: Bool
     @State private var expandedRows: Set<ReadinessRow> = []
     @State private var isShowingProtections = false
 
@@ -85,45 +85,7 @@ struct ConnectionReadinessCard: View {
     }
 
     private func summaryLine(_ readiness: SmokeReadiness) -> some View {
-        let unfinished = readiness.checks.filter {
-            $0.status != .ready && $0.id != ReadinessRow.anthropicKey.rawValue
-        }
-        // A real problem (blocked/warning) is alarming; a row that is merely
-        // waiting for the user to start the server is not.
-        let problems = unfinished.filter { $0.status == .blocked || $0.status == .warning }
-
-        return HStack(spacing: Space.s2) {
-            if unfinished.isEmpty {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .accessibilityHidden(true)
-                Text("All clear")
-                    .font(TypeRamp.rowDetail)
-            } else if problems.isEmpty {
-                Image(systemName: "circle.dashed")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                Text("Ready when you start the server")
-                    .font(TypeRamp.rowDetail)
-                    .foregroundStyle(.secondary)
-            } else {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .accessibilityHidden(true)
-                Text(problemSummary(problems))
-                    .font(TypeRamp.rowDetail)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func problemSummary(_ problems: [SmokeReadinessCheck]) -> String {
-        guard let first = problems.first,
-              let row = ReadinessRow(rawValue: first.id) else {
-            return "Checking"
-        }
-        let title = ConnectionReadinessRowView.title(for: row)
-        return problems.count == 1 ? "\(title) needs attention" : "\(problems.count) checks need attention — first: \(title)"
+        ConnectionReadinessSummary(readiness: readiness)
     }
 
     private var footer: some View {
@@ -146,6 +108,67 @@ struct ConnectionReadinessCard: View {
             .popover(isPresented: $isShowingProtections, arrowEdge: .bottom) {
                 ConnectionProtectionsPopover()
             }
+        }
+    }
+}
+
+// MARK: - Collapsed faces (summary + grid tile)
+
+/// One truthful line for the collapsed card and the grid tile (Rule 24).
+struct ConnectionReadinessSummary: View {
+    let readiness: SmokeReadiness
+
+    var body: some View {
+        let unfinished = readiness.checks.filter {
+            $0.status != .ready && $0.id != ReadinessRow.anthropicKey.rawValue
+        }
+        // A real problem (blocked/warning) is alarming; a row that is merely
+        // waiting for the user to start the server is not.
+        let problems = unfinished.filter { $0.status == .blocked || $0.status == .warning }
+
+        HStack(spacing: Space.s2) {
+            if unfinished.isEmpty {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .accessibilityHidden(true)
+                Text("All clear")
+                    .font(TypeRamp.rowDetail)
+            } else if problems.isEmpty {
+                Image(systemName: "circle.dashed")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text("Ready when you start the server")
+                    .font(TypeRamp.rowDetail)
+                    .foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                Text(Self.problemSummary(problems))
+                    .font(TypeRamp.rowDetail)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(2)
+    }
+
+    private static func problemSummary(_ problems: [SmokeReadinessCheck]) -> String {
+        guard let first = problems.first,
+              let row = ReadinessRow(rawValue: first.id) else {
+            return "Checking"
+        }
+        let title = ConnectionReadinessRowView.title(for: row)
+        return problems.count == 1 ? "\(title) needs attention" : "\(problems.count) checks need attention — first: \(title)"
+    }
+}
+
+struct ConnectionReadinessTile: View {
+    @Environment(AppModel.self) private var appModel
+    let open: () -> Void
+
+    var body: some View {
+        StatusTile(title: "Readiness", systemImage: "list.bullet.clipboard", open: open) {
+            ConnectionReadinessSummary(readiness: appModel.smokeReadiness)
         }
     }
 }

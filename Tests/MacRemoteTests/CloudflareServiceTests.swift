@@ -35,47 +35,40 @@ struct CloudflareServiceTests {
         )
     }
 
-    @Test func standardHeadersJSONUsesCloudflareAccessHeaderNames() throws {
-        let credentials = CloudflareAccessCredentials(
-            clientID: "client-id",
-            clientSecret: "client-secret"
+    private static func makeService(session: URLSession) -> CloudflareService {
+        CloudflareService(
+            session: session,
+            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
         )
-        let data = try #require(credentials.standardHeadersJSON.data(using: .utf8))
-        let decoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
-
-        #expect(decoded["CF-Access-Client-Id"] == "client-id")
-        #expect(decoded["CF-Access-Client-Secret"] == "client-secret")
-        #expect(decoded["Authorization"] == nil)
     }
 
-    @Test func singleHeaderJSONUsesCloudflareSingleHeaderPayload() throws {
-        let credentials = CloudflareAccessCredentials(
-            clientID: "client-id",
-            clientSecret: "client-secret"
-        )
-        let data = try #require(credentials.singleHeaderJSON.data(using: .utf8))
-        let decoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
-        let headerValue = try #require(decoded["CF-Access-Service-Token"])
-        let headerData = try #require(headerValue.data(using: .utf8))
-        let headerPayload = try #require(JSONSerialization.jsonObject(with: headerData) as? [String: String])
-
-        #expect(headerPayload["cf-access-client-id"] == "client-id")
-        #expect(headerPayload["cf-access-client-secret"] == "client-secret")
-        #expect(decoded["CF-Access-Client-Id"] == nil)
-        #expect(decoded["Authorization"] == nil)
-    }
-
-    @Test func deployCustomDomainUsesZoneScopedAccessEndpoints() async throws {
+    private static func mockSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
+        return URLSession(configuration: config)
+    }
+
+    private static func deploy(_ service: CloudflareService) async throws -> CloudflareCustomDomainDeployment {
+        try await service.deployCustomDomain(
+            zone: CloudflareZone(
+                id: "zone-id",
+                name: "viticci.net",
+                accountID: "account-id",
+                accountName: "Viticci"
+            ),
+            subdomain: "macremote",
+            localServerURL: URL(string: "http://127.0.0.1:8765")!,
+            apiToken: "test-token"
+        )
+    }
+
+    @Test func deployCustomDomainProvisionsTunnelAndDNSOnly() async throws {
+        let session = Self.mockSession()
         let hostname = "macremote.viticci.net"
 
         CloudflareURLProtocolMock.install([
             .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
             .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/service_tokens", result: []),
             .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
             .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
             .success(method: "POST", path: "/accounts/account-id/cfd_tunnel", result: [
@@ -90,419 +83,31 @@ struct CloudflareServiceTests {
                 "content": "tunnel-id.cfargotunnel.com",
                 "comment": "MacRemote Cloudflare Tunnel"
             ]),
-            .success(method: "POST", path: "/zones/zone-id/access/apps", result: [
-                "id": "app-id",
-                "name": "MacRemote \(hostname)",
-                "domain": CloudflareService.accessApplicationDomain(hostname: hostname)
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/service_tokens", result: [
-                "id": "service-token-id",
-                "client_id": "client-id",
-                "client_secret": "client-secret"
-            ]),
-            .success(method: "GET", path: "/zones/zone-id/access/apps/app-id/policies", result: []),
-            .success(method: "POST", path: "/zones/zone-id/access/apps/app-id/policies", result: [:]),
             .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
         ])
 
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-        let deployment = try await service.deployCustomDomain(
-            zone: CloudflareZone(
-                id: "zone-id",
-                name: "viticci.net",
-                accountID: "account-id",
-                accountName: "Viticci"
-            ),
-            subdomain: "macremote",
-            localServerURL: URL(string: "http://127.0.0.1:8765")!,
-            accessMode: .serviceTokenHeaders,
-            apiToken: "test-token"
-        )
+        let deployment = try await Self.deploy(Self.makeService(session: session))
 
         let requests = CloudflareURLProtocolMock.requestedPaths()
         #expect(deployment.hostname == hostname)
-        #expect(deployment.accessCredentials?.clientID == "client-id")
-        #expect(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/apps") })
-        #expect(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/service_tokens") })
-        #expect(requests.contains("POST /zones/zone-id/access/apps"))
-        #expect(requests.contains("POST /zones/zone-id/access/service_tokens"))
-        #expect(requests.contains { $0.hasPrefix("GET /zones/zone-id/access/apps/app-id/policies") })
-        #expect(requests.contains("POST /zones/zone-id/access/apps/app-id/policies"))
-        #expect((requests.contains { $0.contains("/accounts/account-id/access") }) == false)
+        #expect(deployment.tunnelToken == "tunnel-token")
+        #expect(deployment.legacyAccessCleanup == nil)
+        // Access is checked once, only to clean up pre-2026-07 leftovers —
+        // nothing Access-related is ever created.
+        #expect(requests.filter { $0.hasPrefix("GET /zones/zone-id/access/apps") }.count == 1)
+        #expect((requests.contains { $0.hasPrefix("POST /zones/zone-id/access") }) == false)
+        #expect((requests.contains { $0.contains("service_tokens") }) == false)
+        #expect((requests.contains { $0.contains("/policies") }) == false)
     }
 
-    @Test func deployCustomDomainCanConfigureSingleCloudflareAccessHeader() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
-        let hostname = "macremote.viticci.net"
-
-        CloudflareURLProtocolMock.install([
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/service_tokens", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "POST", path: "/accounts/account-id/cfd_tunnel", result: [
-                "id": "tunnel-id",
-                "name": "macremote-macremote-viticci-net"
-            ]),
-            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "POST", path: "/zones/zone-id/dns_records", result: [
-                "id": "dns-id",
-                "name": hostname,
-                "content": "tunnel-id.cfargotunnel.com",
-                "comment": "MacRemote Cloudflare Tunnel"
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/apps", result: [
-                "id": "app-id",
-                "name": "MacRemote \(hostname)",
-                "domain": CloudflareService.accessApplicationDomain(hostname: hostname)
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/service_tokens", result: [
-                "id": "service-token-id",
-                "client_id": "client-id",
-                "client_secret": "client-secret"
-            ]),
-            .success(method: "GET", path: "/zones/zone-id/access/apps/app-id/policies", result: []),
-            .success(method: "POST", path: "/zones/zone-id/access/apps/app-id/policies", result: [:]),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
-        ])
-
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-        let deployment = try await service.deployCustomDomain(
-            zone: CloudflareZone(
-                id: "zone-id",
-                name: "viticci.net",
-                accountID: "account-id",
-                accountName: "Viticci"
-            ),
-            subdomain: "macremote",
-            localServerURL: URL(string: "http://127.0.0.1:8765")!,
-            accessMode: .serviceTokenAuthorizationHeader,
-            apiToken: "test-token"
-        )
-
-        let appBody = try #require(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/access/apps"])
-        #expect(appBody["read_service_tokens_from_header"] as? String == "CF-Access-Service-Token")
-        #expect(deployment.accessMode == .serviceTokenAuthorizationHeader)
-        #expect(deployment.accessCredentials?.singleHeaderJSON.contains("\"CF-Access-Service-Token\"") == true)
-    }
-
-    @Test func deployCustomDomainUsesNextFreePolicyPrecedence() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
-        let hostname = "macremote.viticci.net"
-
-        CloudflareURLProtocolMock.install([
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/service_tokens", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "POST", path: "/accounts/account-id/cfd_tunnel", result: [
-                "id": "tunnel-id",
-                "name": "macremote-macremote-viticci-net"
-            ]),
-            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "POST", path: "/zones/zone-id/dns_records", result: [
-                "id": "dns-id",
-                "name": hostname,
-                "content": "tunnel-id.cfargotunnel.com",
-                "comment": "MacRemote Cloudflare Tunnel"
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/apps", result: [
-                "id": "app-id",
-                "name": "MacRemote \(hostname)",
-                "domain": CloudflareService.accessApplicationDomain(hostname: hostname)
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/service_tokens", result: [
-                "id": "service-token-id",
-                "client_id": "client-id",
-                "client_secret": "client-secret"
-            ]),
-            .success(method: "GET", path: "/zones/zone-id/access/apps/app-id/policies", result: [
-                [
-                    "id": "other-policy-id",
-                    "name": "Other Policy",
-                    "precedence": 1
-                ]
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/apps/app-id/policies", result: [:]),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
-        ])
-
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-        _ = try await service.deployCustomDomain(
-            zone: CloudflareZone(
-                id: "zone-id",
-                name: "viticci.net",
-                accountID: "account-id",
-                accountName: "Viticci"
-            ),
-            subdomain: "macremote",
-            localServerURL: URL(string: "http://127.0.0.1:8765")!,
-            accessMode: .serviceTokenHeaders,
-            apiToken: "test-token"
-        )
-
-        let policyBody = try #require(CloudflareURLProtocolMock.requestBodies()["POST /zones/zone-id/access/apps/app-id/policies"])
-        #expect(policyBody["precedence"] as? Int == 2)
-    }
-
-    @Test func deployCustomDomainUpdatesExistingMacRemotePolicy() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
-        let hostname = "macremote.viticci.net"
-
-        CloudflareURLProtocolMock.install([
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/service_tokens", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "POST", path: "/accounts/account-id/cfd_tunnel", result: [
-                "id": "tunnel-id",
-                "name": "macremote-macremote-viticci-net"
-            ]),
-            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "POST", path: "/zones/zone-id/dns_records", result: [
-                "id": "dns-id",
-                "name": hostname,
-                "content": "tunnel-id.cfargotunnel.com",
-                "comment": "MacRemote Cloudflare Tunnel"
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/apps", result: [
-                "id": "app-id",
-                "name": "MacRemote \(hostname)",
-                "domain": CloudflareService.accessApplicationDomain(hostname: hostname)
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/service_tokens", result: [
-                "id": "new-service-token-id",
-                "client_id": "client-id",
-                "client_secret": "client-secret"
-            ]),
-            .success(method: "GET", path: "/zones/zone-id/access/apps/app-id/policies", result: [
-                [
-                    "id": "macremote-policy-id",
-                    "name": "MacRemote Raycast Service Token old-token",
-                    "precedence": 1
-                ]
-            ]),
-            .success(method: "PUT", path: "/zones/zone-id/access/apps/app-id/policies/macremote-policy-id", result: [:]),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
-        ])
-
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-        _ = try await service.deployCustomDomain(
-            zone: CloudflareZone(
-                id: "zone-id",
-                name: "viticci.net",
-                accountID: "account-id",
-                accountName: "Viticci"
-            ),
-            subdomain: "macremote",
-            localServerURL: URL(string: "http://127.0.0.1:8765")!,
-            accessMode: .serviceTokenHeaders,
-            apiToken: "test-token"
-        )
-
-        let policyBody = try #require(CloudflareURLProtocolMock.requestBodies()["PUT /zones/zone-id/access/apps/app-id/policies/macremote-policy-id"])
-        #expect(policyBody["precedence"] as? Int == 1)
-        let include = try #require(policyBody["include"] as? [[String: [String: String]]])
-        #expect(include.first?["service_token"]?["token_id"] == "new-service-token-id")
-        #expect(CloudflareURLProtocolMock.requestedPaths().contains("POST /zones/zone-id/access/apps/app-id/policies") == false)
-    }
-
-    @Test func deployCustomDomainMigratesLegacyWholeHostAccessApplication() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
-        let hostname = "macremote.viticci.net"
-        let tunnelName = CloudflareService.tunnelName(hostname: hostname)
-        let accessDomain = CloudflareService.accessApplicationDomain(hostname: hostname)
-
-        CloudflareURLProtocolMock.install([
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/service_tokens", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: [
-                [
-                    "id": "legacy-app-id",
-                    "name": "MacRemote \(hostname)",
-                    "domain": hostname
-                ]
-            ]),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: [
-                [
-                    "id": "tunnel-id",
-                    "name": tunnelName,
-                    "deleted_at": NSNull()
-                ]
-            ]),
-            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: [
-                [
-                    "id": "dns-id",
-                    "name": hostname,
-                    "content": "tunnel-id.cfargotunnel.com",
-                    "comment": "MacRemote Cloudflare Tunnel"
-                ]
-            ]),
-            .success(method: "PATCH", path: "/zones/zone-id/dns_records/dns-id", result: [
-                "id": "dns-id",
-                "name": hostname,
-                "content": "tunnel-id.cfargotunnel.com",
-                "comment": "MacRemote Cloudflare Tunnel"
-            ]),
-            .success(method: "PUT", path: "/zones/zone-id/access/apps/legacy-app-id", result: [
-                "id": "legacy-app-id",
-                "name": "MacRemote \(hostname)",
-                "domain": accessDomain
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/service_tokens", result: [
-                "id": "service-token-id",
-                "client_id": "client-id",
-                "client_secret": "client-secret"
-            ]),
-            .success(method: "GET", path: "/zones/zone-id/access/apps/legacy-app-id/policies", result: []),
-            .success(method: "POST", path: "/zones/zone-id/access/apps/legacy-app-id/policies", result: [:]),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
-        ])
-
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-        _ = try await service.deployCustomDomain(
-            zone: CloudflareZone(
-                id: "zone-id",
-                name: "viticci.net",
-                accountID: "account-id",
-                accountName: "Viticci"
-            ),
-            subdomain: "macremote",
-            localServerURL: URL(string: "http://127.0.0.1:8765")!,
-            accessMode: .serviceTokenHeaders,
-            apiToken: "test-token"
-        )
-
-        #expect(
-            CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id"))
-    }
-
-    @Test func deployCustomDomainMigratesLegacyMCPWildcardAccessApplication() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
-        let hostname = "macremote.viticci.net"
-        let tunnelName = CloudflareService.tunnelName(hostname: hostname)
-        let accessDomain = CloudflareService.accessApplicationDomain(hostname: hostname)
-
-        CloudflareURLProtocolMock.install([
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/service_tokens", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: [
-                [
-                    "id": "legacy-app-id",
-                    "name": "MacRemote \(hostname)",
-                    "domain": "\(hostname)/mcp/*"
-                ]
-            ]),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: [
-                [
-                    "id": "tunnel-id",
-                    "name": tunnelName,
-                    "deleted_at": NSNull()
-                ]
-            ]),
-            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
-            .success(method: "GET", path: "/zones/zone-id/dns_records", result: [
-                [
-                    "id": "dns-id",
-                    "name": hostname,
-                    "content": "tunnel-id.cfargotunnel.com",
-                    "comment": "MacRemote Cloudflare Tunnel"
-                ]
-            ]),
-            .success(method: "PATCH", path: "/zones/zone-id/dns_records/dns-id", result: [
-                "id": "dns-id",
-                "name": hostname,
-                "content": "tunnel-id.cfargotunnel.com",
-                "comment": "MacRemote Cloudflare Tunnel"
-            ]),
-            .success(method: "PUT", path: "/zones/zone-id/access/apps/legacy-app-id", result: [
-                "id": "legacy-app-id",
-                "name": "MacRemote \(hostname)",
-                "domain": accessDomain
-            ]),
-            .success(method: "POST", path: "/zones/zone-id/access/service_tokens", result: [
-                "id": "service-token-id",
-                "client_id": "client-id",
-                "client_secret": "client-secret"
-            ]),
-            .success(method: "GET", path: "/zones/zone-id/access/apps/legacy-app-id/policies", result: []),
-            .success(method: "POST", path: "/zones/zone-id/access/apps/legacy-app-id/policies", result: [:]),
-            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
-        ])
-
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-        _ = try await service.deployCustomDomain(
-            zone: CloudflareZone(
-                id: "zone-id",
-                name: "viticci.net",
-                accountID: "account-id",
-                accountName: "Viticci"
-            ),
-            subdomain: "macremote",
-            localServerURL: URL(string: "http://127.0.0.1:8765")!,
-            accessMode: .serviceTokenHeaders,
-            apiToken: "test-token"
-        )
-
-        #expect(
-            CloudflareURLProtocolMock.requestedPaths().contains("PUT /zones/zone-id/access/apps/legacy-app-id"))
-        #expect(
-            CloudflareURLProtocolMock.requestedPaths().contains("POST /zones/zone-id/access/apps") == false)
-    }
-
-    @Test func deployCustomDomainOAuthOnlyDeletesExistingMacRemoteAccessApplication() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
+    @Test func deployCustomDomainDeletesLegacyMacRemoteAccessApplication() async throws {
+        let session = Self.mockSession()
         let hostname = "macremote.viticci.net"
         let tunnelName = CloudflareService.tunnelName(hostname: hostname)
 
         CloudflareURLProtocolMock.install([
             .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
             .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
             .success(method: "GET", path: "/zones/zone-id/access/apps", result: [
                 [
                     "id": "access-app-id",
@@ -529,75 +134,86 @@ struct CloudflareServiceTests {
             .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
         ])
 
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-        let deployment = try await service.deployCustomDomain(
-            zone: CloudflareZone(
-                id: "zone-id",
-                name: "viticci.net",
-                accountID: "account-id",
-                accountName: "Viticci"
-            ),
-            subdomain: "macremote",
-            localServerURL: URL(string: "http://127.0.0.1:8765")!,
-            accessMode: .macRemoteOAuthOnly,
-            apiToken: "test-token"
-        )
+        let deployment = try await Self.deploy(Self.makeService(session: session))
 
         let requests = CloudflareURLProtocolMock.requestedPaths()
-        #expect(deployment.accessCredentials == nil)
         #expect(requests.contains("DELETE /zones/zone-id/access/apps/access-app-id"))
-        #expect(requests.contains("POST /zones/zone-id/access/service_tokens") == false)
-        #expect((requests.contains { $0.contains("/policies") }) == false)
+        #expect(deployment.legacyAccessCleanup?.contains("Removed the Cloudflare Access app") == true)
     }
 
-    @Test func deployCustomDomainOAuthOnlyRejectsNonMacRemoteAccessApplication() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CloudflareURLProtocolMock.self]
-        let session = URLSession(configuration: config)
+    @Test func deployCustomDomainLeavesForeignAccessApplicationUntouched() async throws {
+        let session = Self.mockSession()
         let hostname = "macremote.viticci.net"
+        let tunnelName = CloudflareService.tunnelName(hostname: hostname)
 
         CloudflareURLProtocolMock.install([
             .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
             .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
-            .success(method: "GET", path: "/zones/zone-id/access/apps", result: []),
             .success(method: "GET", path: "/zones/zone-id/access/apps", result: [
                 [
                     "id": "other-access-app-id",
                     "name": "Other Product",
                     "domain": CloudflareService.accessApplicationDomain(hostname: hostname)
                 ]
-            ])
+            ]),
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: [
+                [
+                    "id": "tunnel-id",
+                    "name": tunnelName,
+                    "deleted_at": NSNull()
+                ]
+            ]),
+            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
+            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
+            .success(method: "POST", path: "/zones/zone-id/dns_records", result: [
+                "id": "dns-id",
+                "name": hostname,
+                "content": "tunnel-id.cfargotunnel.com",
+                "comment": "MacRemote Cloudflare Tunnel"
+            ]),
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
         ])
 
-        let service = CloudflareService(
-            session: session,
-            executablePath: { name in name == "cloudflared" ? "/usr/local/bin/cloudflared" : nil }
-        )
-
-        do {
-            _ = try await service.deployCustomDomain(
-                zone: CloudflareZone(
-                    id: "zone-id",
-                    name: "viticci.net",
-                    accountID: "account-id",
-                    accountName: "Viticci"
-                ),
-                subdomain: "macremote",
-                localServerURL: URL(string: "http://127.0.0.1:8765")!,
-                accessMode: .macRemoteOAuthOnly,
-                apiToken: "test-token"
-            )
-            Issue.record("Expected deployment to reject the existing non-MacRemote Access application.")
-        } catch {
-            #expect(error as? CloudflareServiceError == .existingAccessApplication(hostname))
-        }
+        let deployment = try await Self.deploy(Self.makeService(session: session))
 
         let requests = CloudflareURLProtocolMock.requestedPaths()
-        #expect((requests.contains { $0.contains("/configurations") }) == false)
         #expect((requests.contains { $0.hasPrefix("DELETE ") }) == false)
+        #expect(deployment.legacyAccessCleanup?.contains("not created by MacRemote") == true)
+    }
+
+    @Test func deployCustomDomainToleratesAccessLookupFailure() async throws {
+        let session = Self.mockSession()
+        let hostname = "macremote.viticci.net"
+        let tunnelName = CloudflareService.tunnelName(hostname: hostname)
+
+        CloudflareURLProtocolMock.install([
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: []),
+            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
+            // A token without Access permissions: the legacy-cleanup lookup
+            // fails, and the deploy must carry on regardless.
+            .failure(method: "GET", path: "/zones/zone-id/access/apps", message: "Authentication error"),
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel", result: [
+                [
+                    "id": "tunnel-id",
+                    "name": tunnelName,
+                    "deleted_at": NSNull()
+                ]
+            ]),
+            .success(method: "PUT", path: "/accounts/account-id/cfd_tunnel/tunnel-id/configurations", result: [:]),
+            .success(method: "GET", path: "/zones/zone-id/dns_records", result: []),
+            .success(method: "POST", path: "/zones/zone-id/dns_records", result: [
+                "id": "dns-id",
+                "name": hostname,
+                "content": "tunnel-id.cfargotunnel.com",
+                "comment": "MacRemote Cloudflare Tunnel"
+            ]),
+            .success(method: "GET", path: "/accounts/account-id/cfd_tunnel/tunnel-id/token", result: "tunnel-token")
+        ])
+
+        let deployment = try await Self.deploy(Self.makeService(session: session))
+
+        #expect(deployment.hostname == hostname)
+        #expect(deployment.legacyAccessCleanup == nil)
     }
 
     @Test func wranglerOAuthTokenProviderParsesQuotedToken() {
@@ -767,6 +383,17 @@ private struct CloudflareMockResponse: Sendable {
         ]
         let body = try! JSONSerialization.data(withJSONObject: payload)
         return CloudflareMockResponse(method: method, path: path, statusCode: 200, body: body)
+    }
+
+    static func failure(method: String, path: String, message: String, statusCode: Int = 403) -> CloudflareMockResponse {
+        let payload: [String: Any] = [
+            "success": false,
+            "errors": [["message": message]],
+            "messages": [],
+            "result": NSNull()
+        ]
+        let body = try! JSONSerialization.data(withJSONObject: payload)
+        return CloudflareMockResponse(method: method, path: path, statusCode: statusCode, body: body)
     }
 }
 

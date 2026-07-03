@@ -50,10 +50,10 @@ private struct GeneralSettingsPane: View {
                 // D11: the singleton Sign-in method picker. The Address card
                 // shows the chosen mode read-only and points back here.
                 Picker("Sign-in method", selection: Binding(
-                    get: { appModel.cloudflareDraft.accessMode },
-                    set: { appModel.setCloudflareAccessMode($0) }
+                    get: { appModel.connectorAuthMode },
+                    set: { appModel.setConnectorAuthMode($0) }
                 )) {
-                    ForEach(CloudflareAccessMode.allCases) { mode in
+                    ForEach(ConnectorAuthMode.allCases) { mode in
                         Label(mode.title, systemImage: mode.systemImage)
                             .tag(mode)
                     }
@@ -61,7 +61,7 @@ private struct GeneralSettingsPane: View {
 
                 ConnectorCompatibilitySummary(
                     provider: appModel.connectorProvider,
-                    accessMode: appModel.cloudflareDraft.accessMode
+                    authMode: appModel.connectorAuthMode
                 )
             }
 
@@ -81,10 +81,10 @@ private struct GeneralSettingsPane: View {
 
 private struct ConnectorCompatibilitySummary: View {
     let provider: ConnectorProviderProfile
-    let accessMode: CloudflareAccessMode
+    let authMode: ConnectorAuthMode
 
     private var compatibility: ConnectorCompatibility {
-        provider.status(for: accessMode)
+        provider.status(for: authMode)
     }
 
     var body: some View {
@@ -92,11 +92,11 @@ private struct ConnectorCompatibilitySummary: View {
             HStack(spacing: Space.s1) {
                 StateChip(provider.authLabel, systemImage: "person.badge.key", tint: .secondary)
                 StateChip(provider.headerLabel, systemImage: "curlybraces", tint: .secondary)
-                StateChip(accessMode.shortTitle, systemImage: accessMode.systemImage, tint: .secondary)
+                StateChip(authMode.shortTitle, systemImage: authMode.systemImage, tint: .secondary)
                 StateChip(compatibility.title, systemImage: compatibility.systemImage, tint: compatibility.tint)
             }
 
-            Text(provider.setupLine(for: accessMode))
+            Text(provider.setupLine(for: authMode))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -214,6 +214,9 @@ private struct SecuritySettingsPane: View {
             localServerSection
             appAccessSection
             credentialsSection
+            if appModel.connectorAuthMode == .singleHeaderToken {
+                headerTokenSection
+            }
         }
         .formStyle(.grouped)
         .confirmationDialog(
@@ -409,6 +412,40 @@ private struct SecuritySettingsPane: View {
 
     private var generateTitle: String {
         "Generate \(appModel.connectorProvider.title) Credentials"
+    }
+
+    // MARK: Single Header token (shown only in that sign-in mode)
+
+    private var headerTokenSection: some View {
+        Section("Single Header Token") {
+            Text("Apps in Single Header mode sign in by sending this as one Authorization header. Rotating it signs out any app that still sends the old one.")
+                .foregroundStyle(.secondary)
+
+            if let token = appModel.connectorHeaderToken {
+                KeyValueGrid(rows: [
+                    KeyValueRow("Token", token.clientSecret, isSensitive: true),
+                    KeyValueRow("Created", token.createdAt.formatted(date: .abbreviated, time: .shortened))
+                ]) { row in
+                    appModel.appendLog(level: .info, "Copied the Single Header \(row.label.lowercased()).")
+                }
+
+                HStack(spacing: Space.s2) {
+                    Button("Copy Header", systemImage: "doc.on.doc") {
+                        if let headerJSON = appModel.connectorHeaderTokenJSON {
+                            copyValue(headerJSON, auditLine: "Copied the Single Header sign-in header.")
+                        }
+                    }
+                    Button("Rotate Token", systemImage: "arrow.triangle.2.circlepath") {
+                        appModel.rotateConnectorHeaderToken()
+                    }
+                }
+            } else {
+                Button("Generate Header Token", systemImage: "key.card") {
+                    appModel.setConnectorAuthMode(.singleHeaderToken)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
     }
 
     private func copyValue(_ value: String, auditLine: String) {

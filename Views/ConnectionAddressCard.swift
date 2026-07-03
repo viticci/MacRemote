@@ -3,11 +3,58 @@ import SwiftUI
 
 // MARK: - Address card (SPEC §4.3 — Instant Link / Your Domain, five-stage deploy)
 
-struct ConnectionAddressCard: View {
-    private enum AddressMode: String {
-        case instantLink
-        case yourDomain
+fileprivate enum AddressMode: String {
+    case instantLink
+    case yourDomain
+}
+
+/// One truthful summary line shared by the collapsed card and the grid tile
+/// (Rule 24 — states mode + hostname + deploy state).
+@MainActor
+private func addressSummaryLine(appModel: AppModel, mode: AddressMode) -> String {
+    if appModel.tunnelStatus == .unavailable {
+        return "Cloudflare's helper isn't installed"
     }
+    if case .running(let base) = appModel.tunnelStatus {
+        if base.host() == appModel.lastCloudflareDeployment?.hostname {
+            return "Your Domain · \(base.host() ?? base.absoluteString) · Deployed ✓"
+        }
+        return "Instant Link · \(base.host() ?? base.absoluteString) · changes when you go public again"
+    }
+    switch appModel.cloudflareCustomDomainState {
+    case .deployed(let hostname):
+        return "Your Domain · \(hostname) · deployed, link off"
+    case .preparingLocalServer, .deploying, .loadingDomains:
+        return "Your Domain · \(appModel.cloudflareCustomDomainState.title)"
+    case .failed:
+        return mode == .yourDomain ? "Your Domain · Failed" : "Instant Link · not created yet"
+    case .idle, .ready:
+        return mode == .yourDomain
+            ? "Your Domain · not deployed yet"
+            : "Instant Link · not created yet"
+    }
+}
+
+struct ConnectionAddressTile: View {
+    @Environment(AppModel.self) private var appModel
+    @AppStorage("MacRemote.addressMode") private var storedMode = AddressMode.instantLink.rawValue
+    let open: () -> Void
+
+    var body: some View {
+        StatusTile(title: "Address", systemImage: "link", open: open) {
+            Text(addressSummaryLine(
+                appModel: appModel,
+                mode: AddressMode(rawValue: storedMode) ?? .instantLink
+            ))
+            .font(TypeRamp.rowDetail)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .truncationMode(.middle)
+        }
+    }
+}
+
+struct ConnectionAddressCard: View {
 
     @Environment(AppModel.self) private var appModel
     @Binding var isCollapsed: Bool
@@ -53,27 +100,7 @@ struct ConnectionAddressCard: View {
     // MARK: Summary (Rule 24 — states mode + hostname + deploy state)
 
     private var summaryLine: String {
-        if appModel.tunnelStatus == .unavailable {
-            return "Cloudflare's helper isn't installed"
-        }
-        if case .running(let base) = appModel.tunnelStatus {
-            if isRunningYourDomain(base) {
-                return "Your Domain · \(base.host() ?? base.absoluteString) · Deployed ✓"
-            }
-            return "Instant Link · \(base.host() ?? base.absoluteString) · changes when you go public again"
-        }
-        switch appModel.cloudflareCustomDomainState {
-        case .deployed(let hostname):
-            return "Your Domain · \(hostname) · deployed, link off"
-        case .preparingLocalServer, .deploying, .loadingDomains:
-            return "Your Domain · \(appModel.cloudflareCustomDomainState.title)"
-        case .failed:
-            return mode == .yourDomain ? "Your Domain · Failed" : "Instant Link · not created yet"
-        case .idle, .ready:
-            return mode == .yourDomain
-                ? "Your Domain · not deployed yet"
-                : "Instant Link · not created yet"
-        }
+        addressSummaryLine(appModel: appModel, mode: mode)
     }
 
     private func isRunningYourDomain(_ base: URL) -> Bool {
@@ -159,7 +186,7 @@ struct ConnectionAddressCard: View {
         }
         .buttonStyle(.borderless)
         .popover(isPresented: $isShowingWhyCloudflare, arrowEdge: .bottom) {
-            Text("Apps like Claude connect from the internet, so this Mac needs a public address. Cloudflare Tunnel creates one without opening any ports on your network — traffic forwards only to MacRemote's local server, and sign-in plus your approval still gate every tool call. Your Domain can add Cloudflare Access protection without changing what runs on this Mac.")
+            Text("Apps like Claude connect from the internet, so this Mac needs a public address. Cloudflare Tunnel creates one without opening any ports on your network — traffic forwards only to MacRemote's local server, and sign-in plus your approval still gate every tool call.")
                 .font(TypeRamp.rowDetail)
                 .padding(Space.s4)
                 .frame(width: 340)
@@ -232,7 +259,7 @@ struct ConnectionAddressCard: View {
             // D11 — the one Sign-in method picker lives in Settings; this row is read-only.
             LabeledContent("Sign-in method") {
                 HStack(spacing: Space.s2) {
-                    Text(appModel.cloudflareDraft.accessMode.title)
+                    Text(appModel.connectorAuthMode.title)
                     SettingsLink {
                         Text("Change in Settings…")
                     }
@@ -312,9 +339,7 @@ struct ConnectionAddressCard: View {
                 [
                     "Account · Cloudflare Tunnel · Read and Write",
                     "Zone · Zone · Read",
-                    "Zone · DNS · Read and Write",
-                    "Zone · Access Apps and Policies · Read and Write",
-                    "Zone · Access Service Tokens · Read and Write"
+                    "Zone · DNS · Read and Write"
                 ],
                 id: \.self
             ) { requirement in
@@ -340,19 +365,17 @@ struct ConnectionAddressCard: View {
                 rows: [
                     KeyValueRow("Hostname", deployment.hostname),
                     KeyValueRow("Tunnel", deployment.tunnelName),
-                    KeyValueRow("Protection", deployment.accessMode.protectionTitle)
+                    KeyValueRow("Sign-in", appModel.connectorAuthMode.protectionTitle)
                 ],
                 onCopy: { row in
                     appModel.appendLog(level: .info, "Copied \(row.label) from the last deploy.")
                 }
             )
-            Text(deployment.accessMode.deployDetail)
-                .font(TypeRamp.truthNote)
-                .foregroundStyle(.secondary)
-            if let credentialsJSON = appModel.cloudflareAccessCredentialsJSON {
-                Button(appModel.cloudflareAccessCopyButtonTitle) {
-                    copyToPasteboard(credentialsJSON)
-                    appModel.appendLog(level: .info, "Copied \(appModel.cloudflareAccessCopyButtonTitle.lowercased().replacingOccurrences(of: "copy ", with: "")) for \(deployment.hostname).")
+            if appModel.connectorAuthMode == .singleHeaderToken,
+               let headerJSON = appModel.connectorHeaderTokenJSON {
+                Button("Copy Header") {
+                    copyToPasteboard(headerJSON)
+                    appModel.appendLog(level: .info, "Copied the Single Header sign-in header for \(deployment.hostname).")
                 }
             }
         }
@@ -396,9 +419,6 @@ struct ConnectionAddressCard: View {
         }
         if lowered.contains("dns") {
             return .configureDNS
-        }
-        if lowered.contains("access") || lowered.contains("service token") {
-            return .protectEndpoint
         }
         if lowered.contains("cloudflared") {
             return .start

@@ -308,9 +308,9 @@ Security requirements:
 - Pending authorization requests expire automatically.
 - Denials are logged.
 
-Cloudflare Access can be added as an outer protection layer, but app-level OAuth
-and host approval are still required because Access is not the product's only
-security boundary.
+All sign-in modes — Dynamic OAuth, OAuth client secret, and the generated
+Single Header token — are enforced by MacRemote's own server. Nothing is gated
+at the tunnel edge, so there is no second configuration surface to keep in sync.
 
 ## Audit and User Control
 

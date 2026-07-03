@@ -88,8 +88,9 @@ Every component names what it replaces. `StatusPanel` (dead code), `HeaderView` 
 | `AppCard` | identity header (provider glyph, state, token counts) + Details grid + bulk verbs + grouped policy list with per-category `Allow ▾` | active · expired (gray) | ClientsView cards |
 | `LogRow` | mono time + level chip + message (2-line, selectable) + optional `lock.shield` prefix glyph | info/warning/error | LogsView row (promoted into the system) |
 | `SetupChecklist` | live-stated numbered steps card with jump links; collapses to "All set ✓" capsule on first completion; regression re-expands only the failing row (30 s debounce, one-shot notification escalation, never above a live hero) | leading · collapsed capsule · regression | ConnectionFlowPanel |
-| `DeployStageList` | five named stages (Check Cloudflare access → Create tunnel → Configure DNS → Protect endpoint → Start); failure lands on its stage: human line first, raw API text in copyable mono disclosure | pending/active/done/failed per stage | the single deploy spinner |
+| `DeployStageList` | four named stages (Check Cloudflare access → Create tunnel → Configure DNS → Start); failure lands on its stage: human line first, raw API text in copyable mono disclosure | pending/active/done/failed per stage | the single deploy spinner |
 | `EmptyState` | `ContentUnavailableView` wrapper enforcing the pattern: "No X yet." + plain-language trigger + CTA | list-empty · `.search` | bare empty panes |
+| `StatusTile` | the collapsed face of a Connection card, sized for an adaptive `LazyVGrid` (min 240 / max 420, `Space.s4` gaps — D19): icon + `cardTitle` + chevron header over the card's Rule-24 summary; same Card material recipe (quaternary 0.4 fill, concentric 12, **never glass**); the whole tile is one open button; hover = fill shift to 0.55, no lift | resting · hover | the three stacked full-width collapsed cards on Connection |
 
 **Disclosure behavior (app-wide):** `▸ Details` disclosures persist their state per section; **⌥-click expands every disclosure on the current page**. Collapsed summaries must state non-default values ("Your Domain · Deployed ✓").
 

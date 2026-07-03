@@ -654,7 +654,7 @@ struct WelcomeView: View {
                                 pasteboard.setString(credentials, forType: .string)
                                 appModel.appendLog(level: .info, "Copied sign-in credentials for \(appModel.connectorProvider.title).")
                             }
-                            Text("\(appModel.cloudflareDraft.accessMode.title) — paste these when the app asks to sign in.")
+                            Text("\(appModel.connectorAuthMode.title) — paste these when the app asks to sign in.")
                                 .font(TypeRamp.truthNote)
                                 .foregroundStyle(.secondary)
                         }
@@ -722,16 +722,16 @@ struct WelcomeView: View {
     }
 
     private var signInCredentialsValue: String? {
-        let mode = appModel.cloudflareDraft.accessMode
-        if mode.requiresOAuthClientSecret {
-            return appModel.oauthClientCredentials.first.flatMap {
+        switch appModel.connectorAuthMode {
+        case .oauthClientSecret:
+            appModel.oauthClientCredentials.first.flatMap {
                 appModel.oauthClientCredentialsJSON(for: $0)
             }
+        case .singleHeaderToken:
+            appModel.connectorHeaderTokenJSON
+        case .macRemoteOAuthOnly:
+            nil
         }
-        if mode.requiresCloudflareAccess {
-            return appModel.cloudflareAccessCredentialsJSON
-        }
-        return nil
     }
 
     /// The sticky moment: the waiting row flips in place into the real approval

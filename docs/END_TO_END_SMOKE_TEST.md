@@ -48,8 +48,8 @@ Source: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
 
    If OAuth Client Secret mode is enabled, copy a generated client ID and secret
    from **Settings**. Use a separate credential entry for each remote app you
-   want MacRemote to show and revoke independently. If Cloudflare Access is
-   enabled, copy the generated Access headers from **Tunnel**.
+   want MacRemote to show and revoke independently. If Single Header mode is
+   enabled, copy the generated `Authorization` header instead.
 
 7. In **Tunnel**, run **Check Readiness**. Remote proof requires:
 
@@ -78,17 +78,16 @@ MACREMOTE_OAUTH_CLIENT_SECRET="<client-secret>" \
 ./script/anthropic_mcp_smoke.py --mcp-preflight-only
 ```
 
-For Cloudflare Access-protected MCP requests, pass the copied header JSON:
+Single Header mode skips OAuth entirely — check it directly with curl using
+the header MacRemote copied:
 
 ```bash
-MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
-MACREMOTE_ACCESS_HEADERS_JSON='{"CF-Access-Client-Id":"<id>","CF-Access-Client-Secret":"<secret>"}' \
-./script/anthropic_mcp_smoke.py --mcp-preflight-only
+curl -s -X POST "https://<host>/mcp" \
+  -H "Authorization: Bearer <macremote-generated-token>" \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-06-18" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
-
-Single Header mode uses a custom `CF-Access-Service-Token` header so the MCP
-`Authorization: Bearer ...` header remains available for MacRemote OAuth. Paste
-the exact JSON copied by MacRemote into `MACREMOTE_ACCESS_HEADERS_JSON`.
 
 Expected successful output includes:
 
@@ -115,9 +114,6 @@ ANTHROPIC_API_KEY="<key>" \
 MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 ./script/anthropic_mcp_smoke.py
 ```
-
-The full Anthropic API smoke cannot forward Cloudflare Access headers; use the
-direct preflight for Access-protected URLs.
 
 The script selects the first exposed read-only tool by default. Override it with
 `--tool` when you want a specific tool.

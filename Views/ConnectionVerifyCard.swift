@@ -38,7 +38,12 @@ struct ConnectionVerifyCard: View {
     // MARK: Summary + status
 
     private var summaryLine: String {
-        guard let proof = appModel.lastSmokeProof else {
+        Self.summaryLine(for: appModel.lastSmokeProof)
+    }
+
+    /// One truthful line shared by the collapsed card and the grid tile (Rule 24).
+    static func summaryLine(for proof: SmokeProofRecord?) -> String {
+        guard let proof else {
             return "No tests yet"
         }
         let date = proof.date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
@@ -267,6 +272,33 @@ struct ConnectionVerifyCard: View {
         pasteboard.clearContents()
         pasteboard.setString(proof.clipboardText, forType: .string)
         appModel.appendLog(level: .info, "Copied the last test result.")
+    }
+}
+
+// MARK: - Grid tile (collapsed face)
+
+struct ConnectionVerifyTile: View {
+    @Environment(AppModel.self) private var appModel
+    let open: () -> Void
+
+    var body: some View {
+        StatusTile(title: "Verify", systemImage: "checkmark.seal", open: open) {
+            HStack(spacing: Space.s2) {
+                if let proof = appModel.lastSmokeProof {
+                    Image(systemName: proof.succeeded ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                        .foregroundStyle(proof.succeeded ? .green : .red)
+                        .accessibilityHidden(true)
+                } else {
+                    Image(systemName: "circle.dashed")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                Text(ConnectionVerifyCard.summaryLine(for: appModel.lastSmokeProof))
+                    .font(TypeRamp.rowDetail)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
     }
 }
 

@@ -1207,6 +1207,70 @@ struct OAuthCoordinatorTests {
         let bare = OAuthClientAuthenticationPolicy.dynamicPublicClients(honoring: [])
         #expect(bare.tokenEndpointAuthMethodsSupported == ["none"])
     }
+
+    // MARK: - Static header token (Single Header sign-in)
+
+    @Test func staticHeaderTokenAuthenticatesAcrossIssuersAndResources() throws {
+        let coordinator = OAuthCoordinator()
+        coordinator.updateStaticHeaderToken("header-secret", clientName: "Single Header Client")
+
+        let context = try #require(coordinator.clientContext(
+            forAccessToken: "header-secret",
+            issuer: "https://macremote.viticci.net",
+            resource: "https://macremote.viticci.net/mcp"
+        ))
+        #expect(context.clientID == OAuthCoordinator.staticHeaderClientID)
+        #expect(context.clientName == "Single Header Client")
+        #expect(context.scopes == ["mcp:tools"])
+
+        // Unlike OAuth access tokens, the static token is not bound to the
+        // issuer it was minted under — quick-tunnel hostnames rotate.
+        let otherHost = coordinator.clientContext(
+            forAccessToken: "header-secret",
+            issuer: "https://other.trycloudflare.com",
+            resource: "https://other.trycloudflare.com/mcp"
+        )
+        #expect(otherHost != nil)
+    }
+
+    @Test func staticHeaderTokenRejectsWrongAndClearedTokens() {
+        let coordinator = OAuthCoordinator()
+        coordinator.updateStaticHeaderToken("header-secret")
+
+        #expect(coordinator.clientContext(
+            forAccessToken: "wrong-token",
+            issuer: "https://macremote.viticci.net",
+            resource: "https://macremote.viticci.net/mcp"
+        ) == nil)
+
+        coordinator.updateStaticHeaderToken(nil)
+        #expect(coordinator.clientContext(
+            forAccessToken: "header-secret",
+            issuer: "https://macremote.viticci.net",
+            resource: "https://macremote.viticci.net/mcp"
+        ) == nil)
+    }
+
+    @Test func staticHeaderTokenDoesNotShadowOAuthTokens() throws {
+        let coordinator = OAuthCoordinator()
+        coordinator.updateStaticHeaderToken("header-secret")
+        let issuer = "https://macremote.viticci.net"
+        let resource = "https://macremote.viticci.net/mcp"
+        let tokens = try issueApprovedTokens(
+            coordinator: coordinator,
+            clientName: "Client",
+            redirectURI: "http://127.0.0.1:7777/callback",
+            issuer: issuer,
+            resource: resource
+        )
+
+        let oauthContext = try #require(coordinator.clientContext(
+            forAccessToken: tokens.accessToken,
+            issuer: issuer,
+            resource: resource
+        ))
+        #expect(oauthContext.clientID != OAuthCoordinator.staticHeaderClientID)
+    }
 }
 
 private func isolatedOAuthDefaults(

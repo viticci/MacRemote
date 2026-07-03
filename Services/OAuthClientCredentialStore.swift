@@ -36,6 +36,8 @@ enum OAuthClientCredentialStoreError: LocalizedError, Equatable {
 }
 
 struct OAuthClientCredentialStore: @unchecked Sendable {
+    static let defaultService = "com.macstories.MacRemote.oauthClientCredentials"
+
     private static let clientIDKey = "MacRemote.oauthClientCredentials.clientID"
     private static let createdAtKey = "MacRemote.oauthClientCredentials.createdAt"
     private static let credentialsMetadataKey = "MacRemote.oauthClientCredentials.items"
@@ -49,6 +51,12 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     private let userDefaults: UserDefaults
     private let service: String
     private let legacyAccount: String
+    // The UserDefaults keys are derived from the service so two stores (OAuth
+    // client credentials, connector header token) never share metadata. The
+    // default service keeps its historical key names.
+    private let metadataDefaultsKey: String
+    private let legacyClientIDDefaultsKey: String
+    private let legacyCreatedAtDefaultsKey: String
     /// The data-protection keychain (which honors LAContext for prompt-free
     /// non-interactive reads) requires the app to be code-signed with an
     /// application-identifier. The signed .app has it; an unsigned `swift test`
@@ -58,12 +66,21 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
 
     init(
         userDefaults: UserDefaults = .standard,
-        service: String = "com.macstories.MacRemote.oauthClientCredentials",
+        service: String = OAuthClientCredentialStore.defaultService,
         account: String = "default"
     ) {
         self.userDefaults = userDefaults
         self.service = service
         self.legacyAccount = account
+        if service == Self.defaultService {
+            self.metadataDefaultsKey = Self.credentialsMetadataKey
+            self.legacyClientIDDefaultsKey = Self.clientIDKey
+            self.legacyCreatedAtDefaultsKey = Self.createdAtKey
+        } else {
+            self.metadataDefaultsKey = "\(service).items"
+            self.legacyClientIDDefaultsKey = "\(service).clientID"
+            self.legacyCreatedAtDefaultsKey = "\(service).createdAt"
+        }
         self.usesDataProtectionKeychain = Self.dataProtectionKeychainAvailable(service: service)
     }
 
@@ -133,7 +150,7 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     }
 
     private func loadLegacyCredential(interactive: Bool, lockedClientIDs: inout [String]) -> OAuthClientCredentials? {
-        guard let clientID = userDefaults.string(forKey: Self.clientIDKey),
+        guard let clientID = userDefaults.string(forKey: legacyClientIDDefaultsKey),
               !clientID.isEmpty else {
             return nil
         }
@@ -150,7 +167,7 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         guard !clientSecret.isEmpty else {
             return nil
         }
-        let createdAtTimestamp = userDefaults.double(forKey: Self.createdAtKey)
+        let createdAtTimestamp = userDefaults.double(forKey: legacyCreatedAtDefaultsKey)
         let createdAt = createdAtTimestamp > 0 ? Date(timeIntervalSince1970: createdAtTimestamp) : Date()
         return OAuthClientCredentials(
             label: "OAuth Client",
@@ -199,9 +216,9 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         let credentials = loadAll().filter { $0.clientID != clientID }
         try saveAll(credentials)
         deleteSecret(account: clientID)
-        if userDefaults.string(forKey: Self.clientIDKey) == clientID {
-            userDefaults.removeObject(forKey: Self.clientIDKey)
-            userDefaults.removeObject(forKey: Self.createdAtKey)
+        if userDefaults.string(forKey: legacyClientIDDefaultsKey) == clientID {
+            userDefaults.removeObject(forKey: legacyClientIDDefaultsKey)
+            userDefaults.removeObject(forKey: legacyCreatedAtDefaultsKey)
             deleteSecret(account: legacyAccount)
         }
     }
@@ -217,11 +234,11 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         )
 
         if let first = credentials.first {
-            userDefaults.set(first.clientID, forKey: Self.clientIDKey)
-            userDefaults.set(first.createdAt.timeIntervalSince1970, forKey: Self.createdAtKey)
+            userDefaults.set(first.clientID, forKey: legacyClientIDDefaultsKey)
+            userDefaults.set(first.createdAt.timeIntervalSince1970, forKey: legacyCreatedAtDefaultsKey)
         } else {
-            userDefaults.removeObject(forKey: Self.clientIDKey)
-            userDefaults.removeObject(forKey: Self.createdAtKey)
+            userDefaults.removeObject(forKey: legacyClientIDDefaultsKey)
+            userDefaults.removeObject(forKey: legacyCreatedAtDefaultsKey)
         }
     }
 
@@ -230,9 +247,9 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
             deleteSecret(account: credential.clientID)
         }
         deleteSecret(account: legacyAccount)
-        userDefaults.removeObject(forKey: Self.clientIDKey)
-        userDefaults.removeObject(forKey: Self.createdAtKey)
-        userDefaults.removeObject(forKey: Self.credentialsMetadataKey)
+        userDefaults.removeObject(forKey: legacyClientIDDefaultsKey)
+        userDefaults.removeObject(forKey: legacyCreatedAtDefaultsKey)
+        userDefaults.removeObject(forKey: metadataDefaultsKey)
     }
 
     private func readSecret(account: String, interactive: Bool = true) throws -> String {
@@ -318,7 +335,7 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     }
 
     private func loadMetadata() -> [Metadata]? {
-        guard let data = userDefaults.data(forKey: Self.credentialsMetadataKey) else {
+        guard let data = userDefaults.data(forKey: metadataDefaultsKey) else {
             return nil
         }
         return try? JSONDecoder().decode([Metadata].self, from: data)
@@ -328,7 +345,7 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(metadata) else {
             return
         }
-        userDefaults.set(data, forKey: Self.credentialsMetadataKey)
+        userDefaults.set(data, forKey: metadataDefaultsKey)
     }
 
     private static func normalizedLabel(_ label: String, existingLabels: Set<String>) -> String {

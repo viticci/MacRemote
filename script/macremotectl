@@ -182,7 +182,6 @@ def main() -> int:
     cf_deploy_parser.add_argument("--zone", required=True, help="Cloudflare zone name or ID, for example viticci.net.")
     cf_deploy_parser.add_argument("--subdomain", required=True, help="Subdomain label, for example macremote.")
     cf_deploy_parser.add_argument("--origin-url", required=True, help="Local MacRemote server URL, for example http://127.0.0.1:60735.")
-    cf_deploy_parser.add_argument("--protect-access", action="store_true", help="Create Cloudflare Access service-token protection.")
     cf_deploy_parser.add_argument("--json", action="store_true")
     cf_deploy_parser.add_argument(
         "--print-tunnel-token",
@@ -518,32 +517,25 @@ def command_cloudflare_deploy(args: argparse.Namespace) -> int:
         die(f"Cloudflare zone not found: {args.zone}")
     hostname = cloudflare_hostname(args.subdomain, zone["name"])
     tunnel_name = cloudflare_tunnel_name(hostname)
-    access_app = cloudflare_existing_access_app(zone["id"], hostname)
-    if access_app and not str(access_app.get("name") or "").startswith("MacRemote "):
-        die(f"A non-MacRemote Cloudflare Access application already exists for {hostname}.")
-    if access_app and not args.protect_access:
-        cloudflare_delete_access_app(zone["id"], access_app["id"])
-        access_app = None
+    # Legacy cleanup (pre-2026-07): earlier MacRemote versions could put a
+    # Cloudflare Access wall on /mcp*. Access support is gone; remove our own
+    # leftover app, best-effort, and never fail the deploy over it.
+    legacy_access_cleanup = None
+    try:
+        access_app = cloudflare_existing_access_app(zone["id"], hostname)
+        if access_app and str(access_app.get("name") or "").startswith("MacRemote "):
+            cloudflare_delete_access_app(zone["id"], access_app["id"])
+            legacy_access_cleanup = f"removed the old MacRemote Cloudflare Access app on {hostname}"
+        elif access_app:
+            legacy_access_cleanup = f"a non-MacRemote Cloudflare Access app guards {hostname}; left untouched"
+    except Exception:
+        pass
 
     tunnel = cloudflare_existing_tunnel(zone["account_id"], tunnel_name)
     if not tunnel:
         tunnel = cloudflare_create_tunnel(zone["account_id"], tunnel_name)
     cloudflare_put_tunnel_config(zone["account_id"], tunnel["id"], hostname, args.origin_url)
     cloudflare_ensure_dns_record(zone["id"], hostname, tunnel["id"])
-
-    access_headers = None
-    if args.protect_access:
-        if access_app:
-            if access_app.get("domain") != cloudflare_access_application_domain(hostname):
-                access_app = cloudflare_update_access_app(zone["id"], access_app["id"], hostname)
-        else:
-            access_app = cloudflare_create_access_app(zone["id"], hostname)
-        service_token = cloudflare_create_service_token(zone["id"], hostname)
-        cloudflare_create_service_auth_policy(zone["id"], access_app["id"], service_token["id"])
-        access_headers = {
-            "CF-Access-Client-Id": service_token["client_id"],
-            "CF-Access-Client-Secret": service_token["client_secret"],
-        }
 
     tunnel_token = cloudflare_tunnel_token(zone["account_id"], tunnel["id"])
     result = {
@@ -555,11 +547,7 @@ def command_cloudflare_deploy(args: argparse.Namespace) -> int:
             "id": tunnel["id"],
             "name": tunnel_name,
         },
-        "cloudflare_access": {
-            "enabled": bool(args.protect_access),
-            "app_id": access_app["id"] if access_app else None,
-            "headers": access_headers,
-        },
+        "legacy_access_cleanup": legacy_access_cleanup,
         "tunnel_token_printed": bool(args.print_tunnel_token),
     }
     if args.print_tunnel_token:
@@ -571,11 +559,8 @@ def command_cloudflare_deploy(args: argparse.Namespace) -> int:
         print(f"hostname: {hostname}")
         print(f"public_url: https://{hostname}")
         print(f"tunnel: {tunnel_name} ({tunnel['id']})")
-        if access_headers:
-            print("raycast_headers:")
-            print(json.dumps(access_headers, indent=2, sort_keys=True))
-        else:
-            print("cloudflare_access: disabled")
+        if legacy_access_cleanup:
+            print(f"legacy_access_cleanup: {legacy_access_cleanup}")
         if args.print_tunnel_token:
             print(f"tunnel_token: {tunnel_token}")
         else:
@@ -2037,8 +2022,7 @@ def require_cloudflare_api_token() -> None:
     die(
         "Set CLOUDFLARE_API_TOKEN before deploying. Required permissions: "
         "Account Cloudflare Tunnel Read and Write; and for the selected zone: "
-        "Zone Read, DNS Read and Write, Access Apps and Policies Read and Write, "
-        "and Access Service Tokens Read and Write."
+        "Zone Read, and DNS Read and Write."
     )
 
 
@@ -2181,17 +2165,6 @@ def cloudflare_dns_record_body(hostname: str, target: str) -> dict[str, Any]:
     }
 
 
-def cloudflare_create_service_token(zone_id: str, hostname: str) -> dict[str, Any]:
-    return cloudflare_request(
-        "POST",
-        f"/zones/{zone_id}/access/service_tokens",
-        body={
-            "name": f"MacRemote {hostname}",
-            "duration": "8760h",
-        },
-    )
-
-
 def cloudflare_existing_access_app(zone_id: str, hostname: str) -> dict[str, Any] | None:
     apps = cloudflare_request(
         "GET",
@@ -2217,97 +2190,11 @@ def cloudflare_access_application_domains(hostname: str) -> list[str]:
     ]
 
 
-def cloudflare_access_application_body(hostname: str) -> dict[str, Any]:
-    return {
-        "name": f"MacRemote {hostname}",
-        "domain": cloudflare_access_application_domain(hostname),
-        "type": "self_hosted",
-        "app_launcher_visible": False,
-        "session_duration": "24h",
-    }
-
-
-def cloudflare_create_access_app(zone_id: str, hostname: str) -> dict[str, Any]:
-    return cloudflare_request(
-        "POST",
-        f"/zones/{zone_id}/access/apps",
-        body=cloudflare_access_application_body(hostname),
-    )
-
-
-def cloudflare_update_access_app(zone_id: str, app_id: str, hostname: str) -> dict[str, Any]:
-    return cloudflare_request(
-        "PUT",
-        f"/zones/{zone_id}/access/apps/{app_id}",
-        body=cloudflare_access_application_body(hostname),
-    )
-
-
 def cloudflare_delete_access_app(zone_id: str, app_id: str) -> dict[str, Any] | None:
     return cloudflare_request(
         "DELETE",
         f"/zones/{zone_id}/access/apps/{app_id}",
     )
-
-
-def cloudflare_create_service_auth_policy(zone_id: str, app_id: str, service_token_id: str) -> dict[str, Any] | None:
-    policies = cloudflare_access_policies(zone_id, app_id)
-    existing = next(
-        (
-            policy
-            for policy in policies
-            if str(policy.get("name") or "").startswith(("MacRemote Service Token", "MacRemote Raycast Service Token"))
-        ),
-        None,
-    )
-    if existing and existing.get("id"):
-        precedence = existing.get("precedence") or cloudflare_next_policy_precedence(policies)
-        return cloudflare_request(
-            "PUT",
-            f"/zones/{zone_id}/access/apps/{app_id}/policies/{existing['id']}",
-            body=cloudflare_service_auth_policy_body(service_token_id, int(precedence)),
-        )
-
-    return cloudflare_request(
-        "POST",
-        f"/zones/{zone_id}/access/apps/{app_id}/policies",
-        body=cloudflare_service_auth_policy_body(
-            service_token_id,
-            cloudflare_next_policy_precedence(policies),
-        ),
-    )
-
-
-def cloudflare_access_policies(zone_id: str, app_id: str) -> list[dict[str, Any]]:
-    return cloudflare_request(
-        "GET",
-        f"/zones/{zone_id}/access/apps/{app_id}/policies",
-        query={"per_page": "50"},
-    )
-
-
-def cloudflare_service_auth_policy_body(service_token_id: str, precedence: int) -> dict[str, Any]:
-    return {
-        "name": "MacRemote Service Token",
-        "decision": "non_identity",
-        "precedence": precedence,
-        "session_duration": "24h",
-        "include": [
-            {
-                "service_token": {
-                    "token_id": service_token_id,
-                },
-            },
-        ],
-    }
-
-
-def cloudflare_next_policy_precedence(policies: list[dict[str, Any]]) -> int:
-    used = {int(policy["precedence"]) for policy in policies if policy.get("precedence") is not None}
-    candidate = 1
-    while candidate in used:
-        candidate += 1
-    return candidate
 
 
 def cloudflare_tunnel_token(account_id: str, tunnel_id: str) -> str:
