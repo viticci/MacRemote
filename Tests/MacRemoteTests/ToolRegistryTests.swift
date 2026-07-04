@@ -334,15 +334,34 @@ struct ToolRegistryTests {
             "preset.pocketctl.triage",
             "preset.pocketctl.now",
             "preset.pocketctl.up_next",
+            "preset.pocketctl.play_next",
+            "preset.pocketctl.play_last",
+            "preset.pocketctl.play_now",
+            "preset.pocketctl.remove_up_next",
             "preset.pocketctl.in_progress",
             "preset.pocketctl.history",
+            "preset.pocketctl.starred",
+            "preset.pocketctl.new_releases",
             "preset.pocketctl.subscriptions",
             "preset.pocketctl.bookmarks",
             "preset.pocketctl.playlists",
+            "preset.pocketctl.playlist",
+            "preset.pocketctl.podcast",
             "preset.pocketctl.search_online",
+            "preset.pocketctl.discover",
+            "preset.pocketctl.recommendations",
+            "preset.pocketctl.episode_url",
+            "preset.pocketctl.transcript_source",
+            "preset.pocketctl.stats",
+            "preset.pocketctl.api_probe",
             "preset.pocketctl.show",
             "preset.pocketctl.run"
         ]))
+        #expect(presets.contains { $0.id == "preset.pocketctl.play_next" && $0.capability == .write })
+        #expect(presets.contains { $0.id == "preset.pocketctl.play_last" && $0.capability == .write })
+        #expect(presets.contains { $0.id == "preset.pocketctl.play_now" && $0.capability == .write })
+        #expect(presets.contains { $0.id == "preset.pocketctl.remove_up_next" && $0.capability == .destructive })
+        #expect(presets.contains { $0.id == "preset.pocketctl.api_probe" && $0.capability == .readOnly })
         #expect(presets.contains { $0.id == "preset.pocketctl.run" && $0.mode == .cliAdapter && $0.capability == .destructive })
         #expect(DefaultToolPresetCatalog.categories.contains(.podcasts))
     }

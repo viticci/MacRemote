@@ -633,6 +633,30 @@ enum DefaultToolPresetCatalog {
                 outputLimitKB: 2048
             ),
             DefaultToolPreset(
+                id: "preset.pocketctl.starred",
+                name: "PocketCTL Starred",
+                summary: "Return starred Pocket Casts episodes as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["starred", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048,
+                uiActions: pocketQueueRowActions(includeRemove: false)
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.new_releases",
+                name: "PocketCTL New Releases",
+                summary: "Return new Pocket Casts releases as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["new-releases", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048,
+                uiActions: pocketQueueRowActions(includeRemove: false)
+            ),
+            DefaultToolPreset(
                 id: "preset.pocketctl.subscriptions",
                 name: "PocketCTL Subscriptions",
                 summary: "Return subscribed podcasts and folders as JSON.",
@@ -666,6 +690,30 @@ enum DefaultToolPresetCatalog {
                 outputLimitKB: 2048
             ),
             DefaultToolPreset(
+                id: "preset.pocketctl.playlist",
+                name: "PocketCTL Playlist",
+                summary: "Return one Pocket Casts playlist or filter as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["playlist", "{playlist_uuid}", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048,
+                uiActions: pocketQueueRowActions(includeRemove: false)
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.podcast",
+                name: "PocketCTL Podcast",
+                summary: "Return one Pocket Casts podcast and recent episodes as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["podcast", "{podcast_uuid}", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048,
+                uiActions: pocketQueueRowActions(includeRemove: false)
+            ),
+            DefaultToolPreset(
                 id: "preset.pocketctl.search_online",
                 name: "PocketCTL Online Search",
                 summary: "Search Pocket Casts live cache and return JSON results.",
@@ -675,6 +723,73 @@ enum DefaultToolPresetCatalog {
                 category: .podcasts,
                 timeoutSeconds: 20,
                 outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.discover",
+                name: "PocketCTL Discover",
+                summary: "Search Pocket Casts discovery for podcasts as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["discover", "{query}", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.recommendations",
+                name: "PocketCTL Recommendations",
+                summary: "Return Pocket Casts recommended episodes as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["recommendations", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 2048,
+                uiActions: pocketQueueRowActions(includeRemove: false)
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.episode_url",
+                name: "PocketCTL Episode URL",
+                summary: "Resolve an episode's public media URL as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["episode-url", "{episode_uuid}", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 512
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.transcript_source",
+                name: "PocketCTL Transcript Source",
+                summary: "Return transcript source availability for one episode as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["transcript-source", "{episode_uuid}", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 1024
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.stats",
+                name: "PocketCTL Stats",
+                summary: "Return Pocket Casts listening stats and local totals as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["stats", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 20,
+                outputLimitKB: 1024
+            ),
+            DefaultToolPreset(
+                id: "preset.pocketctl.api_probe",
+                name: "PocketCTL API Probe",
+                summary: "Run PocketCTL's read-only endpoint probe as JSON.",
+                executablePath: executablePath,
+                argumentPattern: ["api-probe", "--json"],
+                capability: .readOnly,
+                category: .podcasts,
+                timeoutSeconds: 30,
+                outputLimitKB: 4096
             ),
             DefaultToolPreset(
                 id: "preset.pocketctl.show",

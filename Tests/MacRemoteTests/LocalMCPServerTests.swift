@@ -1251,7 +1251,8 @@ struct LocalMCPServerTests {
         #expect(argsDescription.contains("Use numeric reminder IDs"))
         #expect(argsDescription.contains("Use `--private --url`"))
         #expect(argsDescription.contains("edit --private --set-tags"))
-        #expect(argsDescription.contains("add --private -f"))
+        #expect(argsDescription.contains("plain `add -f`"))
+        #expect(argsDescription.contains("edit --private --flagged"))
         #expect(argsDescription.contains("section, list, group, smart-list, and template commands"))
         #expect(argsDescription.contains("ordinary due dates, recurrence, and EventKit alarms do not"))
         // The adapter can run `upcoming N` too — its window arithmetic must
