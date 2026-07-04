@@ -161,17 +161,37 @@ to the upstream local MCP endpoint, executable command surface, or bearer
 tokens; it sees only the MacRemote OAuth-protected tool surface and approval
 gates.
 
-`script/macremotectl scan-mcp` discovers MCP definitions from common local
-agent configs and extension manifests, including Codex, Claude Desktop, Claude
-Code, Claude extension bundles, Cursor, LM Studio, Xcode Coding Assistant,
-Grok, and OpenCode. The app GUI and repo-local CLI can probe and import
-bridgeable HTTP and stdio servers. Literal headers that look like secrets are
+`script/macremotectl scan-mcp` and the app share one scanner that discovers MCP
+definitions from common local agent configs and extension manifests, including
+Codex, Claude Desktop, Claude Code (`~/.mcp.json` and `~/.claude.json`, including
+project-scoped servers), Claude extension bundles, the `claude` runtime, Cursor,
+VS Code and VS Code Insiders, Windsurf, Zed, Gemini CLI, Antigravity, Copilot
+CLI, Cline, LM Studio, Xcode Coding Assistant, Grok, and OpenCode. The parser is
+schema-generic: it accepts `mcpServers`/`servers`/`context_servers`/`mcp` root
+keys, `stdio`/`local`/`http`/`streamableHttp`/`sse`/`remote` type discriminators,
+`httpUrl`/`serverUrl`/`url`/`endpoint` URL keys, a `command` that is a string or
+an argv array, and `env`/`environment` maps, and it tolerates JSONC comments and
+trailing commas. Entries gated by `envFile` or marked disabled surface as
+scan-only with a reason rather than as importable candidates, and a corrupt
+config file surfaces as a scan-only pseudo-candidate instead of silently
+disappearing. The app GUI and repo-local CLI can probe and import bridgeable HTTP
+and stdio servers. Literal headers that look like secrets are
 not imported. Header and stdio environment sources should point to environment
 variables, config TOML key paths, or manifest JSON key paths so secrets are
 resolved at call time and not copied into the tool registry. If a local client
 splits one hosted service into multiple MCP auth profiles, MacRemote preserves
 those as separate bridged servers and relies on each wrapper's exposed tool
 list rather than hardcoding service-specific routing.
+
+The app additionally runs passive discovery. At launch and on app activation it
+re-reads the same configs with no subprocess and no network, and compares the
+result against a persisted cache at `~/Library/Application
+Support/MacRemote/mcp-scan-cache.json`. That cache stores only hashed
+seen-identities and a config fingerprint — never raw endpoint URLs, headers, or
+tokens — so MacRemote can flag newly appearing servers and note when configs
+changed since the last manual scan. Passive discovery never probes, imports, or
+shares; the manual scan-and-import flow remains the only path that reaches
+upstream servers or adds bridge tools.
 
 Tool serialization follows the current MCP tool schema shape:
 

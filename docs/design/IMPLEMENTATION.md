@@ -201,7 +201,7 @@ rules). Spine: **FOUND ≠ ADDED ≠ SHARED ≠ TRUSTED.**
 
 ## Automatic discovery (added 2026-07-04)
 
-Spec: DESIGN-SPEC LM-19…LM-22, decision D19. **Surfacing only** — no auto-import,
+Spec: DESIGN-SPEC LM-19…LM-22, decision D21. **Surfacing only** — no auto-import,
 no auto-share, no subprocess/network on the automatic path.
 
 - Config paths: `Services/MCPConfigLocator.swift` (single source of truth for

@@ -334,12 +334,21 @@ Current MCP tool descriptions include `title`, `description`, `inputSchema`,
 
 MacRemote can also import tools from local MCP servers and
 re-expose them through the remote MacRemote MCP surface. This is for Mac-only
-MCP servers already attached to local clients such as Claude Code, Codex,
-Grok, OpenCode, Cursor, LM Studio, Xcode Coding Assistant, or Claude Desktop.
+MCP servers already attached to local clients such as Claude Desktop, Claude
+Code, Claude extensions, Codex, Cursor, VS Code (and VS Code Insiders),
+Windsurf, Zed, Gemini CLI, Copilot CLI, Cline, Antigravity, Grok, OpenCode, LM
+Studio, and Xcode Coding Assistant.
 
 In the app, open **Tools → Local MCPs**, then use **Scan This Mac** to detect
 local servers, inspect their upstream tools, import or refresh bridge tools,
 and enable or disable the imported server surface.
+
+MacRemote also notices these servers on its own. When you open the app or switch
+back to it, MacRemote quietly re-reads the same local configs and marks anything
+it has not seen before as **New**, with a count on the **Tools** sidebar and in
+the scan summary. Nothing is imported or shared automatically — you still choose
+what to bring in. If your configs changed since your last scan, MacRemote shows
+a "Scan results may be out of date" note so you can scan again.
 
 Bridge tools do not use a shell. For streamable HTTP/SSE servers, MacRemote
 initializes the upstream MCP server over HTTP, tracks the negotiated

@@ -91,6 +91,16 @@ Logs and diagnostics can leak secrets. Audit logs must redact tokens,
 authorization codes, refresh tokens, Cloudflare credentials, request headers,
 and full command output by default.
 
+Local MCP discovery reads local agent config files. At launch and on activation
+the app passively re-reads those configs with no subprocess and no network, and
+persists a discovery cache at `~/Library/Application
+Support/MacRemote/mcp-scan-cache.json`. That cache must store only hashed
+seen-identities and a config fingerprint; it must never persist raw endpoint
+URLs, request headers, or tokens, so a leaked cache file cannot reveal upstream
+MCP endpoints or secrets. Passive discovery must not probe, import, or expose any
+server — only the explicit manual scan-and-import flow may reach upstream servers
+or add bridge tools.
+
 ## Severity Calibration
 
 Critical:

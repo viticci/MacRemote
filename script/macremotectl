@@ -159,7 +159,24 @@ def main() -> int:
     list_sets_parser.add_argument("--json", action="store_true")
     list_sets_parser.set_defaults(func=command_list_preset_sets)
 
-    scan_mcp_parser = subparsers.add_parser("scan-mcp", help="Find MCP servers configured in local AI clients.")
+    scan_mcp_parser = subparsers.add_parser(
+        "scan-mcp",
+        help="Find MCP servers configured in local AI clients.",
+        description=(
+            "Find MCP servers configured in local AI clients (editors, coding CLIs, and "
+            "desktop AI apps) and report whether MacRemote can bridge each one. "
+            "Read-only; nothing is imported."
+        ),
+        epilog=(
+            "Bridgeable servers (loopback HTTP or local stdio commands) can be imported "
+            "with add-mcp-server; everything else is listed scan-only with a reason: "
+            "missing executable, disabled in the source app, secrets loaded from an env "
+            "file, secret-looking literal headers, or an unreadable config file. "
+            "Non-loopback HTTP servers are hidden unless you pass --include-remote. "
+            "Config files that cannot be parsed are surfaced as scan-only entries instead "
+            "of being silently skipped."
+        ),
+    )
     scan_mcp_parser.add_argument("--json", action="store_true")
     scan_mcp_parser.add_argument("--include-remote", action="store_true", help="Include non-loopback HTTP MCP URLs.")
     scan_mcp_parser.add_argument("--probe", action="store_true", help="Handshake with bridgeable HTTP MCP servers and list tool counts.")

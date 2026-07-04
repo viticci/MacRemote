@@ -26,6 +26,9 @@ public issues with secrets, tunnel URLs, OAuth tokens, or local command output.
 - Tools run through direct process execution, never `/bin/sh -c`.
 - Logs must redact tokens, authorization codes, refresh tokens, Cloudflare
   credentials, and other secrets.
+- Automatic MCP discovery only re-reads local configs; its cache at
+  `~/Library/Application Support/MacRemote/mcp-scan-cache.json` stores hashed
+  identities and a config fingerprint, never raw URLs, headers, or tokens.
 
 See [docs/ARCHITECTURE_SECURITY.md](docs/ARCHITECTURE_SECURITY.md) and
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for details.
