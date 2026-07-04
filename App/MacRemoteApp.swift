@@ -95,6 +95,7 @@ private struct AppSkeletonInstaller: ViewModifier {
             }
             .task {
                 appModel.refreshNotificationPermissionStatus()
+                appModel.startAutomaticDiscovery()
                 if !appModel.hasCompletedWelcome {
                     openWindow(id: MacRemoteWindowID.welcome)
                 }

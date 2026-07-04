@@ -174,6 +174,8 @@ Every `Card`; tool/app/request/log lists and all rows; `KeyValueGrid`s; readines
 | Reset-app-row action | **Re-add MacRemote in System Settings** | Reset App Row (visible copy) |
 | Pings | **notifications** | alerts |
 | Kept verbatim | **Scan This Mac**, **Always Allow**, **Read-only**, status words Stopped/Starting/Running | — |
+| MCP freshness | **Scan results may be out of date** (when configs changed since last refresh) | — |
+| Automatic discovery | Config-only MCP surfacing at launch/activation — **not** automatic import or share | auto-import, auto-share, background probing |
 
 ### 4.3 Banned words & patterns (visible copy)
 

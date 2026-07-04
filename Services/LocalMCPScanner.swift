@@ -24,6 +24,7 @@ struct LocalMCPServerCandidate: Identifiable, Hashable, Sendable {
     let environment: [MCPStdioEnvironmentVariable]
     var probe: LocalMCPProbeResult?
     var probeError: String?
+    var isNewSinceLastScan: Bool = false
 
     var redactedURL: String? {
         guard let url,
@@ -103,14 +104,14 @@ struct LocalMCPScanner: Sendable {
     private let homeDirectory: URL
     private let urlSession: URLSession
     private let executablePath: @Sendable (String) -> String?
-    private let processRunner: ProcessRunner
+    private let processRunner: any ProcessRunning
     private let stdioBridgeClient: MCPStdioBridgeClient
 
     init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         urlSession: URLSession = .shared,
         executablePath: @escaping @Sendable (String) -> String? = { ExecutableLocator.executablePath(named: $0) },
-        processRunner: ProcessRunner = ProcessRunner(),
+        processRunner: any ProcessRunning = ProcessRunner(),
         stdioBridgeClient: MCPStdioBridgeClient = MCPStdioBridgeClient(environment: ExecutableLocator.toolEnvironment)
     ) {
         self.homeDirectory = homeDirectory
@@ -120,8 +121,14 @@ struct LocalMCPScanner: Sendable {
         self.stdioBridgeClient = stdioBridgeClient
     }
 
-    func scan(includeRemote: Bool = false, probe shouldProbe: Bool = true) async -> [LocalMCPServerCandidate] {
-        var candidates = await scanConfiguredServers()
+    var scanHomeDirectory: URL { homeDirectory }
+
+    func scan(
+        includeRemote: Bool = false,
+        probe shouldProbe: Bool = true,
+        includeRuntimeSources: Bool = true
+    ) async -> [LocalMCPServerCandidate] {
+        var candidates = await scanConfiguredServers(includeRuntimeSources: includeRuntimeSources)
         candidates.sort { lhs, rhs in
             if lhs.bridgeable != rhs.bridgeable {
                 return lhs.bridgeable && !rhs.bridgeable
@@ -333,82 +340,29 @@ struct LocalMCPScanner: Sendable {
         }
     }
 
-    private func scanConfiguredServers() async -> [LocalMCPServerCandidate] {
+    private func scanConfiguredServers(includeRuntimeSources: Bool) async -> [LocalMCPServerCandidate] {
         var candidates = [LocalMCPServerCandidate]()
-        candidates.append(contentsOf: scanCodexMCPServers())
-        candidates.append(contentsOf: scanClaudeDesktopMCPServers())
-        candidates.append(contentsOf: scanClaudeCodeMCPServers())
+        for target in MCPConfigLocator.fileTargets(homeDirectory: homeDirectory) {
+            candidates.append(contentsOf: scanFileTarget(at: target.path))
+        }
         candidates.append(contentsOf: scanClaudeExtensions())
-        candidates.append(contentsOf: await scanClaudeRuntimeMCPServers())
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".cursor/mcp.json"), source: "cursor", rootKey: "mcpServers"))
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".lmstudio/mcp.json"), source: "lmstudio", rootKey: "mcpServers"))
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent("Library/Developer/Xcode/CodingAssistant/mcp-servers.json"), source: "xcode_coding_assistant", rootKey: "mcpServers"))
-        candidates.append(contentsOf: scanGrokMCPServers())
-        candidates.append(contentsOf: scanOpenCodeMCPServers())
-        candidates.append(contentsOf: scanVSCodeMCPServers())
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".codeium/windsurf/mcp_config.json"), source: "windsurf", rootKey: "mcpServers"))
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".config/zed/settings.json"), source: "zed", rootKey: "context_servers"))
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".gemini/settings.json"), source: "gemini", rootKey: "mcpServers"))
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".gemini/antigravity/mcp_config.json"), source: "antigravity", rootKey: "mcpServers"))
-        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".copilot/mcp-config.json"), source: "copilot_cli", rootKey: "mcpServers"))
-        candidates.append(contentsOf: scanClineMCPServers())
+        if includeRuntimeSources {
+            candidates.append(contentsOf: await scanClaudeRuntimeMCPServers())
+        }
         return candidates
     }
 
-    private func scanVSCodeMCPServers() -> [LocalMCPServerCandidate] {
-        scanJSONMCPFile(
-            homeDirectory.appendingPathComponent("Library/Application Support/Code/User/mcp.json"),
-            source: "vscode",
-            rootKey: "servers"
-        ) +
-            scanJSONMCPFile(
-                homeDirectory.appendingPathComponent("Library/Application Support/Code - Insiders/User/mcp.json"),
-                source: "vscode",
-                rootKey: "servers"
-            )
-    }
-
-    private func scanClineMCPServers() -> [LocalMCPServerCandidate] {
-        scanJSONMCPFile(homeDirectory.appendingPathComponent(".cline/data/settings/cline_mcp_settings.json"), source: "cline", rootKey: "mcpServers") +
-            scanJSONMCPFile(homeDirectory.appendingPathComponent(".cline/mcp.json"), source: "cline", rootKey: "mcpServers") +
-            scanJSONMCPFile(
-                homeDirectory.appendingPathComponent("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
-                source: "cline",
-                rootKey: "mcpServers"
-            )
-    }
-
-    private func scanCodexMCPServers() -> [LocalMCPServerCandidate] {
-        scanTOMLMCPFile(homeDirectory.appendingPathComponent(".codex/config.toml"), source: "codex")
-    }
-
-    private func scanGrokMCPServers() -> [LocalMCPServerCandidate] {
-        scanTOMLMCPFile(homeDirectory.appendingPathComponent(".grok/config.toml"), source: "grok") +
-            scanTOMLMCPFile(homeDirectory.appendingPathComponent(".config/grok/config.toml"), source: "grok")
-    }
-
-    private func scanOpenCodeMCPServers() -> [LocalMCPServerCandidate] {
-        scanJSONMCPFile(homeDirectory.appendingPathComponent(".config/opencode/opencode.json"), source: "opencode", rootKey: "mcp") +
-            scanJSONMCPFile(homeDirectory.appendingPathComponent(".config/opencode/opencode.jsonc"), source: "opencode", rootKey: "mcp")
-    }
-
-    private func scanClaudeDesktopMCPServers() -> [LocalMCPServerCandidate] {
-        scanJSONMCPFile(
-            homeDirectory.appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json"),
-            source: "claude_desktop",
-            rootKey: "mcpServers"
-        )
-    }
-
-    private func scanClaudeCodeMCPServers() -> [LocalMCPServerCandidate] {
-        // Project-scoped servers live in ~/.mcp.json; user-scoped servers from
-        // `claude mcp add --scope user` (e.g. the Safari MCP) land at the top
-        // level of ~/.claude.json. Both use the `mcpServers` key. Runtime
-        // `claude mcp list` only surfaces HTTP servers, so the JSON read is the
-        // path that catches stdio servers like safaridriver --mcp.
-        scanJSONMCPFile(homeDirectory.appendingPathComponent(".mcp.json"), source: "claude_code", rootKey: "mcpServers") +
-            scanJSONMCPFile(homeDirectory.appendingPathComponent(".claude.json"), source: "claude_code", rootKey: "mcpServers") +
-            scanClaudeCodeProjectMCPServers()
+    private func scanFileTarget(at path: URL) -> [LocalMCPServerCandidate] {
+        MCPConfigLocator.scanKinds(for: path).flatMap { kind in
+            switch kind {
+            case .toml(let source):
+                return scanTOMLMCPFile(path, source: source)
+            case .json(let source, let rootKey):
+                return scanJSONMCPFile(path, source: source, rootKey: rootKey)
+            case .claudeCodeProjects:
+                return scanClaudeCodeProjectMCPServers()
+            }
+        }
     }
 
     private func scanClaudeCodeProjectMCPServers() -> [LocalMCPServerCandidate] {
@@ -497,7 +451,8 @@ struct LocalMCPScanner: Sendable {
             arguments: ["mcp", "list"],
             timeoutSeconds: 8,
             outputByteLimit: 512 * 1024,
-            environment: ExecutableLocator.toolEnvironment
+            environment: ExecutableLocator.toolEnvironment,
+            standardInput: nil
         ) else {
             return []
         }

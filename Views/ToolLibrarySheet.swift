@@ -447,6 +447,12 @@ struct ToolLibrarySheet: View {
                 }
             }
 
+            if case .stale = appModel.cliFreshness {
+                Text("Installed tools may have changed since the last scan.")
+                    .font(TypeRamp.truthNote)
+                    .foregroundStyle(.secondary)
+            }
+
             if case .canceled(_, let completed, _) = appModel.cliScanState, !completed.isEmpty {
                 Text("Scan canceled — showing \(completed.map(\.displayName).formatted(.list(type: .and))). Scan again for the rest.")
                     .font(TypeRamp.truthNote)

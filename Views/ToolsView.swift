@@ -256,6 +256,13 @@ struct ToolsView: View {
                 }
 
                 scanStatusSection
+            } else if let hint = mcpSearchHintLine {
+                Section {
+                    Text(hint)
+                        .font(TypeRamp.truthNote)
+                        .foregroundStyle(.secondary)
+                        .selectionDisabled()
+                }
             }
         }
         .scrollEdgeEffectStyle(.soft, for: .top)
@@ -501,9 +508,17 @@ struct ToolsView: View {
         }
     }
 
-    /// Scan results and status stay out of the way while the user is searching or filtering.
+    /// Scan results and status stay visible while filter chips are active; text
+    /// search hides the list but a truthNote preserves the count.
     private var showsLocalMCPArea: Bool {
-        searchText.isEmpty && filter == .all
+        searchText.isEmpty
+    }
+
+    private var mcpSearchHintLine: String? {
+        guard !searchText.isEmpty else { return nil }
+        let count = appModel.localMCPScanState.candidates.count
+        guard count > 0 else { return nil }
+        return "\(count) MCP servers found — clear search to view them."
     }
 
     // MARK: Section headers and rows
@@ -702,6 +717,9 @@ struct ToolsView: View {
             .buttonStyle(.plain)
 
             StateChip(Self.sourceTitle(candidate.source), systemImage: "app.connected.to.app.below.fill", tint: .secondary)
+            if candidate.isNewSinceLastScan {
+                StateChip("New", role: .working)
+            }
             if candidate.bridgeable {
                 StateChip("Ready to Import", systemImage: "tray.and.arrow.down", role: .ready)
             } else {
@@ -747,7 +765,7 @@ struct ToolsView: View {
                 EmptyState(
                     "No MCP servers yet",
                     systemImage: "point.3.connected.trianglepath.dotted",
-                    message: "Scan this Mac to find MCP servers from Claude, Codex, Grok, OpenCode, Cursor, LM Studio, Xcode Coding Assistant, and compatible configs.",
+                    message: "Scan this Mac to find MCP servers from Claude, Codex, Cursor, VS Code, Zed, Gemini, and other AI apps' configs.",
                     actionTitle: "Scan This Mac",
                     action: { appModel.scanLocalMCPServers() }
                 )
@@ -767,7 +785,16 @@ struct ToolsView: View {
                     .selectionDisabled()
             }
 
-            if let lastScanDate = appModel.localMCPScanState.lastScanDate {
+            if case .stale(let lastScan, _) = appModel.localMCPFreshness {
+                HStack(spacing: Space.s2) {
+                    Text("Scan results may be out of date — MCP configs changed since \(lastScan.formatted(date: .omitted, time: .shortened)).")
+                        .font(TypeRamp.truthNote)
+                        .foregroundStyle(.secondary)
+                    Button("Scan This Mac") { appModel.scanLocalMCPServers() }
+                        .font(TypeRamp.truthNote)
+                }
+                .selectionDisabled()
+            } else if let lastScanDate = appModel.localMCPScanState.lastScanDate {
                 Text("Last scan: \(lastScanDate.formatted(date: .omitted, time: .shortened))")
                     .font(TypeRamp.truthNote)
                     .foregroundStyle(.secondary)
@@ -802,7 +829,14 @@ struct ToolsView: View {
     private var scanSummaryLine: String {
         let candidates = appModel.localMCPScanState.candidates
         let readyCount = candidates.count(where: \.bridgeable)
-        return "\(candidates.count) detected · \(readyCount) ready to import · \(importedIdentities.count) imported"
+        let newCount = candidates.count(where: \.isNewSinceLastScan)
+        var parts = ["\(candidates.count) detected"]
+        if newCount > 0 {
+            parts.append("\(newCount) new")
+        }
+        parts.append("\(readyCount) ready to import")
+        parts.append("\(importedIdentities.count) imported")
+        return parts.joined(separator: " · ")
     }
 
     private var isScanFailed: Bool {
@@ -823,7 +857,7 @@ struct ToolsView: View {
         ContentUnavailableView {
             Label("No tools yet", systemImage: "wrench.and.screwdriver")
         } description: {
-            Text("Add tools from the library or create your own. Scan this Mac to find MCP servers from Claude, Codex, Grok, OpenCode, Cursor, LM Studio, Xcode Coding Assistant, and compatible configs. Or scan this Mac for command-line tools installed with Homebrew, npm, or on your PATH.")
+            Text("Add tools from the library or create your own. Scan this Mac to find MCP servers from Claude, Codex, Cursor, VS Code, Zed, Gemini, and other AI apps' configs. Or scan this Mac for command-line tools installed with Homebrew, npm, or on your PATH.")
         } actions: {
             Button("Add from Library…") { openLibrary(at: .bundles) }
             Button("New Tool…") { beginNewTool() }
@@ -1053,6 +1087,13 @@ struct ToolsView: View {
         case "cursor": "Cursor"
         case "lmstudio": "LM Studio"
         case "xcode_coding_assistant": "Xcode"
+        case "vscode": "VS Code"
+        case "windsurf": "Windsurf"
+        case "zed": "Zed"
+        case "gemini": "Gemini CLI"
+        case "antigravity": "Antigravity"
+        case "copilot_cli": "Copilot CLI"
+        case "cline": "Cline"
         default: source
         }
     }

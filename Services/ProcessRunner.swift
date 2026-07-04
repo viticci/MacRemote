@@ -16,6 +16,17 @@ struct CommandRunResult: Sendable, Equatable {
     }
 }
 
+protocol ProcessRunning: Sendable {
+    func run(
+        executablePath: String,
+        arguments: [String],
+        timeoutSeconds: TimeInterval,
+        outputByteLimit: Int,
+        environment: [String: String],
+        standardInput: String?
+    ) async throws -> CommandRunResult
+}
+
 struct ProcessRunner: Sendable {
     func run(
         executablePath: String,
@@ -95,6 +106,8 @@ struct ProcessRunner: Sendable {
         return (String(decoding: cappedData, as: UTF8.self), truncated)
     }
 }
+
+extension ProcessRunner: ProcessRunning {}
 
 private actor TimeoutState {
     private(set) var timedOut = false

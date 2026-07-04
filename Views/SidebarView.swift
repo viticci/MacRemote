@@ -8,11 +8,13 @@ struct SidebarView: View {
         List(selection: $selection) {
             ForEach(NavigationSection.allCases) { section in
                 Label(section.title, systemImage: section.systemImage)
-                    .badge(section == .requests ? appModel.pendingRequestCount : 0)
+                    .badge(badgeCount(for: section))
                     .accessibilityValue(
                         section == .requests && appModel.pendingRequestCount > 0
                             ? "\(appModel.pendingRequestCount) requests waiting"
-                            : ""
+                            : section == .tools && appModel.newUnimportedMCPCandidateCount > 0
+                                ? "\(appModel.newUnimportedMCPCandidateCount) new MCP servers"
+                                : ""
                     )
                     .overlay(alignment: .trailing) {
                         if section == .connection, appModel.hasConnectionFailure {
@@ -27,5 +29,16 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("MacRemote")
+    }
+
+    private func badgeCount(for section: NavigationSection) -> Int {
+        switch section {
+        case .requests:
+            appModel.pendingRequestCount
+        case .tools:
+            appModel.newUnimportedMCPCandidateCount
+        default:
+            0
+        }
     }
 }

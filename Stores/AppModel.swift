@@ -61,6 +61,12 @@ final class AppModel {
     /// Local app storage only; never exported, never logged beyond counts (R19).
     private var cliScanCache: CLIScanCache?
     private let cliScanCacheURL: URL
+    /// MCP config-scan memory: hashed seen-set + config fingerprint. Candidates
+    /// and raw bridge identities never hit disk.
+    private var mcpScanCache: LocalMCPScanCache?
+    private let mcpScanCacheURL: URL
+    private var lastQuietMCPRefreshDate: Date?
+    @ObservationIgnored private var mcpActivationObserver: NSObjectProtocol?
     /// R16 — tools whose binary changed signing identity since they were added.
     /// Drives the inline "changed publisher" row; sharing stays off while flagged.
     var provenanceIdentityChangedToolIDs: Set<String> = []
@@ -254,6 +260,11 @@ final class AppModel {
         if let restoredCLIScanCache {
             self.cliScanState = restoredCLIScanCache.restoredState
         }
+        let mcpScanCacheURL = toolStore.fileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("mcp-scan-cache.json")
+        self.mcpScanCacheURL = mcpScanCacheURL
+        self.mcpScanCache = Self.loadMCPScanCache(at: mcpScanCacheURL)
         self.isRemCTLProfileEnabled = Self.remCTLToolsAreEnabled(in: loadedTools, disabledToolIDs: disabledToolIDs)
         self.clientToolPermissionSnapshot = clientToolPermissionStore.snapshot()
         self.toolSurfaceRuntime.update(tools: loadedTools.filter { !disabledToolIDs.contains($0.id) })
@@ -972,11 +983,190 @@ final class AppModel {
         let scanner = localMCPScanner
 
         Task {
-            let candidates = await scanner.scan(includeRemote: false, probe: true)
-            localMCPScanState = .loaded(candidates, Date())
+            let candidates = await scanner.scan(includeRemote: false, probe: true, includeRuntimeSources: true)
+            let now = Date()
+            let marked = markMCPCandidatesWithNewFlags(candidates, clearAllNew: true)
+            localMCPScanState = .loaded(marked, now)
             let bridgeableCount = candidates.filter(\.bridgeable).count
             appendLog(level: .info, "Found \(candidates.count) MCP server\(candidates.count == 1 ? "" : "s"); \(bridgeableCount) bridgeable.")
+            let liveSnapshot = MCPConfigLocator.configSnapshot(homeDirectory: scanner.scanHomeDirectory)
+            persistMCPScanCacheAfterManualScan(
+                candidates: candidates,
+                configSnapshot: liveSnapshot,
+                date: now
+            )
         }
+    }
+
+    enum DiscoveryRefreshTrigger: Sendable {
+        case launch
+        case activation
+        case manual
+    }
+
+    var localMCPFreshness: DiscoveryFreshness {
+        guard let cache = mcpScanCache, cache.lastConfigScanDate != .distantPast else {
+            return .neverScanned
+        }
+        let liveSnapshot = MCPConfigLocator.configSnapshot(homeDirectory: localMCPScanner.scanHomeDirectory)
+        if liveSnapshot != cache.configSnapshot {
+            return .stale(lastScan: cache.lastConfigScanDate, reason: .configsChanged)
+        }
+        return .current(lastScan: cache.lastConfigScanDate)
+    }
+
+    var cliFreshness: DiscoveryFreshness {
+        guard let cache = cliScanCache else {
+            return .neverScanned
+        }
+        let liveFingerprints = cliScanner.fingerprints()
+        for source in CLIScanSource.allCases {
+            let live = liveFingerprints[source] ?? ""
+            let cached = cache.fingerprint(for: source) ?? ""
+            if live != cached {
+                return .stale(lastScan: cache.lastScanDate, reason: .installRecordsChanged)
+            }
+        }
+        return .current(lastScan: cache.lastScanDate)
+    }
+
+    var newUnimportedMCPCandidateCount: Int {
+        let importedIdentities = Set(tools.compactMap(\.mcpBridgeIdentity))
+        return localMCPScanState.candidates.count { candidate in
+            guard candidate.isNewSinceLastScan else { return false }
+            guard let identity = candidate.bridgeIdentity else { return true }
+            return !importedIdentities.contains(identity)
+        }
+    }
+
+    func startAutomaticDiscovery() {
+        refreshLocalMCPDiscovery(trigger: .launch)
+        mcpActivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let liveSnapshot = MCPConfigLocator.configSnapshot(
+                    homeDirectory: self.localMCPScanner.scanHomeDirectory
+                )
+                if liveSnapshot != self.mcpScanCache?.configSnapshot {
+                    self.refreshLocalMCPDiscovery(trigger: .activation)
+                }
+            }
+        }
+    }
+
+    func refreshLocalMCPDiscovery(trigger: DiscoveryRefreshTrigger) {
+        guard trigger != .manual else { return }
+        guard !localMCPScanState.isScanning else { return }
+
+        if trigger == .activation,
+           let lastQuietMCPRefreshDate,
+           Date().timeIntervalSince(lastQuietMCPRefreshDate) < 5 {
+            return
+        }
+
+        let previousSnapshot = mcpScanCache?.configSnapshot
+        let liveSnapshot = MCPConfigLocator.configSnapshot(homeDirectory: localMCPScanner.scanHomeDirectory)
+        if trigger == .activation, liveSnapshot == previousSnapshot {
+            return
+        }
+
+        lastQuietMCPRefreshDate = Date()
+        let scanner = localMCPScanner
+
+        Task {
+            let rawCandidates = await scanner.scan(
+                includeRemote: false,
+                probe: false,
+                includeRuntimeSources: false
+            )
+            let candidates = markMCPCandidatesWithNewFlags(rawCandidates, clearAllNew: false)
+            let now = Date()
+            localMCPScanState = .loaded(candidates, now)
+            persistMCPScanCacheQuiet(configSnapshot: liveSnapshot, date: now)
+
+            let newCount = candidates.count(where: \.isNewSinceLastScan)
+            if previousSnapshot != liveSnapshot || newCount > 0 {
+                appendLog(
+                    level: .info,
+                    "Checked MCP configs: \(candidates.count) servers detected, \(newCount) new."
+                )
+            }
+        }
+    }
+
+    private func markMCPCandidatesWithNewFlags(
+        _ candidates: [LocalMCPServerCandidate],
+        clearAllNew: Bool
+    ) -> [LocalMCPServerCandidate] {
+        let seen = mcpScanCache?.hashedSeenBridgeIdentities ?? []
+        return candidates.map { candidate in
+            var copy = candidate
+            if clearAllNew {
+                copy.isNewSinceLastScan = false
+            } else if let identity = candidate.bridgeIdentity {
+                copy.isNewSinceLastScan = !seen.contains(Self.hashBridgeIdentity(identity))
+            } else {
+                copy.isNewSinceLastScan = false
+            }
+            return copy
+        }
+    }
+
+    private func persistMCPScanCacheQuiet(configSnapshot: String, date: Date) {
+        var cache = mcpScanCache ?? LocalMCPScanCache()
+        cache.configSnapshot = configSnapshot
+        cache.lastConfigScanDate = date
+        persistMCPScanCache(cache)
+    }
+
+    private func persistMCPScanCacheAfterManualScan(
+        candidates: [LocalMCPServerCandidate],
+        configSnapshot: String,
+        date: Date
+    ) {
+        var seen = mcpScanCache?.hashedSeenBridgeIdentities ?? []
+        for candidate in candidates {
+            if let identity = candidate.bridgeIdentity {
+                seen.insert(Self.hashBridgeIdentity(identity))
+            }
+        }
+        let cache = LocalMCPScanCache(
+            hashedSeenBridgeIdentities: seen,
+            configSnapshot: configSnapshot,
+            lastConfigScanDate: date
+        )
+        persistMCPScanCache(cache)
+    }
+
+    private func persistMCPScanCache(_ cache: LocalMCPScanCache) {
+        mcpScanCache = cache
+        do {
+            try FileManager.default.createDirectory(
+                at: mcpScanCacheURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try JSONEncoder().encode(cache).write(to: mcpScanCacheURL, options: [.atomic])
+        } catch {
+            appendLog(level: .warning, "Could not save the MCP scan cache: \(error.localizedDescription)")
+        }
+    }
+
+    private static func loadMCPScanCache(at url: URL) -> LocalMCPScanCache? {
+        guard let data = try? Data(contentsOf: url),
+              let cache = try? JSONDecoder().decode(LocalMCPScanCache.self, from: data) else {
+            return nil
+        }
+        return cache
+    }
+
+    private static func hashBridgeIdentity(_ identity: String) -> String {
+        SHA256.hash(data: Data(identity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     func importLocalMCPServer(candidateID: String) {

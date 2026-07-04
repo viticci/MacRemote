@@ -198,3 +198,22 @@ rules). Spine: **FOUND ≠ ADDED ≠ SHARED ≠ TRUSTED.**
   ~17 new detection-gated presets, 20 safety/copy fixes); `script/macremotectl`
   mirrors the catalog and the blocklist (`BLOCKED_EXECUTABLES`).
 - Tests: 300 in 29 suites (fixtures under `Tests/MacRemoteTests/Fixtures/CLIDiscovery/`).
+
+## Automatic discovery (added 2026-07-04)
+
+Spec: DESIGN-SPEC LM-19…LM-22, decision D19. **Surfacing only** — no auto-import,
+no auto-share, no subprocess/network on the automatic path.
+
+- Config paths: `Services/MCPConfigLocator.swift` (single source of truth for
+  scanner paths + `configSnapshot(homeDirectory:)` freshness fingerprint).
+- Scanner: `LocalMCPScanner.scan(..., includeRuntimeSources:)` — quiet refresh
+  passes `includeRuntimeSources: false` and `probe: false`.
+- Models: `DiscoveryFreshness`, `LocalMCPScanCache` (persisted at
+  `~/Library/Application Support/MacRemote/mcp-scan-cache.json` — hashed
+  seen-set + config snapshot only; raw URLs never hit disk).
+- AppModel: `startAutomaticDiscovery()`, `refreshLocalMCPDiscovery(trigger:)`,
+  `localMCPFreshness`, `cliFreshness`, `newUnimportedMCPCandidateCount`.
+  Wired from `MacRemoteApp` `.task`. Activation observer debounces 5 s.
+- UI: Tools MCP area (LM-19 stale line, LM-20 New chip, LM-3 summary), Tools
+  sidebar badge (LM-21), CLI Found tab stale banner (`cliFreshness`).
+- Tests: `Tests/MacRemoteTests/AutomaticDiscoveryTests.swift`.
