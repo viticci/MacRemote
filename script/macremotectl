@@ -10,6 +10,7 @@ tunnel, approve OAuth clients, or approve tool calls.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import queue
@@ -26,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 APP_NAME = "MacRemote"
@@ -103,6 +104,10 @@ PRESET_SET_ALIASES = {
     "utilities": "set.utilities",
 }
 SECRET_KEY_RE = re.compile(r"(token|secret|password|authorization|api[_-]?key|bearer)", re.IGNORECASE)
+MCP_ROOT_KEY_ALIASES = ("mcpServers", "servers", "context_servers", "mcp")
+MCP_URL_KEYS = ("httpUrl", "serverUrl", "url", "endpoint")
+MCP_HTTP_TYPES = frozenset({"http", "streamablehttp", "sse", "remote"})
+MCP_STDIO_TYPES = frozenset({"stdio", "local"})
 
 
 def main() -> int:
@@ -676,6 +681,8 @@ def tool_from_preset(preset: dict[str, Any]) -> dict[str, Any]:
 def scan_mcp_candidates(*, include_remote: bool) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     candidates.extend(scan_codex_mcp_servers())
+    candidates.extend(scan_grok_mcp_servers())
+    candidates.extend(scan_opencode_mcp_servers())
     candidates.extend(scan_claude_desktop_mcp_servers())
     candidates.extend(scan_claude_code_project_mcp_servers())
     candidates.extend(scan_claude_extensions())
@@ -683,8 +690,13 @@ def scan_mcp_candidates(*, include_remote: bool) -> list[dict[str, Any]]:
     candidates.extend(scan_json_mcp_file(Path.home() / ".cursor" / "mcp.json", source="cursor", root_key="mcpServers"))
     candidates.extend(scan_json_mcp_file(Path.home() / ".lmstudio" / "mcp.json", source="lmstudio", root_key="mcpServers"))
     candidates.extend(scan_json_mcp_file(Path.home() / "Library" / "Developer" / "Xcode" / "CodingAssistant" / "mcp-servers.json", source="xcode_coding_assistant", root_key="mcpServers"))
-    candidates.extend(scan_grok_mcp_servers())
-    candidates.extend(scan_opencode_mcp_servers())
+    candidates.extend(scan_vscode_mcp_servers())
+    candidates.extend(scan_windsurf_mcp_servers())
+    candidates.extend(scan_zed_mcp_servers())
+    candidates.extend(scan_gemini_mcp_servers())
+    candidates.extend(scan_antigravity_mcp_servers())
+    candidates.extend(scan_copilot_cli_mcp_servers())
+    candidates.extend(scan_cline_mcp_servers())
 
     candidates = sorted(candidates, key=lambda item: (
         not item.get("bridgeable", False),
@@ -710,49 +722,85 @@ def scan_mcp_candidates(*, include_remote: bool) -> list[dict[str, Any]]:
     return filtered
 
 
+def scan_vscode_mcp_servers() -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for subpath in ("Code/User/mcp.json", "Code - Insiders/User/mcp.json"):
+        path = Path.home() / "Library" / "Application Support" / subpath
+        candidates.extend(scan_json_mcp_file(path, source="vscode", root_key="servers"))
+    return candidates
+
+
+def scan_windsurf_mcp_servers() -> list[dict[str, Any]]:
+    path = Path.home() / ".codeium" / "windsurf" / "mcp_config.json"
+    return scan_json_mcp_file(path, source="windsurf", root_key="mcpServers")
+
+
+def scan_zed_mcp_servers() -> list[dict[str, Any]]:
+    path = Path.home() / ".config" / "zed" / "settings.json"
+    return scan_json_mcp_file(path, source="zed", root_key="context_servers")
+
+
+def scan_gemini_mcp_servers() -> list[dict[str, Any]]:
+    path = Path.home() / ".gemini" / "settings.json"
+    return scan_json_mcp_file(path, source="gemini", root_key="mcpServers")
+
+
+def scan_antigravity_mcp_servers() -> list[dict[str, Any]]:
+    path = Path.home() / ".gemini" / "antigravity" / "mcp_config.json"
+    return scan_json_mcp_file(path, source="antigravity", root_key="mcpServers")
+
+
+def scan_copilot_cli_mcp_servers() -> list[dict[str, Any]]:
+    path = Path.home() / ".copilot" / "mcp-config.json"
+    return scan_json_mcp_file(path, source="copilot_cli", root_key="mcpServers")
+
+
+def scan_cline_mcp_servers() -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for path in (
+        Path.home() / ".cline" / "data" / "settings" / "cline_mcp_settings.json",
+        Path.home() / ".cline" / "mcp.json",
+        Path.home() / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",
+    ):
+        candidates.extend(scan_json_mcp_file(path, source="cline", root_key="mcpServers"))
+    return candidates
+
+
 def scan_codex_mcp_servers() -> list[dict[str, Any]]:
     path = Path.home() / ".codex" / "config.toml"
-    if not path.exists():
-        return []
-    try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return []
-    servers = data.get("mcp_servers")
-    return candidates_from_mapping(servers, source="codex", path=path, root_key="mcp_servers")
+    return scan_toml_mcp_file(path, source="codex", root_key="mcp_servers")
 
 
 def scan_grok_mcp_servers() -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for path in [
+    for path in (
         Path.home() / ".grok" / "config.toml",
         Path.home() / ".config" / "grok" / "config.toml",
-    ]:
-        if not path.exists():
-            continue
-        try:
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
-        servers = data.get("mcp_servers")
-        candidates.extend(candidates_from_mapping(servers, source="grok", path=path, root_key="mcp_servers"))
+    ):
+        candidates.extend(scan_toml_mcp_file(path, source="grok", root_key="mcp_servers"))
     return candidates
+
+
+def scan_toml_mcp_file(path: Path, *, source: str, root_key: str) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return []
+    except tomllib.TOMLDecodeError:
+        return [corrupt_config_candidate(path, source=source, format_name="TOML")]
+    servers = data.get(root_key)
+    return candidates_from_mapping(servers, source=source, path=path, root_key=root_key)
 
 
 def scan_opencode_mcp_servers() -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for path in [
+    for path in (
         Path.home() / ".config" / "opencode" / "opencode.json",
         Path.home() / ".config" / "opencode" / "opencode.jsonc",
-    ]:
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(strip_json_comments(path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError):
-            continue
-        servers = data.get("mcp")
-        candidates.extend(candidates_from_mapping(servers, source="opencode", path=path, root_key="mcp"))
+    ):
+        candidates.extend(scan_json_mcp_file(path, source="opencode", root_key="mcp"))
     return candidates
 
 
@@ -763,27 +811,94 @@ def scan_claude_desktop_mcp_servers() -> list[dict[str, Any]]:
 
 def scan_claude_code_project_mcp_servers() -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for path in [
+    for path in (
         Path.home() / ".mcp.json",
         Path.cwd() / ".mcp.json",
-    ]:
+    ):
         candidates.extend(scan_json_mcp_file(path, source="claude_code", root_key="mcpServers"))
+    candidates.extend(scan_claude_json_mcp_servers(Path.home() / ".claude.json"))
     return candidates
+
+
+def scan_claude_json_mcp_servers(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    data = load_json_mcp_object(path)
+    if data == "corrupt":
+        return [corrupt_config_candidate(path, source="claude_code", format_name="JSON")]
+    if not isinstance(data, dict):
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    servers, root_key = resolve_mcp_servers(data, "mcpServers")
+    candidates.extend(candidates_from_mapping(servers, source="claude_code", path=path, root_key=root_key))
+
+    projects = data.get("projects")
+    if isinstance(projects, dict):
+        for project_path, project_data in projects.items():
+            if not isinstance(project_data, dict):
+                continue
+            project_servers, project_root_key = resolve_mcp_servers(project_data, "mcpServers")
+            if not isinstance(project_servers, dict):
+                continue
+            id_suffix = f"_{hashlib.sha256(str(project_path).encode()).hexdigest()[:8]}"
+            candidates.extend(candidates_from_mapping(
+                project_servers,
+                source="claude_code",
+                path=path,
+                root_key=project_root_key,
+                id_suffix=id_suffix,
+            ))
+    return candidates
+
+
+def load_json_mcp_object(path: Path) -> dict[str, Any] | Literal["corrupt"] | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return "corrupt"
+    try:
+        value = json.loads(strip_json_comments(text))
+    except json.JSONDecodeError:
+        return "corrupt"
+    return value if isinstance(value, dict) else None
 
 
 def scan_json_mcp_file(path: Path, *, source: str, root_key: str) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    try:
-        data = json.loads(strip_json_comments(path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):
+    data = load_json_mcp_object(path)
+    if data == "corrupt":
+        return [corrupt_config_candidate(path, source=source, format_name="JSON")]
+    if not isinstance(data, dict):
         return []
-    actual_root_key = root_key
-    servers = data.get(root_key)
-    if servers is None and root_key == "mcpServers":
-        servers = data.get("servers")
-        actual_root_key = "servers"
+    servers, actual_root_key = resolve_mcp_servers(data, root_key)
     return candidates_from_mapping(servers, source=source, path=path, root_key=actual_root_key)
+
+
+def resolve_mcp_servers(data: dict[str, Any], root_key: str) -> tuple[Any, str]:
+    servers = data.get(root_key)
+    if isinstance(servers, dict):
+        return servers, root_key
+    for alias in MCP_ROOT_KEY_ALIASES:
+        if alias == root_key:
+            continue
+        servers = data.get(alias)
+        if isinstance(servers, dict):
+            return servers, alias
+    return None, root_key
+
+
+def corrupt_config_candidate(path: Path, *, source: str, format_name: str) -> dict[str, Any]:
+    return mcp_candidate(
+        source=source,
+        name=stable_slug(path.stem),
+        display_name=path.name,
+        path=path,
+        transport="stdio",
+        reason=f"Could not read this file as {format_name}.",
+        candidate_id=f"{source}.{stable_slug(path.name)}",
+    )
 
 
 def scan_claude_extensions() -> list[dict[str, Any]]:
@@ -857,47 +972,197 @@ def scan_claude_runtime_mcp_servers() -> list[dict[str, Any]]:
     return candidates
 
 
-def candidates_from_mapping(servers: Any, *, source: str, path: Path, root_key: str) -> list[dict[str, Any]]:
+def candidates_from_mapping(
+    servers: Any,
+    *,
+    source: str,
+    path: Path,
+    root_key: str,
+    id_suffix: str = "",
+) -> list[dict[str, Any]]:
     if not isinstance(servers, dict):
         return []
     candidates: list[dict[str, Any]] = []
     for raw_name, config in servers.items():
-        if not isinstance(config, dict):
-            continue
-        name = stable_slug(str(raw_name))
-        display_name = str(raw_name)
-        url = config.get("url") or config.get("endpoint")
-        if isinstance(url, str) and looks_like_http_url(url):
-            headers = mcp_headers_from_config(config)
-            candidates.append(mcp_candidate(
+        candidate = candidate_from_config(
+            str(raw_name),
+            config,
+            source=source,
+            path=path,
+            root_key=root_key,
+            id_suffix=id_suffix,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def candidate_from_config(
+    raw_name: str,
+    config: Any,
+    *,
+    source: str,
+    path: Path,
+    root_key: str,
+    id_suffix: str = "",
+) -> dict[str, Any] | None:
+    if not isinstance(config, dict):
+        return None
+
+    name = stable_slug(raw_name)
+    display_name = raw_name
+    candidate_id = f"{source}.{name}{id_suffix}"
+
+    disabled_reason = mcp_disabled_reason(config)
+    if disabled_reason:
+        return mcp_candidate(
+            source=source,
+            name=name,
+            display_name=display_name,
+            path=path,
+            transport=resolve_mcp_transport(config) or "stdio",
+            url=resolve_mcp_url(config),
+            command=_preview_stdio_command(config),
+            args=_preview_stdio_args(config),
+            reason=disabled_reason,
+            candidate_id=candidate_id,
+        )
+
+    if config.get("envFile"):
+        return mcp_candidate(
+            source=source,
+            name=name,
+            display_name=display_name,
+            path=path,
+            transport=resolve_mcp_transport(config) or "stdio",
+            url=resolve_mcp_url(config),
+            command=_preview_stdio_command(config),
+            args=_preview_stdio_args(config),
+            reason="This server loads secrets from an env file; add the values in the source app before importing.",
+            candidate_id=candidate_id,
+        )
+
+    transport = resolve_mcp_transport(config)
+    if transport == "http":
+        url = resolve_mcp_url(config)
+        if not url:
+            return mcp_candidate(
                 source=source,
                 name=name,
                 display_name=display_name,
                 path=path,
                 transport="http",
-                url=url,
-                headers=headers,
-            ))
-            continue
+                reason="No server URL is configured.",
+                candidate_id=candidate_id,
+            )
+        headers = mcp_headers_from_config(config)
+        return mcp_candidate(
+            source=source,
+            name=name,
+            display_name=display_name,
+            path=path,
+            transport="http",
+            url=url,
+            headers=headers,
+            candidate_id=candidate_id,
+        )
 
-        command = config.get("command")
-        args = config.get("args") or []
-        if isinstance(command, str):
-            resolved_command = resolve_command_path(command)
-            startup_timeout = config.get("startup_timeout_sec") or config.get("startupTimeoutSeconds")
-            candidates.append(mcp_candidate(
-                source=source,
-                name=name,
-                display_name=display_name,
+    if transport == "stdio":
+        command_value, args = resolve_mcp_command_and_args(config)
+        if command_value is None:
+            return None
+        resolved_command = resolve_command_path(command_value) if isinstance(command_value, str) else None
+        startup_timeout = config.get("startup_timeout_sec") or config.get("startupTimeoutSeconds")
+        env_key, _ = resolve_mcp_env_dict(config)
+        return mcp_candidate(
+            source=source,
+            name=name,
+            display_name=display_name,
+            path=path,
+            transport="stdio",
+            command=resolved_command or command_value,
+            args=args,
+            startup_timeout_seconds=startup_timeout if isinstance(startup_timeout, (int, float)) else None,
+            environment=mcp_environment_from_config(
+                config,
+                raw_name=raw_name,
                 path=path,
-                transport="stdio",
-                command=resolved_command or command,
-                args=args if isinstance(args, list) else [],
-                startup_timeout_seconds=startup_timeout if isinstance(startup_timeout, (int, float)) else None,
-                environment=mcp_environment_from_config(config, raw_name=str(raw_name), path=path, root_key=root_key),
-                reason=None if resolved_command else f"Executable not found: {command}.",
-            ))
-    return candidates
+                root_key=root_key,
+                env_key=env_key,
+            ),
+            reason=None if resolved_command else f"Executable not found: {command_value}.",
+            candidate_id=candidate_id,
+        )
+
+    return None
+
+
+def mcp_disabled_reason(config: dict[str, Any]) -> str | None:
+    if config.get("disabled") is True:
+        return "Disabled in the source app's settings."
+    if config.get("enabled") is False:
+        return "Disabled in the source app's settings."
+    return None
+
+
+def resolve_mcp_transport(config: dict[str, Any]) -> str | None:
+    raw_type = config.get("type")
+    if isinstance(raw_type, str):
+        normalized = raw_type.lower().replace("_", "").replace("-", "")
+        if normalized in MCP_STDIO_TYPES:
+            return "stdio"
+        if normalized in MCP_HTTP_TYPES:
+            return "http"
+    if resolve_mcp_url(config):
+        return "http"
+    if config.get("command") is not None:
+        return "stdio"
+    return None
+
+
+def resolve_mcp_url(config: dict[str, Any]) -> str | None:
+    for key in MCP_URL_KEYS:
+        value = config.get(key)
+        if isinstance(value, str) and looks_like_http_url(value):
+            return value
+    return None
+
+
+def resolve_mcp_command_and_args(config: dict[str, Any]) -> tuple[str | None, list[Any]]:
+    command = config.get("command")
+    extra_args = config.get("args") or []
+    if not isinstance(extra_args, list):
+        extra_args = []
+
+    if isinstance(command, str):
+        return command, extra_args
+    if isinstance(command, list):
+        if not command:
+            return None, extra_args
+        executable = command[0]
+        if not isinstance(executable, str):
+            return None, extra_args
+        leading_args = [item for item in command[1:] if isinstance(item, (str, int, float, bool))]
+        return executable, leading_args + extra_args
+    return None, extra_args
+
+
+def _preview_stdio_command(config: dict[str, Any]) -> str | None:
+    command, _ = resolve_mcp_command_and_args(config)
+    return command if isinstance(command, str) else None
+
+
+def _preview_stdio_args(config: dict[str, Any]) -> list[Any]:
+    _, args = resolve_mcp_command_and_args(config)
+    return args
+
+
+def resolve_mcp_env_dict(config: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    for key in ("env", "environment"):
+        value = config.get(key)
+        if isinstance(value, dict):
+            return key, value
+    return None, {}
 
 
 def resolve_command_path(command: str) -> str | None:
@@ -907,9 +1172,17 @@ def resolve_command_path(command: str) -> str | None:
     return find_executable(command)
 
 
-def mcp_environment_from_config(config: dict[str, Any], *, raw_name: str, path: Path, root_key: str) -> list[dict[str, Any]]:
-    env = config.get("env")
-    if not isinstance(env, dict):
+def mcp_environment_from_config(
+    config: dict[str, Any],
+    *,
+    raw_name: str,
+    path: Path,
+    root_key: str,
+    env_key: str | None = None,
+) -> list[dict[str, Any]]:
+    resolved_env_key, env = resolve_mcp_env_dict(config)
+    env_key = env_key or resolved_env_key
+    if env_key is None:
         return []
 
     variables: list[dict[str, Any]] = []
@@ -922,7 +1195,7 @@ def mcp_environment_from_config(config: dict[str, Any], *, raw_name: str, path: 
                 "valueSource": {
                     "kind": "tomlFile",
                     "filePath": str(path),
-                    "keyPath": ["mcp_servers", raw_name, "env", name],
+                    "keyPath": ["mcp_servers", raw_name, env_key, name],
                 },
             })
         elif path.suffix in {".json", ".jsonc"}:
@@ -931,7 +1204,7 @@ def mcp_environment_from_config(config: dict[str, Any], *, raw_name: str, path: 
                 "valueSource": {
                     "kind": "jsonFile",
                     "filePath": str(path),
-                    "keyPath": [root_key, raw_name, "env", name],
+                    "keyPath": [root_key, raw_name, env_key, name],
                 },
             })
         else:
@@ -981,13 +1254,14 @@ def mcp_candidate(
     startup_timeout_seconds: int | float | None = None,
     environment: list[dict[str, Any]] | None = None,
     reason: str | None = None,
+    candidate_id: str | None = None,
 ) -> dict[str, Any]:
     blocked_headers = [header for header in (headers or []) if header.get("blockedReason")]
     bridgeable = transport in {"http", "stdio"} and not blocked_headers and reason is None
     parsed_url = urllib.parse.urlparse(url or "")
     is_local = transport == "stdio" or parsed_url.hostname in {"127.0.0.1", "localhost", "::1"}
     return {
-        "id": f"{source}.{name}",
+        "id": candidate_id or f"{source}.{name}",
         "source": source,
         "sourcePath": str(path),
         "name": name,
@@ -1304,7 +1578,7 @@ def resolve_mcp_header_source(source: dict[str, Any]) -> str:
         key_path = source.get("keyPath")
         if not isinstance(file_path, str) or not isinstance(key_path, list):
             raise RuntimeError("Invalid jsonFile MCP header source.")
-        data = json.loads(Path(file_path).expanduser().read_text(encoding="utf-8"))
+        data = json.loads(strip_json_comments(Path(file_path).expanduser().read_text(encoding="utf-8")))
         cursor: Any = data
         for key in key_path:
             if not isinstance(cursor, dict) or key not in cursor:
@@ -1426,9 +1700,97 @@ def stable_slug(value: str) -> str:
 
 
 def strip_json_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    text = re.sub(r"(^|\s)//.*", r"\1", text)
-    return text
+    return remove_trailing_commas(_strip_json_comments_and_block_comments(text))
+
+
+def _strip_json_comments_and_block_comments(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    length = len(text)
+    in_string = False
+    escaped = False
+    string_quote = ""
+
+    while index < length:
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == string_quote:
+                in_string = False
+            index += 1
+            continue
+
+        if char in {'"', "'"}:
+            in_string = True
+            string_quote = char
+            result.append(char)
+            index += 1
+            continue
+
+        if char == "/" and index + 1 < length:
+            next_char = text[index + 1]
+            if next_char == "/":
+                index += 2
+                while index < length and text[index] not in "\r\n":
+                    index += 1
+                continue
+            if next_char == "*":
+                index += 2
+                while index + 1 < length and not (text[index] == "*" and text[index + 1] == "/"):
+                    index += 1
+                index = min(index + 2, length)
+                continue
+
+        result.append(char)
+        index += 1
+
+    return "".join(result)
+
+
+def remove_trailing_commas(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    length = len(text)
+    in_string = False
+    escaped = False
+    string_quote = ""
+
+    while index < length:
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == string_quote:
+                in_string = False
+            index += 1
+            continue
+
+        if char in {'"', "'"}:
+            in_string = True
+            string_quote = char
+            result.append(char)
+            index += 1
+            continue
+
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < length and text[lookahead] in " \t\r\n":
+                lookahead += 1
+            if lookahead < length and text[lookahead] in "}]":
+                index += 1
+                continue
+
+        result.append(char)
+        index += 1
+
+    return "".join(result)
 
 
 def validate_tool_inputs(

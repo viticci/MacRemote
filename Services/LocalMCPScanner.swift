@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct LocalMCPServerCandidate: Identifiable, Hashable, Sendable {
@@ -344,7 +345,37 @@ struct LocalMCPScanner: Sendable {
         candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent("Library/Developer/Xcode/CodingAssistant/mcp-servers.json"), source: "xcode_coding_assistant", rootKey: "mcpServers"))
         candidates.append(contentsOf: scanGrokMCPServers())
         candidates.append(contentsOf: scanOpenCodeMCPServers())
+        candidates.append(contentsOf: scanVSCodeMCPServers())
+        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".codeium/windsurf/mcp_config.json"), source: "windsurf", rootKey: "mcpServers"))
+        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".config/zed/settings.json"), source: "zed", rootKey: "context_servers"))
+        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".gemini/settings.json"), source: "gemini", rootKey: "mcpServers"))
+        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".gemini/antigravity/mcp_config.json"), source: "antigravity", rootKey: "mcpServers"))
+        candidates.append(contentsOf: scanJSONMCPFile(homeDirectory.appendingPathComponent(".copilot/mcp-config.json"), source: "copilot_cli", rootKey: "mcpServers"))
+        candidates.append(contentsOf: scanClineMCPServers())
         return candidates
+    }
+
+    private func scanVSCodeMCPServers() -> [LocalMCPServerCandidate] {
+        scanJSONMCPFile(
+            homeDirectory.appendingPathComponent("Library/Application Support/Code/User/mcp.json"),
+            source: "vscode",
+            rootKey: "servers"
+        ) +
+            scanJSONMCPFile(
+                homeDirectory.appendingPathComponent("Library/Application Support/Code - Insiders/User/mcp.json"),
+                source: "vscode",
+                rootKey: "servers"
+            )
+    }
+
+    private func scanClineMCPServers() -> [LocalMCPServerCandidate] {
+        scanJSONMCPFile(homeDirectory.appendingPathComponent(".cline/data/settings/cline_mcp_settings.json"), source: "cline", rootKey: "mcpServers") +
+            scanJSONMCPFile(homeDirectory.appendingPathComponent(".cline/mcp.json"), source: "cline", rootKey: "mcpServers") +
+            scanJSONMCPFile(
+                homeDirectory.appendingPathComponent("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+                source: "cline",
+                rootKey: "mcpServers"
+            )
     }
 
     private func scanCodexMCPServers() -> [LocalMCPServerCandidate] {
@@ -376,7 +407,36 @@ struct LocalMCPScanner: Sendable {
         // `claude mcp list` only surfaces HTTP servers, so the JSON read is the
         // path that catches stdio servers like safaridriver --mcp.
         scanJSONMCPFile(homeDirectory.appendingPathComponent(".mcp.json"), source: "claude_code", rootKey: "mcpServers") +
-            scanJSONMCPFile(homeDirectory.appendingPathComponent(".claude.json"), source: "claude_code", rootKey: "mcpServers")
+            scanJSONMCPFile(homeDirectory.appendingPathComponent(".claude.json"), source: "claude_code", rootKey: "mcpServers") +
+            scanClaudeCodeProjectMCPServers()
+    }
+
+    private func scanClaudeCodeProjectMCPServers() -> [LocalMCPServerCandidate] {
+        let path = homeDirectory.appendingPathComponent(".claude.json")
+        guard case .success(let object) = readJSONObject(from: path),
+              let projects = object["projects"] as? [String: Any] else {
+            return []
+        }
+
+        var candidates = [LocalMCPServerCandidate]()
+        for (projectPath, rawProject) in projects {
+            guard let project = rawProject as? [String: Any],
+                  let servers = project["mcpServers"] as? [String: Any] else {
+                continue
+            }
+            let suffix = Self.projectPathSuffix(projectPath)
+            candidates.append(contentsOf: self.candidates(
+                from: servers,
+                source: "claude_code",
+                sourcePath: path.path,
+                rootKey: "mcpServers",
+                idSuffix: suffix,
+                envKeyPathPrefix: { rawName in
+                    ["projects", projectPath, "mcpServers", rawName]
+                }
+            ))
+        }
+        return candidates
     }
 
     private func scanClaudeExtensions() -> [LocalMCPServerCandidate] {
@@ -461,22 +521,27 @@ struct LocalMCPScanner: Sendable {
         }
     }
 
+    private static let rootKeyAliases = ["mcpServers", "servers", "context_servers", "mcp"]
+
     private func scanJSONMCPFile(_ path: URL, source: String, rootKey: String) -> [LocalMCPServerCandidate] {
-        guard let object = jsonObject(from: path) else {
+        guard FileManager.default.fileExists(atPath: path.path) else {
             return []
         }
-        var actualRootKey = rootKey
-        var servers = object[rootKey]
-        if servers == nil, rootKey == "mcpServers" {
-            servers = object["servers"]
-            actualRootKey = "servers"
+        switch readJSONObject(from: path) {
+        case .success(let object):
+            let (servers, actualRootKey) = Self.resolveRootServers(in: object, preferredKey: rootKey)
+            return candidates(from: servers, source: source, sourcePath: path.path, rootKey: actualRootKey)
+        case .failure:
+            return [Self.unreadableConfigCandidate(path: path, source: source, format: "JSON")]
         }
-        return candidates(from: servers, source: source, sourcePath: path.path, rootKey: actualRootKey)
     }
 
     private func scanTOMLMCPFile(_ path: URL, source: String) -> [LocalMCPServerCandidate] {
-        guard let text = try? String(contentsOf: path, encoding: .utf8) else {
+        guard FileManager.default.fileExists(atPath: path.path) else {
             return []
+        }
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else {
+            return [Self.unreadableConfigCandidate(path: path, source: source, format: "TOML")]
         }
 
         var sections: [String: [String: String]] = [:]
@@ -487,18 +552,28 @@ struct LocalMCPScanner: Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !line.isEmpty else { continue }
 
-            if line.hasPrefix("[mcp_servers."), line.hasSuffix("]") {
-                let section = String(line.dropFirst("[mcp_servers.".count).dropLast())
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                if section.hasSuffix(".env") {
-                    currentName = String(section.dropLast(".env".count))
-                    currentKeyPrefix = "env."
+            if line.hasPrefix("["), line.hasSuffix("]") {
+                if line.hasPrefix("[mcp_servers."), line.hasSuffix("]") {
+                    let section = String(line.dropFirst("[mcp_servers.".count).dropLast())
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                    if section.contains(".tools.") {
+                        currentName = nil
+                        currentKeyPrefix = ""
+                        continue
+                    }
+                    if section.hasSuffix(".env") {
+                        currentName = String(section.dropLast(".env".count))
+                        currentKeyPrefix = "env."
+                    } else {
+                        currentName = section
+                        currentKeyPrefix = ""
+                    }
+                    if let currentName, sections[currentName] == nil {
+                        sections[currentName] = [:]
+                    }
                 } else {
-                    currentName = section
+                    currentName = nil
                     currentKeyPrefix = ""
-                }
-                if let currentName, sections[currentName] == nil {
-                    sections[currentName] = [:]
                 }
                 continue
             }
@@ -543,7 +618,14 @@ struct LocalMCPScanner: Sendable {
         return candidates(from: mapping, source: source, sourcePath: path.path, rootKey: "mcp_servers")
     }
 
-    private func candidates(from servers: Any?, source: String, sourcePath: String, rootKey: String) -> [LocalMCPServerCandidate] {
+    private func candidates(
+        from servers: Any?,
+        source: String,
+        sourcePath: String,
+        rootKey: String,
+        idSuffix: String? = nil,
+        envKeyPathPrefix: ((String) -> [String])? = nil
+    ) -> [LocalMCPServerCandidate] {
         guard let servers = servers as? [String: Any] else {
             return []
         }
@@ -554,44 +636,105 @@ struct LocalMCPScanner: Sendable {
             }
             let name = Self.stableSlug(rawName)
             let displayName = rawName
-            if let url = (config["url"] ?? config["endpoint"]) as? String,
-               Self.looksLikeHTTPURL(url) {
-                let headerResult = mcpHeaders(from: config)
+            let envPrefix = envKeyPathPrefix?(rawName) ?? [rootKey, rawName]
+            let envStorageKey = Self.environmentStorageKey(in: config)
+            var reason = Self.primaryBlockedReason(from: config)
+
+            let transport = Self.resolvedTransport(from: config)
+            switch transport {
+            case .http:
+                if let url = Self.resolveHTTPURL(from: config) {
+                    let headerResult = mcpHeaders(from: config)
+                    if reason == nil {
+                        reason = headerResult.blockedReason
+                    }
+                    return Self.candidate(
+                        source: source,
+                        name: name,
+                        displayName: displayName,
+                        sourcePath: sourcePath,
+                        transport: .http,
+                        url: url,
+                        headers: headerResult.headers,
+                        reason: reason,
+                        idSuffix: idSuffix
+                    )
+                }
+                if reason == nil {
+                    reason = "No server URL is configured."
+                }
                 return Self.candidate(
                     source: source,
                     name: name,
                     displayName: displayName,
                     sourcePath: sourcePath,
                     transport: .http,
-                    url: url,
-                    headers: headerResult.headers,
-                    reason: headerResult.blockedReason
+                    reason: reason,
+                    idSuffix: idSuffix
                 )
+            case .stdio:
+                if let commandConfig = Self.resolveCommandConfig(from: config) {
+                    let resolvedCommand = resolvedCommandPath(commandConfig.command)
+                    let commandReason = resolvedCommand == nil ? "Executable not found: \(commandConfig.command)." : nil
+                    if reason == nil {
+                        reason = commandReason
+                    }
+                    let startupTimeout = Self.numericValue(config["startup_timeout_sec"] ?? config["startupTimeoutSeconds"])
+                    return Self.candidate(
+                        source: source,
+                        name: name,
+                        displayName: displayName,
+                        sourcePath: sourcePath,
+                        transport: .stdio,
+                        command: resolvedCommand ?? commandConfig.command,
+                        args: commandConfig.args,
+                        startupTimeoutSeconds: startupTimeout,
+                        reason: reason,
+                        environment: mcpEnvironment(
+                            from: config,
+                            sourcePath: sourcePath,
+                            envStorageKey: envStorageKey,
+                            keyPathPrefix: envPrefix + [envStorageKey]
+                        ),
+                        idSuffix: idSuffix
+                    )
+                }
+                if reason != nil {
+                    return Self.candidate(
+                        source: source,
+                        name: name,
+                        displayName: displayName,
+                        sourcePath: sourcePath,
+                        transport: .stdio,
+                        reason: reason,
+                        idSuffix: idSuffix
+                    )
+                }
+                return nil
+            case nil:
+                if reason != nil {
+                    return Self.candidate(
+                        source: source,
+                        name: name,
+                        displayName: displayName,
+                        sourcePath: sourcePath,
+                        transport: .stdio,
+                        reason: reason,
+                        idSuffix: idSuffix
+                    )
+                }
+                return nil
             }
-
-            if let command = config["command"] as? String {
-                let resolvedCommand = resolvedCommandPath(command)
-                let commandReason = resolvedCommand == nil ? "Executable not found: \(command)." : nil
-                let startupTimeout = Self.numericValue(config["startup_timeout_sec"] ?? config["startupTimeoutSeconds"])
-                return Self.candidate(
-                    source: source,
-                    name: name,
-                    displayName: displayName,
-                    sourcePath: sourcePath,
-                    transport: .stdio,
-                    command: resolvedCommand ?? command,
-                    args: (config["args"] as? [Any] ?? []).map { String(describing: $0) },
-                    startupTimeoutSeconds: startupTimeout,
-                    reason: commandReason,
-                    environment: mcpEnvironment(from: config, rawName: rawName, sourcePath: sourcePath, rootKey: rootKey)
-                )
-            }
-            return nil
         }
     }
 
-    private func mcpEnvironment(from config: [String: Any], rawName: String, sourcePath: String, rootKey: String) -> [MCPStdioEnvironmentVariable] {
-        guard let env = config["env"] as? [String: Any] else {
+    private func mcpEnvironment(
+        from config: [String: Any],
+        sourcePath: String,
+        envStorageKey: String,
+        keyPathPrefix: [String]
+    ) -> [MCPStdioEnvironmentVariable] {
+        guard let env = config[envStorageKey] as? [String: Any] else {
             return []
         }
 
@@ -606,7 +749,7 @@ struct LocalMCPScanner: Sendable {
                     valueSource: MCPBridgeHeaderValueSource(
                         kind: .tomlFile,
                         filePath: sourcePath,
-                        keyPath: ["mcp_servers", rawName, "env", name]
+                        keyPath: keyPathPrefix + [name]
                     )
                 )
             }
@@ -617,7 +760,7 @@ struct LocalMCPScanner: Sendable {
                     valueSource: MCPBridgeHeaderValueSource(
                         kind: .jsonFile,
                         filePath: sourcePath,
-                        keyPath: [rootKey, rawName, "env", name]
+                        keyPath: keyPathPrefix + [name]
                     )
                 )
             }
@@ -799,9 +942,26 @@ struct LocalMCPScanner: Sendable {
         throw LocalMCPScannerError.invalidResponse("response was neither JSON nor JSON SSE")
     }
 
+    private enum JSONReadResult {
+        case success([String: Any])
+        case failure
+    }
+
+    private func readJSONObject(from url: URL) -> JSONReadResult {
+        guard let data = try? Data(contentsOf: url) else {
+            return .failure
+        }
+        let text = String(decoding: data, as: UTF8.self)
+        let prepared = Self.prepareJSONC(text)
+        guard let jsonData = prepared.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            return .failure
+        }
+        return .success(object)
+    }
+
     private func jsonObject(from url: URL) -> [String: Any]? {
-        guard let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard case .success(let object) = readJSONObject(from: url) else {
             return nil
         }
         return object
@@ -846,11 +1006,13 @@ struct LocalMCPScanner: Sendable {
         args: [String] = [],
         startupTimeoutSeconds: TimeInterval? = nil,
         reason: String? = nil,
-        environment: [MCPStdioEnvironmentVariable] = []
+        environment: [MCPStdioEnvironmentVariable] = [],
+        idSuffix: String? = nil
     ) -> LocalMCPServerCandidate {
         let bridgeable = (transport == .http || transport == .stdio) && reason == nil
+        let id = idSuffix.map { "\(source).\(name).\($0)" } ?? "\(source).\(name)"
         return LocalMCPServerCandidate(
-            id: "\(source).\(name)",
+            id: id,
             source: source,
             sourcePath: sourcePath,
             name: name,
@@ -890,6 +1052,243 @@ struct LocalMCPScanner: Sendable {
             inputSchema: JSONValue.fromJSONObject(object["inputSchema"] ?? [:]),
             annotations: JSONValue.fromJSONObject(object["annotations"] ?? [:])
         )
+    }
+
+    private static func resolveRootServers(in object: [String: Any], preferredKey: String) -> (Any?, String) {
+        if let servers = object[preferredKey] {
+            return (servers, preferredKey)
+        }
+        for alias in rootKeyAliases where alias != preferredKey {
+            if let servers = object[alias] {
+                return (servers, alias)
+            }
+        }
+        return (nil, preferredKey)
+    }
+
+    private static func unreadableConfigCandidate(path: URL, source: String, format: String) -> LocalMCPServerCandidate {
+        let fileName = path.lastPathComponent
+        let name = stableSlug(fileName)
+        return LocalMCPServerCandidate(
+            id: "\(source).\(name)",
+            source: source,
+            sourcePath: path.path,
+            name: name,
+            displayName: fileName,
+            transport: .stdio,
+            url: nil,
+            command: nil,
+            args: [],
+            startupTimeoutSeconds: nil,
+            isLocal: false,
+            bridgeable: false,
+            reason: "Could not read this file as \(format).",
+            headers: [],
+            environment: [],
+            probe: nil,
+            probeError: nil
+        )
+    }
+
+    private static func projectPathSuffix(_ projectPath: String) -> String {
+        let hash = SHA256.hash(data: Data(projectPath.utf8))
+        return hash.prefix(4).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func disabledReason(from config: [String: Any]) -> String? {
+        if config["disabled"] as? Bool == true {
+            return "Disabled in the source app's settings."
+        }
+        if config["enabled"] as? Bool == false {
+            return "Disabled in the source app's settings."
+        }
+        return nil
+    }
+
+    private static func primaryBlockedReason(from config: [String: Any]) -> String? {
+        if config["envFile"] != nil {
+            return "This server loads secrets from an env file; add the values in the source app before importing."
+        }
+        return disabledReason(from: config)
+    }
+
+    private static func environmentStorageKey(in config: [String: Any]) -> String {
+        if config["environment"] != nil {
+            return "environment"
+        }
+        return "env"
+    }
+
+    private static func normalizedTypeName(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+    }
+
+    private static func resolvedTransport(from config: [String: Any]) -> LocalMCPServerCandidate.Transport? {
+        if let type = config["type"] as? String {
+            switch normalizedTypeName(type) {
+            case "stdio", "local":
+                return .stdio
+            case "http", "streamablehttp", "sse", "remote":
+                return .http
+            default:
+                break
+            }
+        }
+        if resolveHTTPURL(from: config) != nil {
+            return .http
+        }
+        if resolveCommandConfig(from: config) != nil {
+            return .stdio
+        }
+        return nil
+    }
+
+    private static let urlConfigKeys = ["httpUrl", "serverUrl", "url", "endpoint"]
+
+    private static func resolveHTTPURL(from config: [String: Any]) -> String? {
+        for key in urlConfigKeys {
+            if let url = config[key] as? String, looksLikeHTTPURL(url) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private static func resolveCommandConfig(from config: [String: Any]) -> (command: String, args: [String])? {
+        if let commandArray = config["command"] as? [Any] {
+            let strings = commandArray.map { String(describing: $0) }
+            guard let executable = strings.first, !executable.isEmpty else {
+                return nil
+            }
+            let leadingArgs = Array(strings.dropFirst())
+            let extraArgs = (config["args"] as? [Any] ?? []).map { String(describing: $0) }
+            return (executable, leadingArgs + extraArgs)
+        }
+        if let command = config["command"] as? String, !command.isEmpty {
+            let args = (config["args"] as? [Any] ?? []).map { String(describing: $0) }
+            return (command, args)
+        }
+        return nil
+    }
+
+    static func prepareJSONC(_ text: String) -> String {
+        removeJSONTrailingCommas(from: stripJSONCComments(from: text))
+    }
+
+    private static func stripJSONCComments(from text: String) -> String {
+        var result = ""
+        result.reserveCapacity(text.count)
+
+        var index = text.startIndex
+        var inString = false
+        var escaped = false
+
+        while index < text.endIndex {
+            let character = text[index]
+
+            if inString {
+                result.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                index = text.index(after: index)
+                continue
+            }
+
+            if character == "\"" {
+                inString = true
+                result.append(character)
+                index = text.index(after: index)
+                continue
+            }
+
+            if character == "/" {
+                let next = text.index(after: index)
+                if next < text.endIndex {
+                    let nextCharacter = text[next]
+                    if nextCharacter == "/" {
+                        index = text.index(after: next)
+                        while index < text.endIndex, text[index] != "\n" {
+                            index = text.index(after: index)
+                        }
+                        continue
+                    }
+                    if nextCharacter == "*" {
+                        index = text.index(after: next)
+                        while index < text.endIndex {
+                            if text[index] == "*",
+                               text.index(after: index) < text.endIndex,
+                               text[text.index(after: index)] == "/" {
+                                index = text.index(index, offsetBy: 2)
+                                break
+                            }
+                            index = text.index(after: index)
+                        }
+                        continue
+                    }
+                }
+            }
+
+            result.append(character)
+            index = text.index(after: index)
+        }
+
+        return result
+    }
+
+    private static func removeJSONTrailingCommas(from text: String) -> String {
+        var result = ""
+        result.reserveCapacity(text.count)
+
+        var index = text.startIndex
+        var inString = false
+        var escaped = false
+
+        while index < text.endIndex {
+            let character = text[index]
+
+            if inString {
+                result.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                index = text.index(after: index)
+                continue
+            }
+
+            if character == "\"" {
+                inString = true
+                result.append(character)
+                index = text.index(after: index)
+                continue
+            }
+
+            if character == "," {
+                var lookahead = text.index(after: index)
+                while lookahead < text.endIndex, text[lookahead].isWhitespace {
+                    lookahead = text.index(after: lookahead)
+                }
+                if lookahead < text.endIndex, text[lookahead] == "}" || text[lookahead] == "]" {
+                    index = text.index(after: index)
+                    continue
+                }
+            }
+
+            result.append(character)
+            index = text.index(after: index)
+        }
+
+        return result
     }
 
     private static func looksLikeHTTPURL(_ value: String) -> Bool {
