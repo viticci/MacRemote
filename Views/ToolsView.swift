@@ -43,8 +43,14 @@ extension ToolAdapterMode {
 }
 
 extension ToolDefinition {
+    /// Visible copy for built-in tools that run in-process (no subprocess).
+    static let nativeExecutionSummary = "Runs natively in MacRemote — no command is launched."
+
+    var isNativeExecution: Bool { backend == .native }
+
     var modeDisplayTitle: String {
         if isMCPBridge { return "Imported" }
+        if isNativeExecution { return "Native" }
         return isGenericCLIAdapter ? ToolAdapterMode.cliAdapter.displayTitle : ToolAdapterMode.commandTemplate.displayTitle
     }
 }

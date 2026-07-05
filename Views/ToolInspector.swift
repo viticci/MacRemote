@@ -317,20 +317,33 @@ private struct ToolOverviewTab: View {
 
     private var commandBlock: some View {
         VStack(alignment: .leading, spacing: Space.s1) {
-            Text(tool.isMCPBridge ? "Server" : "Command")
+            Text(commandBlockTitle)
                 .font(TypeRamp.cardTitle)
-            HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
-                Text(tool.preview)
-                    .machineText(TypeRamp.machineCaption)
+            if tool.isNativeExecution {
+                Text(ToolDefinition.nativeExecutionSummary)
+                    .font(TypeRamp.rowDetail)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                CopyButton(value: tool.preview, onCopy: {
-                    appModel.appendLog(level: .info, "Copied command for \(tool.name).")
-                })
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
+                    Text(tool.preview)
+                        .machineText(TypeRamp.machineCaption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    CopyButton(value: tool.preview, onCopy: {
+                        appModel.appendLog(level: .info, "Copied command for \(tool.name).")
+                    })
+                }
+                .padding(Space.s2)
+                .background(.quaternary.opacity(0.4), in: AppShape.mono)
             }
-            .padding(Space.s2)
-            .background(.quaternary.opacity(0.4), in: AppShape.mono)
         }
+    }
+
+    private var commandBlockTitle: String {
+        if tool.isMCPBridge { return "Server" }
+        if tool.isNativeExecution { return "Execution" }
+        return "Command"
     }
 
     private var identityRows: [KeyValueRow] {
@@ -545,7 +558,11 @@ private struct BuiltInDefinitionView: View {
                 .padding(.horizontal, Space.s4)
                 .padding(.vertical, Space.s2)
 
-            ToolDefinitionForm(draft: .constant(ToolDefinitionDraft(tool: tool)), isEditable: false)
+            ToolDefinitionForm(
+                draft: .constant(ToolDefinitionDraft(tool: tool)),
+                isEditable: false,
+                isNativeExecution: tool.isNativeExecution
+            )
         }
     }
 }
@@ -650,14 +667,20 @@ private struct NewToolEditor: View {
 struct ToolDefinitionForm: View {
     @Binding var draft: ToolDefinitionDraft
     var isEditable = true
+    /// Built-in native tools have no real executable or argument template.
+    var isNativeExecution = false
 
     @State private var isExecutablePickerPresented = false
 
     var body: some View {
         Form {
-            modeSection
-            commandSection
-            argumentsSection
+            if isNativeExecution {
+                nativeExecutionSection
+            } else {
+                modeSection
+                commandSection
+                argumentsSection
+            }
             detailsSection
             limitsSection
             permissionsSection
@@ -702,6 +725,20 @@ struct ToolDefinitionForm: View {
             "Flexible Command lets the app choose the arguments — every risky call still asks you"
         case .commandTemplate:
             "Fixed Command runs exactly the arguments you list — apps can only fill in the placeholders you define"
+        }
+    }
+
+    private var nativeExecutionSection: some View {
+        Section("Command") {
+            TextField("Name", text: $draft.name)
+            TextField("Summary", text: $draft.summary)
+            LabeledContent("Execution") {
+                Text(ToolDefinition.nativeExecutionSummary)
+                    .font(TypeRamp.rowDetail)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
