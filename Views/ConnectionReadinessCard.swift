@@ -526,7 +526,7 @@ private struct ConnectionReadinessRowView: View {
                     .font(TypeRamp.rowDetail)
                     .foregroundStyle(.secondary)
                 Button("Go Public…") { requestGoPublicInline() }
-                    .disabled(!appModel.serverStatus.isRunning || appModel.tunnelStatus == .starting || appModel.tunnelStatus == .unavailable)
+                    .disabled(!appModel.serverStatus.isRunning || appModel.tunnelStatus.isRecovering || appModel.tunnelStatus == .unavailable)
             }
         }
     }

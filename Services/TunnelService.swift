@@ -36,6 +36,10 @@ final class TunnelService: @unchecked Sendable {
         ExecutableLocator.executablePath(named: "cloudflared")
     }
 
+    func isProcessRunning() -> Bool {
+        lock.withLock { process?.isRunning == true }
+    }
+
     func status(localServerURL: URL?) -> TunnelStatus {
         guard cloudflaredPath() != nil else {
             return .unavailable

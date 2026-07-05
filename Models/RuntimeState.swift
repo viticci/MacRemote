@@ -23,6 +23,7 @@ enum ServerStatus: Equatable, Sendable {
 enum TunnelStatus: Equatable, Sendable {
     case stopped
     case starting
+    case reconnecting(attempt: Int)
     case unavailable
     case ready
     case running(URL)
@@ -32,6 +33,7 @@ enum TunnelStatus: Equatable, Sendable {
         switch self {
         case .stopped: "Stopped"
         case .starting: "Starting"
+        case .reconnecting: "Reconnecting"
         case .unavailable: "Unavailable"
         case .ready: "Ready"
         case .running: "Running"
@@ -41,6 +43,13 @@ enum TunnelStatus: Equatable, Sendable {
 
     var isRunning: Bool {
         if case .running = self { true } else { false }
+    }
+
+    var isRecovering: Bool {
+        switch self {
+        case .starting, .reconnecting: true
+        default: false
+        }
     }
 }
 

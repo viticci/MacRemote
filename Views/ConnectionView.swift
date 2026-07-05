@@ -142,7 +142,7 @@ struct ConnectionView: View {
             return exposure.total == 0 ? .zeroTools : .off
         case .running:
             switch appModel.tunnelStatus {
-            case .starting:
+            case .starting, .reconnecting:
                 return .publicPending
             case .running(let baseURL):
                 return .publicRunning(

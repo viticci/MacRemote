@@ -573,7 +573,7 @@ struct WelcomeView: View {
                         "Forwards only your shared tools — nothing else on this Mac"
                     ]
                 )
-            case .starting:
+            case .starting, .reconnecting:
                 return .publicPending
             case .failed(let message):
                 return .partialFailure(message: message)

@@ -172,6 +172,9 @@ final class AppModel {
 
     private let userDefaults: UserDefaults
     private let tunnelService = TunnelService()
+    private var tunnelWatchdog: TunnelWatchdog!
+    private let originHealthChecker = URLOriginHealthChecker()
+    private var activeTunnelMode: ActiveTunnelMode = .none
     private let toolStore: ToolRegistryStore
     private let oauthGrantStore: OAuthGrantStore
     private let oauthClientCredentialStore: OAuthClientCredentialStore
@@ -339,6 +342,11 @@ final class AppModel {
                 "Saved sign-in credentials are locked by macOS. Unlock them in Settings › Security so connected apps can keep signing in."
             )
         }
+        tunnelWatchdog = Self.makeTunnelWatchdog(
+            for: self,
+            tunnelService: tunnelService,
+            originHealthChecker: originHealthChecker
+        )
     }
 
     private func installApprovalCoordinators() {
@@ -455,6 +463,7 @@ final class AppModel {
 
     func stopLocalServer() {
         resolvePendingRequestsForServerStop()
+        deactivateTunnelWatchdog()
         clearTunnelSupervision()
         tunnelService.stop()
         localServer?.stop()
@@ -1846,6 +1855,8 @@ final class AppModel {
         }
 
         tunnelStatus = .starting
+        activeTunnelMode = .quick
+        tunnelWatchdog.activate(localServerURL: localServerURL)
         do {
             try tunnelService.startQuickTunnel(localServerURL: localServerURL) { [weak self] event in
                 Task { @MainActor in
@@ -1855,12 +1866,14 @@ final class AppModel {
             appendLog(level: .info, "Starting Cloudflare Tunnel for \(localServerURL.absoluteString).")
         } catch {
             let message = error.localizedDescription
+            deactivateTunnelWatchdog()
             tunnelStatus = .failed(message)
             appendLog(level: .error, "Cloudflare Tunnel failed to start: \(message)")
         }
     }
 
     func stopTunnel() {
+        deactivateTunnelWatchdog()
         clearTunnelSupervision()
         tunnelService.stop()
         tunnelStatus = localServerURL == nil ? .stopped : .ready
@@ -1954,6 +1967,8 @@ final class AppModel {
                     provisionApexFavicon: true
                 )
                 lastCloudflareDeployment = deployment
+                activeTunnelMode = .named(deployment)
+                tunnelWatchdog.activate(localServerURL: localServerURL)
                 if let apexFavicon = deployment.apexFavicon {
                     appendLog(level: apexFavicon.isFailure ? .warning : .info, apexFavicon.logMessage)
                 }
@@ -1972,6 +1987,7 @@ final class AppModel {
                 }
             } catch {
                 let message = error.localizedDescription
+                deactivateTunnelWatchdog()
                 tunnelStatus = tunnelService.status(localServerURL: localServerURL)
                 cloudflareCustomDomainState = .failed(message)
                 appendLog(level: .error, "Cloudflare custom domain deploy failed: \(message)")
@@ -2126,6 +2142,9 @@ final class AppModel {
         if case .starting = tunnelStatus {
             return false
         }
+        if tunnelStatus.isRecovering {
+            return false
+        }
         return true
     }
 
@@ -2147,6 +2166,9 @@ final class AppModel {
         }
         if case .starting = tunnelStatus {
             return "Wait for the current tunnel to finish starting."
+        }
+        if tunnelStatus.isRecovering {
+            return "Wait for the public link to finish reconnecting."
         }
         if case .starting = serverStatus {
             return "Wait for the local MCP server to finish starting."
@@ -2394,7 +2416,7 @@ final class AppModel {
     /// Menu / MenuBarExtra "Go Public…": opens the main window's exposure
     /// confirmation — the blast-radius dialog never fires from a menu (spec §2.5).
     func requestGoPublic() {
-        guard serverStatus.isRunning, !tunnelStatus.isRunning, tunnelStatus != .starting else { return }
+        guard serverStatus.isRunning, !tunnelStatus.isRunning, !tunnelStatus.isRecovering else { return }
         openMainWindow()
         selection = .connection
         goPublicConfirmationRequested = true
@@ -3372,6 +3394,13 @@ final class AppModel {
                 status: .checking,
                 detail: "Waiting for Cloudflare Tunnel."
             )
+        case .reconnecting(let attempt):
+            return SmokeReadinessCheck(
+                id: "public-tunnel",
+                title: "Public MCP URL",
+                status: .checking,
+                detail: "Reconnecting public link (attempt \(attempt))."
+            )
         case .failed(let message):
             return SmokeReadinessCheck(
                 id: "public-tunnel",
@@ -3479,6 +3508,7 @@ final class AppModel {
 
     private func stopExposureForInstanceRotation() {
         resolvePendingRequestsForServerStop()
+        deactivateTunnelWatchdog()
         clearTunnelSupervision()
         tunnelService.stop()
         localServer?.stop()
@@ -3583,15 +3613,23 @@ final class AppModel {
         case .started(let publicURL):
             tunnelStatus = .running(publicURL)
             recordTunnelSupervision(publicURL: publicURL)
+            tunnelWatchdog.notifyTunnelStarted()
             appendLog(level: .info, "Cloudflare Tunnel ready at \(publicURL.absoluteString).")
         case .stopped:
+            if tunnelWatchdog.shouldIgnoreStoppedEvent() {
+                return
+            }
+            deactivateTunnelWatchdog()
             clearTunnelSupervision()
             tunnelStatus = tunnelService.status(localServerURL: localServerURL)
             appendLog(level: .info, "Cloudflare Tunnel process exited.")
         case .failed(let message):
+            appendLog(level: .error, message)
+            if tunnelWatchdog.handleUnexpectedFailure(message) {
+                return
+            }
             clearTunnelSupervision()
             tunnelStatus = .failed(message)
-            appendLog(level: .error, message)
             sendNotificationToConfiguredProviders(
                 title: "Public link needs attention",
                 message: "\(message) Open MacRemote to check or restart it.",
@@ -3599,6 +3637,96 @@ final class AppModel {
             )
         }
     }
+
+    private func deactivateTunnelWatchdog() {
+        tunnelWatchdog.deactivate()
+        activeTunnelMode = .none
+    }
+
+    private func performTunnelRestartForWatchdog() throws {
+        guard let localServerURL else {
+            throw TunnelServiceError.cloudflaredUnavailable
+        }
+
+        switch activeTunnelMode {
+        case .quick:
+            try tunnelService.startQuickTunnel(localServerURL: localServerURL) { [weak self] event in
+                Task { @MainActor in
+                    self?.handleTunnelEvent(event)
+                }
+            }
+        case .named(let deployment):
+            try tunnelService.startNamedTunnel(deployment: deployment) { [weak self] event in
+                Task { @MainActor in
+                    self?.handleTunnelEvent(event)
+                }
+            }
+        case .none:
+            throw TunnelServiceError.cloudflaredUnavailable
+        }
+    }
+
+    private func handleTunnelWatchdogRecoveryFailed(_ message: String) {
+        tunnelWatchdog.deactivate()
+        clearTunnelSupervision()
+        tunnelStatus = .failed(message)
+        appendLog(level: .error, message)
+        sendNotificationToConfiguredProviders(
+            title: "Public link needs attention",
+            message: "\(message) Open MacRemote to check or restart it.",
+            threadID: "macremote-tunnel"
+        )
+    }
+
+    private static func makeTunnelWatchdog(
+        for model: AppModel,
+        tunnelService: TunnelService,
+        originHealthChecker: URLOriginHealthChecker
+    ) -> TunnelWatchdog {
+        TunnelWatchdog(environment: TunnelWatchdog.Environment(
+            sleep: { duration in
+                try await Task.sleep(for: duration)
+            },
+            isTunnelProcessRunning: {
+                tunnelService.isProcessRunning()
+            },
+            stopTunnelIfNeeded: { [weak model] in
+                await MainActor.run {
+                    model?.tunnelService.stop()
+                }
+            },
+            restartTunnel: { [weak model] in
+                try await MainActor.run {
+                    guard let model else { throw TunnelServiceError.cloudflaredUnavailable }
+                    try model.performTunnelRestartForWatchdog()
+                }
+            },
+            checkOriginHealth: { localServerURL in
+                await originHealthChecker.isOriginHealthy(at: localServerURL)
+            },
+            onReconnecting: { [weak model] attempt in
+                Task { @MainActor in
+                    model?.tunnelStatus = .reconnecting(attempt: attempt)
+                }
+            },
+            onRecoveryFailed: { [weak model] message in
+                Task { @MainActor in
+                    model?.handleTunnelWatchdogRecoveryFailed(message)
+                }
+            },
+            onLog: { [weak model] message in
+                Task { @MainActor in
+                    model?.appendLog(level: .warning, message)
+                }
+            }
+        ))
+    }
+}
+
+private enum ActiveTunnelMode: Equatable {
+    case none
+    case quick
+    case named(CloudflareCustomDomainDeployment)
 }
 
 // MARK: - Supporting types

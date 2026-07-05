@@ -146,13 +146,13 @@ struct MacRemoteCommands: Commands {
                 appModel.requestGoPublic()
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(!appModel.serverStatus.isRunning || appModel.tunnelStatus.isRunning || appModel.tunnelStatus == .starting)
+            .disabled(!appModel.serverStatus.isRunning || appModel.tunnelStatus.isRunning || appModel.tunnelStatus.isRecovering)
 
             Button("Stop Sharing") {
                 appModel.stopTunnel()
             }
             .keyboardShortcut(".", modifiers: [.command, .shift])
-            .disabled(!(appModel.tunnelStatus.isRunning || appModel.tunnelStatus == .starting))
+            .disabled(!(appModel.tunnelStatus.isRunning || appModel.tunnelStatus.isRecovering))
 
             Button("Copy Public URL") {
                 appModel.copyPublicURL()
@@ -319,7 +319,7 @@ private struct MenuBarExtraMenu: View {
             .disabled(appModel.serverStatus == .starting)
         }
 
-        if appModel.tunnelStatus.isRunning || appModel.tunnelStatus == .starting {
+        if appModel.tunnelStatus.isRunning || appModel.tunnelStatus.isRecovering {
             Button("Stop Sharing") {
                 appModel.stopTunnel()
             }
