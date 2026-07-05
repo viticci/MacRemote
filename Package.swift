@@ -57,6 +57,7 @@ let package = Package(
                 "Resources",
                 "script",
                 "Tests",
+                "Tools",
                 // Compiled out-of-band by script/compile_shaders.sh (no Metal
                 // compiler on the CLT host). Shaders/default.metallib is picked
                 // up as a bundle resource automatically; ShaderLibrary.bundle(
