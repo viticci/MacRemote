@@ -64,7 +64,8 @@ struct ProcessRunner: Sendable {
 
         let started = Date()
         let timeoutState = TimeoutState()
-        var processGroupLeaderPID: pid_t = 0
+        var childPID: pid_t = 0
+        var processGroupEstablished = false
 
         let termination = Task {
             await withCheckedContinuation { continuation in
@@ -75,8 +76,8 @@ struct ProcessRunner: Sendable {
         }
 
         try process.run()
-        processGroupLeaderPID = process.processIdentifier
-        Self.makeProcessGroupLeader(pid: processGroupLeaderPID)
+        childPID = process.processIdentifier
+        processGroupEstablished = Self.makeProcessGroupLeader(pid: childPID)
 
         if let standardInput, let stdinPipe {
             stdinPipe.fileHandleForWriting.write(Data(standardInput.utf8))
@@ -87,10 +88,16 @@ struct ProcessRunner: Sendable {
             try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
             if process.isRunning {
                 await timeoutState.markTimedOut()
-                Self.signalProcessGroup(leaderPID: processGroupLeaderPID, signal: SIGTERM)
+                Self.terminateTimedOutChild(
+                    pid: childPID,
+                    processGroupEstablished: processGroupEstablished
+                )
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if process.isRunning {
-                    Self.signalProcessGroup(leaderPID: processGroupLeaderPID, signal: SIGKILL)
+                    Self.killTimedOutChild(
+                        pid: childPID,
+                        processGroupEstablished: processGroupEstablished
+                    )
                 }
             }
         }
@@ -140,11 +147,20 @@ struct ProcessRunner: Sendable {
         return (data, truncated)
     }
 
-    private static func makeProcessGroupLeader(pid: pid_t) {
+    /// Attempts to make `pid` its own process-group leader so grandchildren can be reaped via `kill(-pid, …)`.
+    /// Returns whether `setpgid` succeeded; after exec this often fails with EACCES, so callers must not rely on it alone.
+    private static func makeProcessGroupLeader(pid: pid_t) -> Bool {
+        guard pid > 1 else {
+            return false
+        }
+        return setpgid(pid, pid) == 0
+    }
+
+    private static func signalProcess(pid: pid_t, signal: Int32) {
         guard pid > 1 else {
             return
         }
-        _ = setpgid(pid, pid)
+        _ = kill(pid, signal)
     }
 
     private static func signalProcessGroup(leaderPID: pid_t, signal: Int32) {
@@ -152,6 +168,22 @@ struct ProcessRunner: Sendable {
             return
         }
         _ = kill(-leaderPID, signal)
+    }
+
+    /// SIGTERM: process group when established, always the direct child (race-free backstop).
+    private static func terminateTimedOutChild(pid: pid_t, processGroupEstablished: Bool) {
+        if processGroupEstablished {
+            signalProcessGroup(leaderPID: pid, signal: SIGTERM)
+        }
+        signalProcess(pid: pid, signal: SIGTERM)
+    }
+
+    /// SIGKILL: process group when established, always the direct child (race-free backstop).
+    private static func killTimedOutChild(pid: pid_t, processGroupEstablished: Bool) {
+        if processGroupEstablished {
+            signalProcessGroup(leaderPID: pid, signal: SIGKILL)
+        }
+        signalProcess(pid: pid, signal: SIGKILL)
     }
 
     private func cappedString(from data: Data, truncated: Bool) -> (value: String, truncated: Bool) {

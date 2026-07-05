@@ -705,8 +705,10 @@ struct NativeToolExecutor: Sendable {
             switch value {
             case .string(let string):
                 return Int(string) ?? defaultValue
-            case .json(.number(let number)) where number.rounded() == number:
-                return Int(number)
+            case .json(.number(let number)):
+                if let integer = Int(exactly: number) {
+                    return integer
+                }
             default:
                 break
             }

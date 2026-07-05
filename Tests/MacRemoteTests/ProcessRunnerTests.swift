@@ -111,6 +111,50 @@ struct ProcessRunnerTests {
         #expect(pid > 1)
         #expect(isProcessRunning(pid: pid) == false)
     }
+
+    @Test func runnerKillsDirectSleepAfterTimeout() async throws {
+        let marker = 337
+        let runner = ProcessRunner()
+        let result = try await runner.run(
+            executablePath: "/bin/sleep",
+            arguments: ["\(marker)"],
+            timeoutSeconds: 1,
+            outputByteLimit: 1024
+        )
+
+        #expect(result.timedOut == true)
+        #expect(sleepProcessExists(duration: marker) == false)
+    }
+
+    @Test func runnerKillsConcurrentTimedOutChildren() async throws {
+        let uniqueDurations = (0..<8).map { 340 + $0 }
+        try await withThrowingTaskGroup(of: (Int, CommandRunResult).self) { group in
+            for duration in uniqueDurations {
+                group.addTask {
+                    let runner = ProcessRunner()
+                    let result = try await runner.run(
+                        executablePath: "/usr/bin/perl",
+                        arguments: ["-e", "print $$; exec('/bin/sleep', '\(duration)')"],
+                        timeoutSeconds: 1,
+                        outputByteLimit: 64
+                    )
+                    return (duration, result)
+                }
+            }
+
+            var pids: [pid_t] = []
+            for try await (duration, result) in group {
+                #expect(result.timedOut == true)
+                let pid = pid_t(Int32(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0)
+                #expect(pid > 1)
+                pids.append(pid)
+                #expect(sleepProcessExists(duration: duration) == false)
+            }
+            for pid in pids {
+                #expect(isProcessRunning(pid: pid) == false)
+            }
+        }
+    }
 }
 
 private func isProcessRunning(pid: pid_t) -> Bool {
@@ -121,4 +165,20 @@ private func isProcessRunning(pid: pid_t) -> Bool {
         return true
     }
     return errno == EPERM
+}
+
+private func sleepProcessExists(duration: Int) -> Bool {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    process.arguments = ["-f", "sleep \(duration)"]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    try? process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        return false
+    }
+    let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 }

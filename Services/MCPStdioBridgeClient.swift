@@ -457,8 +457,8 @@ private final class MCPStdioMessageInbox: @unchecked Sendable {
             string
         case let int as Int:
             String(int)
-        case let double as Double where double.rounded() == double:
-            String(Int(double))
+        case let double as Double:
+            Int(exactly: double).map(String.init)
         default:
             nil
         }

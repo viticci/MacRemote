@@ -1484,6 +1484,42 @@ struct LocalMCPServerTests {
         #expect(error["message"] as? String == "Invalid cursor.")
     }
 
+    @Test func toolsListRejectsUndecodableCursorWhenUnderPageSize() async throws {
+        let coordinator = OAuthCoordinator()
+        let tools = makePaginationTestTools(count: 5)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: tools,
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let response = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "bad-cursor-under-page",
+                "method": "tools/list",
+                "params": [
+                    "cursor": "garbage!!!"
+                ]
+            ]
+        )
+        #expect(response.statusCode == 200)
+        let error = try #require(response.json["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32602)
+        #expect(error["message"] as? String == "Invalid cursor.")
+        #expect(response.json["result"] == nil)
+    }
+
     @Test func toolsListToleratesToolCountChangeBetweenPages() async throws {
         let coordinator = OAuthCoordinator()
         let initialTools = makePaginationTestTools(count: 130)
@@ -2071,6 +2107,29 @@ private struct ArtifactPayloadToolExecutor: ToolExecuting {
     }
 }
 
+private struct RegisteredArtifactPayloadToolExecutor: ToolExecuting {
+    let artifactPath: String
+    let filename: String
+    let sizeBytes: Int64
+
+    func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
+        let stdout = """
+        {"artifact_path":"\(artifactPath)","filename":"\(filename)","size_bytes":\(sizeBytes),"expires_in_seconds":600,"downloads_allowed":3}
+        """
+        return ToolExecutionOutcome(
+            toolID: toolID,
+            toolName: "Artifact",
+            exitCode: 0,
+            stdout: stdout,
+            stderr: "",
+            duration: 0.01,
+            timedOut: false,
+            truncatedStdout: false,
+            truncatedStderr: false
+        )
+    }
+}
+
 private struct ToolCallResultResponse: Sendable {
     let statusCode: Int
     let isError: Bool?
@@ -2343,6 +2402,17 @@ private func headerValue(_ headers: [AnyHashable: Any], named name: String) -> S
         guard let key = key as? String else { return false }
         return key.caseInsensitiveCompare(name) == .orderedSame
     }?.value as? String
+}
+
+private func assertArtifactRouteContentTypeMatchesDeclaredMIME(
+    resourceLink: [String: Any]
+) async throws {
+    let declaredMIME = try #require(resourceLink["mimeType"] as? String)
+    let uri = try #require(resourceLink["uri"] as? String)
+    let url = try #require(URL(string: uri))
+    let head = try await sendRequest(method: "HEAD", url: url)
+    #expect(head.statusCode == 200)
+    #expect(headerValue(head.headers, named: "Content-Type") == declaredMIME)
 }
 
 private func resourceURL(base: URL, headers: [String: String], instanceID: String) -> String {
@@ -3172,6 +3242,7 @@ struct MCPUISupportTests {
         #expect(uri.hasPrefix("http://127.0.0.1:\(port)/artifact/"))
         #expect(resourceLink["name"] as? String == "Echo-output.txt")
         #expect(resourceLink["mimeType"] as? String == "text/plain")
+        try await assertArtifactRouteContentTypeMatchesDeclaredMIME(resourceLink: resourceLink)
         let note = try #require(content[2] as? [String: Any])
         #expect(note["type"] as? String == "text")
         #expect((note["text"] as? String)?.contains("150000 bytes") == true)
@@ -3351,6 +3422,71 @@ struct MCPUIActionTargetingTests {
         #expect(resourceLink["mimeType"] as? String == "application/octet-stream")
         #expect((resourceLink["description"] as? String)?.contains("600") == true)
         #expect((resourceLink["description"] as? String)?.contains("4 bytes") == true)
+    }
+
+    @Test func artifactZipResourceLinkMimeTypeMatchesRouteContentType() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macremote-artifact-zip-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let artifactStore = ArtifactStore(rootDirectory: root.appendingPathComponent("store", isDirectory: true))
+        let source = root.appendingPathComponent("archive.zip")
+        try Data("zip-bytes".utf8).write(to: source)
+        let handle = try artifactStore.register(fileURL: source, suggestedFilename: "archive.zip")
+
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.artifact.zip",
+                    name: "Zip Artifact",
+                    summary: "Return zip artifact metadata.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: [],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: RegisteredArtifactPayloadToolExecutor(
+                artifactPath: handle.artifactPath,
+                filename: handle.filename,
+                sizeBytes: handle.sizeBytes
+            ),
+            artifactStore: artifactStore
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "artifact-zip",
+                "method": "tools/call",
+                "params": [
+                    "name": "test_artifact_zip",
+                    "arguments": [:]
+                ]
+            ]
+        )
+        #expect(toolCall.statusCode == 200)
+        let callResult = try #require(toolCall.json["result"] as? [String: Any])
+        let content = try #require(callResult["content"] as? [[String: Any]])
+        let resourceLink = try #require(content.first { $0["type"] as? String == "resource_link" } as? [String: Any])
+        #expect(resourceLink["name"] as? String == "archive.zip")
+        #expect(resourceLink["mimeType"] as? String == "application/zip")
+        try await assertArtifactRouteContentTypeMatchesDeclaredMIME(resourceLink: resourceLink)
     }
 
     @Test func artifactRouteServesBytesWithHeadersAndExpires() async throws {

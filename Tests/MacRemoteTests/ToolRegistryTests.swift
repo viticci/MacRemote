@@ -315,6 +315,96 @@ struct ToolRegistryTests {
         }
     }
 
+    @Test(arguments: [
+        (1e50, "positive out-of-range"),
+        (-1e50, "negative out-of-range"),
+        (Double.infinity, "infinity"),
+        (-Double.infinity, "negative infinity"),
+        (Double.nan, "NaN")
+    ])
+    func toolArgumentValueIntegerStringRejectsNonRepresentableNumbers(value: Double, _: String) {
+        #expect(ToolArgumentValue.integerString(from: value) == nil)
+        #expect(ToolArgumentValue.json(.number(value)).stringValue == nil)
+    }
+
+    @Test func toolArgumentValueIntegerStringAcceptsRepresentableIntegers() {
+        #expect(ToolArgumentValue.integerString(from: 42) == "42")
+        #expect(ToolArgumentValue.integerString(from: -1) == "-1")
+        #expect(ToolArgumentValue.json(.number(42)).stringValue == "42")
+    }
+
+    @Test func toolArgumentValueFromJSONObjectDoesNotTrapOnOutOfRangeArrayIntegers() {
+        let positive = ToolArgumentValue.fromJSONObject([1e50])
+        #expect(positive?.stringArrayValue == nil)
+
+        let negative = ToolArgumentValue.fromJSONObject([-1e50])
+        #expect(negative?.stringArrayValue == nil)
+    }
+
+    @Test func typedIntegerParameterRejectsOutOfRangeJSONNumber() throws {
+        let tool = ToolDefinition(
+            id: "test.limit",
+            name: "Limit Test",
+            summary: "Bounded limit.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{limit}"],
+            parameters: [
+                ToolParameter(
+                    name: "limit",
+                    title: "Limit",
+                    kind: .integer,
+                    required: true,
+                    integerRange: 1...100
+                )
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+
+        #expect(throws: ToolValidationError.invalidInteger("limit")) {
+            try ToolArgumentResolver.arguments(for: tool, parameters: ["limit": .json(.number(1e50))])
+        }
+        #expect(throws: ToolValidationError.invalidInteger("limit")) {
+            try ToolArgumentResolver.arguments(for: tool, parameters: ["limit": .json(.number(-1e50))])
+        }
+        #expect(throws: ToolValidationError.invalidInteger("limit")) {
+            try ToolArgumentResolver.arguments(for: tool, parameters: ["limit": .json(.number(.infinity))])
+        }
+    }
+
+    @Test func stringArrayParameterRejectsNonArrayJSONValue() throws {
+        let tool = ToolDefinition(
+            id: "stress.echo",
+            name: "Stress Echo",
+            summary: "Echo argv.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{args}"],
+            parameters: [
+                ToolParameter(
+                    name: "args",
+                    title: "Arguments",
+                    kind: .stringArray,
+                    required: false
+                )
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 5,
+            outputByteLimit: 1024
+        )
+
+        let stringArgument = try #require(ToolArgumentValue.fromJSONObject("not_an_array"))
+        #expect(throws: ToolValidationError.invalidArgument("args")) {
+            try ToolArgumentResolver.arguments(for: tool, parameters: ["args": stringArgument])
+        }
+        #expect(
+            try ToolArgumentResolver.arguments(
+                for: tool,
+                parameters: ["args": .stringArray(["hello", "world"])]
+            ) == ["hello", "world"]
+        )
+    }
+
     @Test func toolArgumentValuePreservesJSONNumbersForBridgeArguments() throws {
         let value = try #require(ToolArgumentValue.fromJSONObject([
             "count": 2,

@@ -267,14 +267,24 @@ enum ToolArgumentValue: Equatable, Sendable {
     case stringArray([String])
     case json(JSONValue)
 
+    /// Decimal string for a JSON number only when it is a finite integer representable as `Int`.
+    /// Out-of-range, non-integral, infinity, and NaN values return `nil` so callers surface
+    /// `invalidInteger` instead of trapping on `Int(_:)`.
+    static func integerString(from number: Double) -> String? {
+        guard number.isFinite, let integer = Int(exactly: number) else {
+            return nil
+        }
+        return String(integer)
+    }
+
     var stringValue: String? {
         switch self {
         case .string(let value):
             return value
         case .json(.string(let value)):
             return value
-        case .json(.number(let value)) where value.rounded() == value:
-            return String(Int(value))
+        case .json(.number(let value)):
+            return Self.integerString(from: value)
         default:
             return nil
         }
@@ -326,8 +336,8 @@ enum ToolArgumentValue: Equatable, Sendable {
                     return string
                 case let int as Int:
                     return String(int)
-                case let double as Double where double.rounded() == double:
-                    return String(Int(double))
+                case let double as Double:
+                    return Self.integerString(from: double)
                 default:
                     return nil
                 }

@@ -998,7 +998,14 @@ final class LocalMCPServer: @unchecked Sendable {
     }
 
     private func mimeType(forFilename filename: String) -> String {
-        filename.lowercased().hasSuffix(".zip") ? "application/zip" : "application/octet-stream"
+        let lowercased = filename.lowercased()
+        if lowercased.hasSuffix(".zip") {
+            return "application/zip"
+        }
+        if lowercased.hasSuffix(".txt") {
+            return "text/plain"
+        }
+        return "application/octet-stream"
     }
 
     private func artifactResourceLinkItem(payload: [String: Any], base: String) -> [String: Any]? {
@@ -1046,7 +1053,7 @@ final class LocalMCPServer: @unchecked Sendable {
             "type": "resource_link",
             "uri": base + handle.artifactPath,
             "name": handle.filename,
-            "mimeType": "text/plain",
+            "mimeType": mimeType(forFilename: handle.filename),
             "description": "Full tool output (expires in \(handle.expiresInSeconds)s, \(handle.sizeBytes) bytes)."
         ]
         let note: [String: Any] = [
@@ -1093,9 +1100,7 @@ final class LocalMCPServer: @unchecked Sendable {
             fileData = data
         }
 
-        let contentType = resolved.filename.lowercased().hasSuffix(".zip")
-            ? "application/zip"
-            : "application/octet-stream"
+        let contentType = mimeType(forFilename: resolved.filename)
         let sanitizedFilename = ArtifactStore.sanitizedFilename(resolved.filename)
 
         return HTTPResponse(
@@ -1362,32 +1367,26 @@ final class LocalMCPServer: @unchecked Sendable {
         let params = message["params"] as? [String: Any]
         let cursorString = params?["cursor"] as? String
 
+        if let cursorString {
+            guard let cursor = Self.decodeToolsListCursor(cursorString) else {
+                return jsonRPCError(id: id, code: -32602, message: "Invalid cursor.")
+            }
+            let offset = min(cursor.offset, totalCount)
+            let pageEnd = min(offset + Self.toolsListPageSize, totalCount)
+            let pageTools = offset < totalCount ? Array(tools[offset..<pageEnd]) : []
+            let nextCursor: String? = pageEnd < totalCount
+                ? Self.encodeToolsListCursor(offset: pageEnd, count: totalCount)
+                : nil
+            return toolsListResult(id: id, tools: pageTools, nextCursor: nextCursor)
+        }
+
         if totalCount <= Self.toolsListPageSize {
             return toolsListResult(id: id, tools: tools, nextCursor: nil)
         }
 
-        let offset: Int
-        if let cursorString {
-            guard let cursor = Self.decodeToolsListCursor(cursorString),
-                  cursor.offset >= 0,
-                  cursor.count >= 0 else {
-                return jsonRPCError(id: id, code: -32602, message: "Invalid cursor.")
-            }
-            offset = min(cursor.offset, totalCount)
-        } else {
-            offset = 0
-        }
-
-        let pageEnd = min(offset + Self.toolsListPageSize, totalCount)
-        let pageTools = offset < totalCount ? Array(tools[offset..<pageEnd]) : []
-
-        let nextCursor: String?
-        if pageEnd < totalCount {
-            nextCursor = Self.encodeToolsListCursor(offset: pageEnd, count: totalCount)
-        } else {
-            nextCursor = nil
-        }
-
+        let pageEnd = min(Self.toolsListPageSize, totalCount)
+        let pageTools = Array(tools[0..<pageEnd])
+        let nextCursor = Self.encodeToolsListCursor(offset: pageEnd, count: totalCount)
         return toolsListResult(id: id, tools: pageTools, nextCursor: nextCursor)
     }
 

@@ -174,7 +174,8 @@ enum ToolArgumentResolver {
             throw ToolValidationError.missingParameter(name)
         }
 
-        let rawValue = parameters[name] ?? schema.defaultValue.map { .string($0) }
+        let explicitValue = parameters[name]
+        let rawValue = explicitValue ?? schema.defaultValue.map { .string($0) }
         guard let rawValue else {
             if schema.required {
                 throw ToolValidationError.missingParameter(name)
@@ -212,6 +213,10 @@ enum ToolArgumentResolver {
             let values: [String]
             switch rawValue {
             case .string(let value):
+                // Schema defaults are stored as plain strings; remote JSON must send an array.
+                guard explicitValue == nil else {
+                    throw ToolValidationError.invalidArgument(name)
+                }
                 values = value.isEmpty ? [] : [value]
             case .stringArray(let array):
                 values = array
