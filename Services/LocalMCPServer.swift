@@ -1365,7 +1365,13 @@ final class LocalMCPServer: @unchecked Sendable {
         let tools = toolProvider()
         let totalCount = tools.count
         let params = message["params"] as? [String: Any]
-        let cursorString = params?["cursor"] as? String
+        let rawCursor = params?["cursor"]
+        let cursorString = rawCursor as? String
+
+        // A present-but-non-string cursor is a malformed param, not "no cursor".
+        if rawCursor != nil, !(rawCursor is NSNull), cursorString == nil {
+            return jsonRPCError(id: id, code: -32602, message: "Invalid cursor.")
+        }
 
         if let cursorString {
             guard let cursor = Self.decodeToolsListCursor(cursorString) else {
