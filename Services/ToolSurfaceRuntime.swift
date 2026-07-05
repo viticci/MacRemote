@@ -3,14 +3,20 @@ import Foundation
 final class ToolSurfaceRuntime: ToolExecuting, @unchecked Sendable {
     private let lock = NSLock()
     private let environment: [String: String]
+    private let artifactStore: ArtifactStore
     private let mcpBridgeClient = MCPHTTPBridgeClient()
     private let mcpStdioBridgeClient: MCPStdioBridgeClient
     private var tools: [ToolDefinition]
     private var preExecutionCheck: (@Sendable (ToolDefinition) async throws -> Void)?
 
-    init(tools: [ToolDefinition] = [], environment: [String: String]) {
+    init(
+        tools: [ToolDefinition] = [],
+        environment: [String: String],
+        artifactStore: ArtifactStore = ArtifactStore()
+    ) {
         self.tools = tools
         self.environment = environment
+        self.artifactStore = artifactStore
         self.mcpStdioBridgeClient = MCPStdioBridgeClient(environment: environment)
     }
 
@@ -61,7 +67,11 @@ final class ToolSurfaceRuntime: ToolExecuting, @unchecked Sendable {
         if tool.backend == .mcpStdioBridge {
             return try await mcpStdioBridgeClient.call(tool: tool, parameters: parameters)
         }
-        return try await ConfiguredToolExecutor(tools: snapshot, environment: environment)
+        return try await ConfiguredToolExecutor(
+            tools: snapshot,
+            environment: environment,
+            artifactStore: artifactStore
+        )
             .execute(toolID: toolID, parameters: parameters)
     }
 }

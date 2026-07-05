@@ -2,9 +2,14 @@ import Foundation
 
 struct NativeToolExecutor: Sendable {
     private let pathPolicy: FileTransferPathPolicy
+    private let artifactStore: ArtifactStore
 
-    init(pathPolicy: FileTransferPathPolicy = FileTransferPathPolicy()) {
+    init(
+        pathPolicy: FileTransferPathPolicy = FileTransferPathPolicy(),
+        artifactStore: ArtifactStore = ArtifactStore()
+    ) {
         self.pathPolicy = pathPolicy
+        self.artifactStore = artifactStore
     }
 
     func execute(
@@ -37,6 +42,10 @@ struct NativeToolExecutor: Sendable {
             result = fsReadFile(parameters: parameters)
         case .fsWriteFile:
             result = fsWriteFile(parameters: parameters)
+        case .fsDownloadFile:
+            result = fsDownloadFile(parameters: parameters)
+        case .fsDownloadZip:
+            result = await fsDownloadZip(parameters: parameters)
         }
 
         if Date().timeIntervalSince(started) > timeoutSeconds {
@@ -366,6 +375,237 @@ struct NativeToolExecutor: Sendable {
         ])
     }
 
+    private func fsDownloadFile(parameters: [String: ToolArgumentValue]) -> NativeOperationResult {
+        guard let rawPath = requiredString(named: "path", in: parameters) else {
+            return .failure(.missingParameter("path"))
+        }
+
+        let resolvedPath: String
+        do {
+            resolvedPath = try pathPolicy.resolveUserPath(rawPath)
+        } catch FileTransferPathPolicy.PathError.invalidPath {
+            return .failure(.invalidPath)
+        } catch FileTransferPathPolicy.PathError.pathDenied {
+            return .failure(.pathDenied)
+        } catch {
+            return .failure(.invalidPath)
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolvedPath, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return .failure(.notAFile)
+        }
+
+        let sourceURL = URL(fileURLWithPath: resolvedPath)
+        let filename = sourceURL.lastPathComponent
+        let stagingURL: URL
+        do {
+            stagingURL = try copyToTemporaryFile(from: sourceURL, suggestedFilename: filename)
+        } catch {
+            return .failure(.ioError("Could not stage file copy: \(error.localizedDescription)"))
+        }
+
+        do {
+            let handle = try artifactStore.register(fileURL: stagingURL, suggestedFilename: filename)
+            try? FileManager.default.removeItem(at: stagingURL.deletingLastPathComponent())
+            return .success(artifactPayload(for: handle))
+        } catch ArtifactStoreError.artifactTooLarge {
+            try? FileManager.default.removeItem(at: stagingURL.deletingLastPathComponent())
+            return .failure(.artifactTooLarge)
+        } catch {
+            try? FileManager.default.removeItem(at: stagingURL.deletingLastPathComponent())
+            return .failure(.ioError("Could not register artifact: \(error.localizedDescription)"))
+        }
+    }
+
+    private func fsDownloadZip(parameters: [String: ToolArgumentValue]) async -> NativeOperationResult {
+        if let rawPath = requiredString(named: "path", in: parameters) {
+            let resolvedPath: String
+            do {
+                resolvedPath = try pathPolicy.resolveUserPath(rawPath)
+            } catch FileTransferPathPolicy.PathError.invalidPath {
+                return .failure(.invalidPath)
+            } catch FileTransferPathPolicy.PathError.pathDenied {
+                return .failure(.pathDenied)
+            } catch {
+                return .failure(.invalidPath)
+            }
+
+            guard FileManager.default.fileExists(atPath: resolvedPath) else {
+                return .failure(.ioError("Path does not exist."))
+            }
+
+            return await zipAndRegister(sourcePath: resolvedPath, suggestedZipName: zipFilename(for: resolvedPath))
+        }
+
+        guard let rawBase = requiredString(named: "base", in: parameters) else {
+            return .failure(.missingParameter("path"))
+        }
+        guard let relativePaths = parameters["paths"]?.stringArrayValue, !relativePaths.isEmpty else {
+            return .failure(.missingParameter("paths"))
+        }
+
+        let resolvedBase: String
+        do {
+            resolvedBase = try pathPolicy.resolveUserPath(rawBase)
+        } catch FileTransferPathPolicy.PathError.invalidPath {
+            return .failure(.invalidPath)
+        } catch FileTransferPathPolicy.PathError.pathDenied {
+            return .failure(.pathDenied)
+        } catch {
+            return .failure(.invalidPath)
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolvedBase, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return .failure(.notADirectory)
+        }
+
+        let stagingDirectory: URL
+        do {
+            stagingDirectory = try makeTemporaryDirectory()
+        } catch {
+            return .failure(.ioError("Could not create staging directory: \(error.localizedDescription)"))
+        }
+        defer { try? FileManager.default.removeItem(at: stagingDirectory) }
+
+        for relativePath in relativePaths {
+            let absolutePath: String
+            do {
+                absolutePath = try resolveRelativePath(relativePath, under: resolvedBase)
+            } catch FileTransferPathPolicy.PathError.invalidPath {
+                return .failure(.invalidPath)
+            } catch FileTransferPathPolicy.PathError.pathDenied {
+                return .failure(.pathDenied)
+            } catch {
+                return .failure(.invalidPath)
+            }
+
+            guard FileManager.default.fileExists(atPath: absolutePath) else {
+                return .failure(.ioError("Path does not exist: \(relativePath)"))
+            }
+
+            let destination = stagingDirectory.appendingPathComponent(relativePath)
+            do {
+                try FileManager.default.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.copyItem(
+                    at: URL(fileURLWithPath: absolutePath),
+                    to: destination
+                )
+            } catch {
+                return .failure(.ioError("Could not stage \(relativePath): \(error.localizedDescription)"))
+            }
+        }
+
+        return await zipAndRegister(
+            sourcePath: stagingDirectory.path,
+            suggestedZipName: "\(URL(fileURLWithPath: resolvedBase).lastPathComponent).zip"
+        )
+    }
+
+    private func zipAndRegister(sourcePath: String, suggestedZipName: String) async -> NativeOperationResult {
+        let zipStagingDirectory: URL
+        do {
+            zipStagingDirectory = try makeTemporaryDirectory()
+        } catch {
+            return .failure(.ioError("Could not create zip staging directory: \(error.localizedDescription)"))
+        }
+        defer { try? FileManager.default.removeItem(at: zipStagingDirectory) }
+
+        let zipURL = zipStagingDirectory.appendingPathComponent(suggestedZipName)
+        do {
+            try runDitto(arguments: ["-c", "-k", "--sequesterRsrc", sourcePath, zipURL.path])
+        } catch {
+            return .failure(.ioError("Could not create zip archive: \(error.localizedDescription)"))
+        }
+
+        do {
+            let handle = try artifactStore.register(fileURL: zipURL, suggestedFilename: suggestedZipName)
+            return .success(artifactPayload(for: handle))
+        } catch ArtifactStoreError.artifactTooLarge {
+            return .failure(.artifactTooLarge)
+        } catch {
+            return .failure(.ioError("Could not register artifact: \(error.localizedDescription)"))
+        }
+    }
+
+    private func artifactPayload(for handle: ArtifactHandle) -> [String: Any] {
+        [
+            "artifact_token": handle.token,
+            "artifact_path": handle.artifactPath,
+            "filename": handle.filename,
+            "size_bytes": handle.sizeBytes,
+            "sha256": handle.sha256,
+            "expires_in_seconds": handle.expiresInSeconds,
+            "downloads_allowed": handle.downloadsAllowed
+        ]
+    }
+
+    private func zipFilename(for path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let baseName = url.lastPathComponent.isEmpty ? "archive" : url.lastPathComponent
+        return baseName.hasSuffix(".zip") ? baseName : "\(baseName).zip"
+    }
+
+    private func resolveRelativePath(_ relativePath: String, under base: String) throws -> String {
+        guard !relativePath.isEmpty,
+              !relativePath.hasPrefix("/"),
+              relativePath != "..",
+              !relativePath.contains("/../"),
+              !relativePath.hasPrefix("../"),
+              !relativePath.hasSuffix("/.."),
+              relativePath.split(separator: "/").allSatisfy({ $0 != ".." }) else {
+            throw FileTransferPathPolicy.PathError.invalidPath
+        }
+
+        let combined = (base as NSString).appendingPathComponent(relativePath)
+        let standardized = (combined as NSString).standardizingPath
+        let normalizedBase = (base as NSString).standardizingPath
+        guard standardized == normalizedBase || standardized.hasPrefix(normalizedBase + "/") else {
+            throw FileTransferPathPolicy.PathError.invalidPath
+        }
+
+        return try pathPolicy.resolveUserPath(standardized)
+    }
+
+    private func copyToTemporaryFile(from sourceURL: URL, suggestedFilename: String) throws -> URL {
+        let directory = try makeTemporaryDirectory()
+        let destination = directory.appendingPathComponent(suggestedFilename)
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return destination
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macremote-native-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func runDitto(arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = arguments
+        let stderrPipe = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = stderrPipe
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw NSError(
+                domain: "NativeToolExecutor",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: stderr.isEmpty ? "ditto failed." : stderr]
+            )
+        }
+    }
+
     // MARK: - Helpers
 
     private struct NativeExecutionFailure {
@@ -420,6 +660,12 @@ struct NativeToolExecutor: Sendable {
         static func ioError(_ message: String) -> Self {
             Self(code: "io_error", message: message, stderr: message)
         }
+
+        static let artifactTooLarge = Self(
+            code: "artifact_too_large",
+            message: "Artifact exceeds the maximum allowed size.",
+            stderr: "Artifact exceeds 512 MiB."
+        )
     }
 
     private func entryType(at path: String, isDirectory: Bool) -> String {

@@ -3,7 +3,15 @@ import Testing
 @testable import MacRemote
 
 struct FileTransferToolTests {
-    private let executor = NativeToolExecutor()
+    private let artifactStore = ArtifactStore(rootDirectory: FileTransferToolTests.makeArtifactRoot())
+    private var executor: NativeToolExecutor { NativeToolExecutor(artifactStore: artifactStore) }
+
+    private static func makeArtifactRoot() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macremote-file-transfer-artifacts-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 
     // MARK: - read_file
 
@@ -402,13 +410,146 @@ struct FileTransferToolTests {
         #expect(tool.nativeToolID == nil)
     }
 
-    @Test func fileTransferCatalogDefinesFourBuiltInTools() {
-        #expect(FileTransferToolCatalog.builtInTools.count == 4)
+    @Test func fileTransferCatalogDefinesSixBuiltInTools() {
+        #expect(FileTransferToolCatalog.builtInTools.count == 6)
         #expect(FileTransferToolCatalog.builtInTools.allSatisfy { $0.origin == .builtIn })
         #expect(FileTransferToolCatalog.builtInTools.allSatisfy { $0.backend == .native })
         #expect(FileTransferToolCatalog.builtInTools.allSatisfy { $0.category == .filesystem })
         #expect(FileTransferToolCatalog.writeFileTool.capability == .write)
-        #expect(FileTransferToolCatalog.builtInTools.filter { $0.capability == .readOnly }.count == 3)
+        #expect(FileTransferToolCatalog.builtInTools.filter { $0.capability == .readOnly }.count == 5)
+    }
+
+    // MARK: - download_file
+
+    @Test func downloadFileStagesMatchingCopy() async throws {
+        let directory = try makeTemporaryDirectory()
+        let fileURL = directory.appendingPathComponent("payload.bin")
+        let payload = Data([9, 8, 7, 6])
+        try payload.write(to: fileURL)
+
+        let outcome = try await execute(
+            nativeToolID: .fsDownloadFile,
+            parameters: ["path": .string(fileURL.path)]
+        )
+        #expect(outcome.exitCode == 0)
+        let json = try decodeJSONObject(outcome.stdout)
+        let token = try #require(json["artifact_token"] as? String)
+        let consumed = try #require(artifactStore.consume(token: token))
+        #expect(try Data(contentsOf: consumed.fileURL) == payload)
+    }
+
+    @Test func downloadFileRejectsDeniedPath() async throws {
+        let fakeHome = try makeTemporaryDirectory()
+        let sshDir = fakeHome.appendingPathComponent(".ssh", isDirectory: true)
+        try FileManager.default.createDirectory(at: sshDir, withIntermediateDirectories: true)
+        let secret = sshDir.appendingPathComponent("id_rsa")
+        try Data("secret".utf8).write(to: secret)
+
+        let policy = FileTransferPathPolicy(homeDirectory: fakeHome.path)
+        let nativeExecutor = NativeToolExecutor(pathPolicy: policy, artifactStore: artifactStore)
+        let outcome = try await execute(
+            nativeToolID: .fsDownloadFile,
+            parameters: ["path": .string(secret.path)],
+            executor: nativeExecutor
+        )
+        #expect(outcome.exitCode == 1)
+        let json = try decodeJSONObject(outcome.stdout)
+        #expect(json["code"] as? String == "path_denied")
+    }
+
+    // MARK: - download_zip
+
+    @Test func downloadZipSingleDirectoryMatchesSourceTree() async throws {
+        let root = try makeTemporaryDirectory()
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let fileURL = nested.appendingPathComponent("leaf.txt")
+        let payload = Data("leaf-bytes".utf8)
+        try payload.write(to: fileURL)
+
+        let outcome = try await execute(
+            nativeToolID: .fsDownloadZip,
+            parameters: ["path": .string(root.path)]
+        )
+        #expect(outcome.exitCode == 0)
+        let json = try decodeJSONObject(outcome.stdout)
+        let token = try #require(json["artifact_token"] as? String)
+        let consumed = try #require(artifactStore.consume(token: token))
+
+        let extracted = try makeTemporaryDirectory()
+        try runDitto(arguments: ["-x", "-k", consumed.fileURL.path, extracted.path])
+        #expect(try Data(contentsOf: extracted.appendingPathComponent("nested/leaf.txt")) == payload)
+    }
+
+    @Test func downloadZipMultiPathIncludesOnlySelectedEntries() async throws {
+        let base = try makeTemporaryDirectory()
+        let keep = base.appendingPathComponent("keep.txt")
+        let skip = base.appendingPathComponent("skip.txt")
+        try Data("keep".utf8).write(to: keep)
+        try Data("skip".utf8).write(to: skip)
+
+        let outcome = try await execute(
+            nativeToolID: .fsDownloadZip,
+            parameters: [
+                "base": .string(base.path),
+                "paths": .stringArray(["keep.txt"])
+            ]
+        )
+        #expect(outcome.exitCode == 0)
+        let json = try decodeJSONObject(outcome.stdout)
+        let token = try #require(json["artifact_token"] as? String)
+        let consumed = try #require(artifactStore.consume(token: token))
+
+        let extracted = try makeTemporaryDirectory()
+        try runDitto(arguments: ["-x", "-k", consumed.fileURL.path, extracted.path])
+        #expect(FileManager.default.fileExists(atPath: extracted.appendingPathComponent("keep.txt").path))
+        #expect(!FileManager.default.fileExists(atPath: extracted.appendingPathComponent("skip.txt").path))
+    }
+
+    @Test func downloadZipRejectsDeniedPathInPaths() async throws {
+        let fakeHome = try makeTemporaryDirectory()
+        let sshDir = fakeHome.appendingPathComponent(".ssh", isDirectory: true)
+        try FileManager.default.createDirectory(at: sshDir, withIntermediateDirectories: true)
+        let secret = sshDir.appendingPathComponent("id_rsa")
+        try Data("secret".utf8).write(to: secret)
+
+        let publicDir = fakeHome.appendingPathComponent("public", isDirectory: true)
+        try FileManager.default.createDirectory(at: publicDir, withIntermediateDirectories: true)
+        let link = publicDir.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: secret)
+
+        let policy = FileTransferPathPolicy(homeDirectory: fakeHome.path)
+        let nativeExecutor = NativeToolExecutor(pathPolicy: policy, artifactStore: artifactStore)
+        let outcome = try await execute(
+            nativeToolID: .fsDownloadZip,
+            parameters: [
+                "base": .string(publicDir.path),
+                "paths": .stringArray(["link"])
+            ],
+            executor: nativeExecutor
+        )
+        #expect(outcome.exitCode == 1)
+        let json = try decodeJSONObject(outcome.stdout)
+        #expect(json["code"] as? String == "path_denied")
+    }
+
+    @Test func downloadZipRejectsPathEscapingBase() async throws {
+        let parent = try makeTemporaryDirectory()
+        let base = parent.appendingPathComponent("base", isDirectory: true)
+        let outsideFile = parent.appendingPathComponent("outside.txt")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try Data("outside".utf8).write(to: outsideFile)
+
+        let outcome = try await execute(
+            nativeToolID: .fsDownloadZip,
+            parameters: [
+                "base": .string(base.path),
+                "paths": .stringArray(["../outside.txt"])
+            ]
+        )
+        #expect(outcome.exitCode == 1)
+        let json = try decodeJSONObject(outcome.stdout)
+        #expect(json["code"] as? String == "invalid_path")
     }
 
     @Test @MainActor func builtInCatalogToolsStayOutOfUserRegistry() throws {
@@ -424,8 +565,8 @@ struct FileTransferToolTests {
         let model = AppModel(userDefaults: defaults, toolStore: ToolRegistryStore(fileURL: storeURL))
 
         #expect(model.tools.isEmpty)
-        #expect(model.builtInCatalogTools.count == 4)
-        #expect(model.allTools.count == 4)
+        #expect(model.builtInCatalogTools.count == 6)
+        #expect(model.allTools.count == 6)
         for tool in model.builtInCatalogTools {
             #expect(model.allTools.contains(where: { $0.id == tool.id }))
             #expect(!model.isToolExposed(tool))
@@ -439,7 +580,7 @@ struct FileTransferToolTests {
         draft.argumentsText = "hello"
         #expect(model.addUserTool(from: draft) == nil)
         #expect(model.tools.count == 1)
-        #expect(model.allTools.count == 5)
+        #expect(model.allTools.count == 7)
         #expect(model.tools.first?.name == "Echo")
     }
 
@@ -468,5 +609,16 @@ struct FileTransferToolTests {
     private func decodeJSONObject(_ string: String) throws -> [String: Any] {
         let data = try #require(string.data(using: .utf8))
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func runDitto(arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
     }
 }

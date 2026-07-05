@@ -2,7 +2,7 @@ import Foundation
 
 enum FileTransferToolCatalog {
     static var builtInTools: [ToolDefinition] {
-        [statTool, listTreeTool, readFileTool, writeFileTool]
+        [statTool, listTreeTool, readFileTool, writeFileTool, downloadFileTool, downloadZipTool]
     }
 
     static func tool(id: String) -> ToolDefinition? {
@@ -148,6 +148,67 @@ enum FileTransferToolCatalog {
                     kind: .string,
                     required: false,
                     defaultValue: "create"
+                )
+            ]
+        )
+    }
+
+    static var downloadFileTool: ToolDefinition {
+        nativeTool(
+            id: "builtin.fs.download_file",
+            name: "Download File",
+            summary: """
+            Stage a copy of an absolute file path for artifact download. No shell is used. \
+            Expands a leading tilde to the home directory; relative paths are rejected. \
+            Returns artifact_token, artifact_path (/artifact/<token>), filename, size_bytes, sha256, expires_in_seconds, and downloads_allowed. \
+            Fetch bytes with GET on the public download_url the server adds to the result (not via stdout).
+            """,
+            nativeToolID: .fsDownloadFile,
+            capability: .readOnly,
+            parameters: [
+                ToolParameter(
+                    name: "path",
+                    title: "Path",
+                    kind: .string,
+                    maximumLength: 4096
+                )
+            ]
+        )
+    }
+
+    static var downloadZipTool: ToolDefinition {
+        nativeTool(
+            id: "builtin.fs.download_zip",
+            name: "Download Zip",
+            summary: """
+            Zip an absolute file or directory, or selected relative paths under a base directory, for artifact download. \
+            No shell is used. Expands a leading tilde on absolute paths; relative paths are rejected. \
+            Single-path form: path. Multi-path form: base plus paths (JSON array of relative path strings under base). \
+            Returns artifact_token, artifact_path (/artifact/<token>), filename, size_bytes, sha256, expires_in_seconds, and downloads_allowed. \
+            Fetch bytes with GET on the public download_url the server adds to the result (not via stdout).
+            """,
+            nativeToolID: .fsDownloadZip,
+            capability: .readOnly,
+            parameters: [
+                ToolParameter(
+                    name: "path",
+                    title: "Path",
+                    kind: .string,
+                    required: false,
+                    maximumLength: 4096
+                ),
+                ToolParameter(
+                    name: "base",
+                    title: "Base Directory",
+                    kind: .string,
+                    required: false,
+                    maximumLength: 4096
+                ),
+                ToolParameter(
+                    name: "paths",
+                    title: "Relative Paths",
+                    kind: .stringArray,
+                    required: false
                 )
             ]
         )

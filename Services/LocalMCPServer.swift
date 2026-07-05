@@ -24,6 +24,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private static let faviconICOFileName = "Favicon.ico"
     private static let faviconPNGPath = "/favicon.png"
     private static let faviconPNGFileName = "Favicon.png"
+    private static let artifactPathPrefix = "/artifact/"
     static let toolsListPageSize = 60
 
     // Claude.ai resolves connector icons through Google's favicon service today and may
@@ -43,6 +44,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private let toolCallApprovalCoordinator: ToolCallApprovalCoordinator?
     private let toolExecutor: any ToolExecuting
     private let clientToolPermissionStore: ClientToolPermissionStore?
+    private let artifactStore: ArtifactStore
     private let eventHandler: EventHandler?
     private let publicRateLimiter = PublicRequestRateLimiter()
 
@@ -53,6 +55,7 @@ final class LocalMCPServer: @unchecked Sendable {
         toolCallApprovalCoordinator: ToolCallApprovalCoordinator? = nil,
         toolExecutor: any ToolExecuting,
         clientToolPermissionStore: ClientToolPermissionStore? = nil,
+        artifactStore: ArtifactStore = ArtifactStore(),
         eventHandler: EventHandler? = nil
     ) {
         self.instanceID = instanceID
@@ -61,6 +64,7 @@ final class LocalMCPServer: @unchecked Sendable {
         self.toolCallApprovalCoordinator = toolCallApprovalCoordinator
         self.toolExecutor = toolExecutor
         self.clientToolPermissionStore = clientToolPermissionStore
+        self.artifactStore = artifactStore
         self.eventHandler = eventHandler
     }
 
@@ -71,6 +75,7 @@ final class LocalMCPServer: @unchecked Sendable {
         toolCallApprovalCoordinator: ToolCallApprovalCoordinator? = nil,
         toolExecutor: any ToolExecuting,
         clientToolPermissionStore: ClientToolPermissionStore? = nil,
+        artifactStore: ArtifactStore = ArtifactStore(),
         eventHandler: EventHandler? = nil
     ) {
         self.instanceID = instanceID
@@ -79,6 +84,7 @@ final class LocalMCPServer: @unchecked Sendable {
         self.toolCallApprovalCoordinator = toolCallApprovalCoordinator
         self.toolExecutor = toolExecutor
         self.clientToolPermissionStore = clientToolPermissionStore
+        self.artifactStore = artifactStore
         self.eventHandler = eventHandler
     }
 
@@ -152,6 +158,7 @@ final class LocalMCPServer: @unchecked Sendable {
         listener?.cancel()
         listener = nil
         activePort = nil
+        artifactStore.purgeAll()
     }
 
     func approveAuthorizationRequest(id: UUID) -> Bool {
@@ -241,6 +248,11 @@ final class LocalMCPServer: @unchecked Sendable {
 
         if request.method == "GET", request.path == Self.faviconPNGPath {
             return staticIconResponse(fileName: Self.faviconPNGFileName, contentType: "image/png")
+        }
+
+        if request.method == "GET" || request.method == "HEAD",
+           let token = artifactToken(from: request.path) {
+            return artifactResponse(for: request, token: token)
         }
 
         let allowAuthenticatedMCPAlias = isPublicRequest || request.bearerToken != nil
@@ -464,6 +476,10 @@ final class LocalMCPServer: @unchecked Sendable {
             return .authorizationStatus
         case ("POST", "/token"):
             return .token
+        case ("GET", _) where request.path.hasPrefix(Self.artifactPathPrefix):
+            return .artifact
+        case ("HEAD", _) where request.path.hasPrefix(Self.artifactPathPrefix):
+            return .artifact
         default:
             return nil
         }
@@ -676,7 +692,7 @@ final class LocalMCPServer: @unchecked Sendable {
             case "tools/list":
                 return toolsList(id: id, message: message)
             case "tools/call":
-                return await callTool(id: id, message: message, client: client)
+                return await callTool(id: id, message: message, client: client, base: base)
             case "notifications/initialized":
                 return HTTPResponse(status: .accepted, headers: mcpResponseHeaders(), body: "").data
             default:
@@ -702,7 +718,12 @@ final class LocalMCPServer: @unchecked Sendable {
         return requestedVersion
     }
 
-    private func callTool(id: Any?, message: [String: Any], client: AuthenticatedClientContext) async -> Data {
+    private func callTool(
+        id: Any?,
+        message: [String: Any],
+        client: AuthenticatedClientContext,
+        base: String
+    ) async -> Data {
         guard let params = message["params"] as? [String: Any],
               let name = params["name"] as? String else {
             return jsonRPCError(id: id, code: -32602, message: "Missing tool name.")
@@ -753,7 +774,8 @@ final class LocalMCPServer: @unchecked Sendable {
             }
 
             let outcome = try await toolExecutor.execute(toolID: tool.id, parameters: arguments)
-            let structuredContent = structuredContent(for: outcome)
+            var structuredContent = structuredContent(for: outcome)
+            structuredContent = augmentStructuredContentWithArtifactDownloadURL(structuredContent, base: base)
             eventHandler?(.log(
                 outcome.succeeded ? .info : .warning,
                 "\(outcome.toolName) MCP call exited \(outcome.exitCode) in \(outcome.duration.formattedDuration)."
@@ -833,6 +855,84 @@ final class LocalMCPServer: @unchecked Sendable {
             "truncatedStdout": outcome.truncatedStdout || stdout.count < outcome.stdout.count,
             "truncatedStderr": outcome.truncatedStderr || stderr.count < outcome.stderr.count
         ]
+    }
+
+    private func augmentStructuredContentWithArtifactDownloadURL(
+        _ structuredContent: [String: Any],
+        base: String
+    ) -> [String: Any] {
+        guard structuredContent["succeeded"] as? Bool == true,
+              let stdout = structuredContent["stdout"] as? String,
+              let data = stdout.data(using: .utf8),
+              var payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let artifactPath = payload["artifact_path"] as? String,
+              artifactPath.hasPrefix(Self.artifactPathPrefix) else {
+            return structuredContent
+        }
+
+        payload["download_url"] = base + artifactPath
+        guard let updatedData = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let updatedStdout = String(data: updatedData, encoding: .utf8) else {
+            return structuredContent
+        }
+
+        var updated = structuredContent
+        updated["stdout"] = updatedStdout
+        return updated
+    }
+
+    private func artifactToken(from path: String) -> String? {
+        guard path.hasPrefix(Self.artifactPathPrefix) else { return nil }
+        let token = String(path.dropFirst(Self.artifactPathPrefix.count))
+        guard !token.isEmpty, !token.contains("/") else { return nil }
+        return token
+    }
+
+    private func artifactResponse(for request: HTTPRequest, token: String) -> Data {
+        let resolved: (fileURL: URL, filename: String, remainingDownloads: Int)?
+        if request.method == "HEAD" {
+            resolved = artifactStore.resolve(token: token)
+        } else {
+            resolved = artifactStore.consume(token: token)
+        }
+
+        guard let resolved else {
+            return jsonErrorResponse(status: .notFound, error: "not_found", description: "Artifact not found.")
+        }
+
+        let fileSize: Int
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: resolved.fileURL.path),
+           let size = attributes[.size] as? NSNumber {
+            fileSize = size.intValue
+        } else {
+            return jsonErrorResponse(status: .notFound, error: "not_found", description: "Artifact not found.")
+        }
+
+        let fileData: Data
+        if request.method == "HEAD" {
+            fileData = Data()
+        } else {
+            guard let data = try? Data(contentsOf: resolved.fileURL) else {
+                return jsonErrorResponse(status: .notFound, error: "not_found", description: "Artifact not found.")
+            }
+            fileData = data
+        }
+
+        let contentType = resolved.filename.lowercased().hasSuffix(".zip")
+            ? "application/zip"
+            : "application/octet-stream"
+        let sanitizedFilename = ArtifactStore.sanitizedFilename(resolved.filename)
+
+        return HTTPResponse(
+            status: .ok,
+            headers: [
+                "Content-Type": contentType,
+                "Content-Disposition": "attachment; filename=\"\(sanitizedFilename)\"",
+                "Cache-Control": "no-store",
+                "Content-Length": String(fileSize)
+            ],
+            bodyData: fileData
+        ).data
     }
 
     private func serializedJSON(_ object: [String: Any]) -> String {
@@ -1818,6 +1918,7 @@ private enum PublicRateLimitGroup: String, Hashable {
     case authorizationStatus
     case token
     case unauthorizedMCP
+    case artifact
 
     var displayName: String {
         switch self {
@@ -1828,6 +1929,7 @@ private enum PublicRateLimitGroup: String, Hashable {
         case .authorizationStatus: "authorization status"
         case .token: "token"
         case .unauthorizedMCP: "unauthorized MCP"
+        case .artifact: "artifact"
         }
     }
 
@@ -1847,6 +1949,8 @@ private enum PublicRateLimitGroup: String, Hashable {
             PublicRateLimitRule(maxRequests: 60, windowSeconds: 60)
         case .unauthorizedMCP:
             PublicRateLimitRule(maxRequests: 60, windowSeconds: 60)
+        case .artifact:
+            PublicRateLimitRule(maxRequests: 30, windowSeconds: 60)
         }
     }
 }
@@ -2121,7 +2225,9 @@ private struct HTTPResponse {
 
     var data: Data {
         var responseHeaders = headers
-        responseHeaders["Content-Length"] = String(bodyData.count)
+        if responseHeaders["Content-Length"] == nil {
+            responseHeaders["Content-Length"] = String(bodyData.count)
+        }
         responseHeaders["Connection"] = "close"
         if responseHeaders["Content-Type"] == nil {
             responseHeaders["Content-Type"] = "application/json; charset=utf-8"

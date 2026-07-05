@@ -1938,6 +1938,11 @@ private func makeScannedAdapterTool(
     )
 }
 
+private final class TestClock: @unchecked Sendable {
+    var now: Date
+    init(now: Date) { self.now = now }
+}
+
 private struct FakeToolExecutor: ToolExecuting {
     func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
         let stdout: String
@@ -1956,6 +1961,25 @@ private struct FakeToolExecutor: ToolExecuting {
         return ToolExecutionOutcome(
             toolID: toolID,
             toolName: "Echo",
+            exitCode: 0,
+            stdout: stdout,
+            stderr: "",
+            duration: 0.01,
+            timedOut: false,
+            truncatedStdout: false,
+            truncatedStderr: false
+        )
+    }
+}
+
+private struct ArtifactPayloadToolExecutor: ToolExecuting {
+    func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
+        let stdout = """
+        {"artifact_path":"/artifact/test-token","artifact_token":"test-token","filename":"download.bin","size_bytes":4,"sha256":"ab","expires_in_seconds":600,"downloads_allowed":3}
+        """
+        return ToolExecutionOutcome(
+            toolID: toolID,
+            toolName: "Artifact",
             exitCode: 0,
             stdout: stdout,
             stderr: "",
@@ -2154,7 +2178,16 @@ private func getWithHeaders(
     url: URL,
     headers: [String: String] = [:]
 ) async throws -> (statusCode: Int, data: Data, headers: [AnyHashable: Any]) {
+    try await sendRequest(method: "GET", url: url, headers: headers)
+}
+
+private func sendRequest(
+    method: String,
+    url: URL,
+    headers: [String: String] = [:]
+) async throws -> (statusCode: Int, data: Data, headers: [AnyHashable: Any]) {
     var request = URLRequest(url: url)
+    request.httpMethod = method
     for (key, value) in headers {
         request.setValue(value, forHTTPHeaderField: key)
     }
@@ -2727,5 +2760,123 @@ struct MCPUIActionTargetingTests {
         let inputs = try #require(reschedule["inputs"] as? [[String: Any]])
         #expect(inputs.first?["name"] as? String == "due")
         #expect(inputs.first?["placeholder"] as? String == "+1d")
+    }
+
+    @Test func artifactPayloadGainsAbsoluteDownloadURL() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.artifact",
+                    name: "Artifact",
+                    summary: "Return artifact metadata.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: [],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: ArtifactPayloadToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let forwardedHeaders = [
+            "X-Forwarded-Host": "macremote-test.trycloudflare.com",
+            "X-Forwarded-Proto": "https"
+        ]
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(
+            base: base,
+            coordinator: coordinator,
+            server: server,
+            headers: forwardedHeaders
+        )
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: forwardedHeaders.merging(["MCP-Protocol-Version": "2025-11-25"]) { _, new in new },
+            body: [
+                "jsonrpc": "2.0",
+                "id": "artifact",
+                "method": "tools/call",
+                "params": [
+                    "name": "test_artifact",
+                    "arguments": [:]
+                ]
+            ]
+        )
+        #expect(toolCall.statusCode == 200)
+        let callResult = try #require(toolCall.json["result"] as? [String: Any])
+        let structuredContent = try #require(callResult["structuredContent"] as? [String: Any])
+        let stdout = try #require(structuredContent["stdout"] as? String)
+        let payload = try #require(JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
+        #expect(payload["download_url"] as? String == "https://macremote-test.trycloudflare.com/artifact/test-token")
+    }
+
+    @Test func artifactRouteServesBytesWithHeadersAndExpires() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macremote-artifact-route-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let clock = TestClock(now: Date(timeIntervalSince1970: 2_000_000))
+        let artifactStore = ArtifactStore(
+            rootDirectory: root.appendingPathComponent("store", isDirectory: true),
+            clock: { clock.now },
+            expiryInterval: 60
+        )
+        let source = root.appendingPathComponent("download.bin")
+        let payload = Data("artifact-bytes".utf8)
+        try payload.write(to: source)
+        let handle = try artifactStore.register(fileURL: source, suggestedFilename: "download.bin")
+
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [],
+            authCoordinator: OAuthCoordinator(),
+            toolExecutor: FakeToolExecutor(),
+            artifactStore: artifactStore
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+
+        let download = try await getWithHeaders(url: base.appendingPathComponent(handle.artifactPath))
+        #expect(download.statusCode == 200)
+        #expect(download.data == payload)
+        #expect(headerValue(download.headers, named: "Content-Type") == "application/octet-stream")
+        #expect(headerValue(download.headers, named: "Content-Disposition") == "attachment; filename=\"download.bin\"")
+        #expect(headerValue(download.headers, named: "Cache-Control") == "no-store")
+
+        let head = try await sendRequest(
+            method: "HEAD",
+            url: base.appendingPathComponent(handle.artifactPath)
+        )
+        #expect(head.statusCode == 200)
+        #expect(head.data.isEmpty)
+        #expect(headerValue(head.headers, named: "Content-Length") == String(payload.count))
+        #expect(headerValue(head.headers, named: "Content-Type") == "application/octet-stream")
+        #expect(headerValue(head.headers, named: "Content-Disposition") == "attachment; filename=\"download.bin\"")
+        #expect(headerValue(head.headers, named: "Cache-Control") == "no-store")
+        _ = artifactStore.consume(token: handle.token)
+        _ = artifactStore.consume(token: handle.token)
+        let exhausted = try await getWithHeaders(url: base.appendingPathComponent(handle.artifactPath))
+        #expect(exhausted.statusCode == 404)
+
+        let freshSource = root.appendingPathComponent("fresh.bin")
+        try Data("fresh".utf8).write(to: freshSource)
+        let freshHandle = try artifactStore.register(fileURL: freshSource, suggestedFilename: "fresh.bin")
+        clock.now = clock.now.addingTimeInterval(61)
+        let expired = try await getWithHeaders(url: base.appendingPathComponent(freshHandle.artifactPath))
+        #expect(expired.statusCode == 404)
     }
 }

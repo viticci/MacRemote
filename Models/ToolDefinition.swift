@@ -31,6 +31,8 @@ enum NativeToolIdentifier: String, Codable, Sendable {
     case fsListTree = "fs.list_tree"
     case fsReadFile = "fs.read_file"
     case fsWriteFile = "fs.write_file"
+    case fsDownloadFile = "fs.download_file"
+    case fsDownloadZip = "fs.download_zip"
 }
 
 enum MCPBridgeHeaderValueSourceKind: String, Codable, Sendable {

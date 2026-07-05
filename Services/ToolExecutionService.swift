@@ -30,12 +30,17 @@ struct ConfiguredToolExecutor: ToolExecuting {
     private let runner = ProcessRunner()
     private let mcpBridgeClient = MCPHTTPBridgeClient()
     private let mcpStdioBridgeClient: MCPStdioBridgeClient
-    private let nativeToolExecutor = NativeToolExecutor()
+    private let nativeToolExecutor: NativeToolExecutor
 
-    init(tools: [ToolDefinition], environment: [String: String]) {
+    init(
+        tools: [ToolDefinition],
+        environment: [String: String],
+        artifactStore: ArtifactStore = ArtifactStore()
+    ) {
         toolsByID = Dictionary(uniqueKeysWithValues: tools.map { ($0.id, $0) })
         self.environment = environment
         self.mcpStdioBridgeClient = MCPStdioBridgeClient(environment: environment)
+        self.nativeToolExecutor = NativeToolExecutor(artifactStore: artifactStore)
     }
 
     func execute(toolID: String, parameters: [String: ToolArgumentValue] = [:]) async throws -> ToolExecutionOutcome {

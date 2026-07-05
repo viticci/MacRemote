@@ -142,7 +142,14 @@ final class AppModel {
     // argparse exits 2 and every widget affordance silently no-ops. Re-run
     // once to repair the persisted argument order.
     private static let catalogUIActionsMigrationKey = "MacRemote.migration.catalogUIActions.v3"
-    private static let seenBuiltInFileTransferToolsKey = "MacRemote.seenBuiltInFileTransferTools"
+    private static let seenBuiltInFileTransferToolIDsKey = "MacRemote.seenBuiltInFileTransferToolIDs"
+    private static let legacySeenBuiltInFileTransferToolsKey = "MacRemote.seenBuiltInFileTransferTools"
+    private static let originalBuiltInFileTransferToolIDs: Set<String> = [
+        "builtin.fs.stat",
+        "builtin.fs.list_tree",
+        "builtin.fs.read_file",
+        "builtin.fs.write_file"
+    ]
     private static let pushoverEnabledKey = "MacRemote.pushover.enabled"
     private static let pushoverUserKeyKey = "MacRemote.pushover.userKey"
     private static let pushoverAPITokenKey = "MacRemote.pushover.apiToken"
@@ -170,6 +177,7 @@ final class AppModel {
     private let oauthClientCredentialStore: OAuthClientCredentialStore
     private let connectorHeaderTokenStore: OAuthClientCredentialStore
     private let clientToolPermissionStore: ClientToolPermissionStore
+    private let artifactStore = ArtifactStore()
     let toolSurfaceRuntime: ToolSurfaceRuntime
     private let fullDiskAccessService = FullDiskAccessService()
     private let macOSPrivacyAccessService = MacOSPrivacyAccessService()
@@ -217,7 +225,10 @@ final class AppModel {
             service: "com.macstories.MacRemote.connectorHeaderToken"
         )
         self.clientToolPermissionStore = ClientToolPermissionStore(userDefaults: userDefaults)
-        self.toolSurfaceRuntime = ToolSurfaceRuntime(environment: Self.toolEnvironment)
+        self.toolSurfaceRuntime = ToolSurfaceRuntime(
+            environment: Self.toolEnvironment,
+            artifactStore: artifactStore
+        )
         self.pushoverSender = pushoverSender
         self.brrrSender = brrrSender
         self.localMCPScanner = localMCPScanner
@@ -262,11 +273,17 @@ final class AppModel {
         let catalogTools = FileTransferToolCatalog.builtInTools
         let allToolIDs = Set(loadedTools.map(\.id)).union(catalogTools.map(\.id))
         var disabledToolIDs = persistedDisabledToolIDs.intersection(allToolIDs)
-        if !userDefaults.bool(forKey: Self.seenBuiltInFileTransferToolsKey) {
-            for tool in catalogTools {
-                disabledToolIDs.insert(tool.id)
-            }
-            userDefaults.set(true, forKey: Self.seenBuiltInFileTransferToolsKey)
+        var seenBuiltInToolIDs = Set(userDefaults.stringArray(forKey: Self.seenBuiltInFileTransferToolIDsKey) ?? [])
+        if userDefaults.bool(forKey: Self.legacySeenBuiltInFileTransferToolsKey) {
+            seenBuiltInToolIDs.formUnion(Self.originalBuiltInFileTransferToolIDs)
+            userDefaults.removeObject(forKey: Self.legacySeenBuiltInFileTransferToolsKey)
+        }
+        for tool in catalogTools where !seenBuiltInToolIDs.contains(tool.id) {
+            disabledToolIDs.insert(tool.id)
+            seenBuiltInToolIDs.insert(tool.id)
+        }
+        userDefaults.set(seenBuiltInToolIDs.sorted(), forKey: Self.seenBuiltInFileTransferToolIDsKey)
+        if disabledToolIDs != persistedDisabledToolIDs.intersection(allToolIDs) {
             userDefaults.set(disabledToolIDs.sorted(), forKey: Self.disabledToolIDsKey)
         }
 
@@ -415,7 +432,8 @@ final class AppModel {
                 authCoordinator: authCoordinator,
                 toolCallApprovalCoordinator: toolCallApprovalCoordinator,
                 toolExecutor: runtime,
-                clientToolPermissionStore: clientToolPermissionStore
+                clientToolPermissionStore: clientToolPermissionStore,
+                artifactStore: artifactStore
             ) { [weak self] event in
                 Task { @MainActor in
                     self?.handleServerEvent(event)
@@ -440,6 +458,7 @@ final class AppModel {
         clearTunnelSupervision()
         tunnelService.stop()
         localServer?.stop()
+        artifactStore.purgeAll()
         localServer = nil
         localServerURL = nil
         approvals = authCoordinator.approvalSnapshot()
@@ -3139,7 +3158,11 @@ final class AppModel {
     }
 
     private func toolExecutorSnapshot() -> ToolSurfaceRuntime {
-        ToolSurfaceRuntime(tools: exposedTools, environment: AppModel.toolEnvironment)
+        ToolSurfaceRuntime(
+            tools: exposedTools,
+            environment: AppModel.toolEnvironment,
+            artifactStore: artifactStore
+        )
     }
 
     private func syncRunningToolSurface() {
