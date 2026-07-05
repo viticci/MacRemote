@@ -213,6 +213,7 @@ private struct SecuritySettingsPane: View {
         Form {
             localServerSection
             appAccessSection
+            tokenLifetimeSection
             credentialsSection
             if appModel.connectorAuthMode == .singleHeaderToken {
                 headerTokenSection
@@ -344,6 +345,35 @@ private struct SecuritySettingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    // MARK: Token lifetime
+
+    private var tokenLifetimeSection: some View {
+        Section {
+            Picker("Access token", selection: Binding(
+                get: { appModel.oauthAccessTokenTTLSeconds },
+                set: { appModel.setOAuthAccessTokenTTLSeconds($0) }
+            )) {
+                Text("15 minutes").tag(900)
+                Text("1 hour").tag(3_600)
+                Text("8 hours").tag(28_800)
+                Text("24 hours").tag(86_400)
+            }
+
+            Picker("Refresh token", selection: Binding(
+                get: { appModel.oauthRefreshTokenTTLSeconds },
+                set: { appModel.setOAuthRefreshTokenTTLSeconds($0) }
+            )) {
+                Text("24 hours").tag(86_400)
+                Text("7 days").tag(604_800)
+                Text("30 days").tag(2_592_000)
+            }
+        } header: {
+            Text("Token lifetime")
+        } footer: {
+            Text("Shorter lifetimes are safer. Apps that can't refresh in the background may prefer a longer access token, or use the Single Header Token sign-in method instead.")
         }
     }
 

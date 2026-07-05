@@ -150,7 +150,7 @@ struct ToolsView: View {
 
         content
             .navigationTitle("Tools")
-            .navigationSubtitle("\(sharedCount) shared of \(appModel.tools.count)")
+            .navigationSubtitle("\(sharedCount) shared of \(appModel.allTools.count)")
             .searchable(text: $searchText, prompt: "Search tools")
             .searchFocused($isSearchFocused)
             .toolbar { toolbarContent }
@@ -302,7 +302,7 @@ struct ToolsView: View {
                 Spacer()
             }
 
-            if sharedCount == 0 && !appModel.tools.isEmpty {
+            if sharedCount == 0 && !appModel.allTools.isEmpty {
                 Label("Share at least one tool before starting the local server.", systemImage: "exclamationmark.triangle.fill")
                     .font(TypeRamp.rowDetail)
                     .foregroundStyle(.orange)
@@ -397,7 +397,7 @@ struct ToolsView: View {
     }
 
     private var visibleTools: [ToolDefinition] {
-        appModel.tools.filter { matchesFilter($0) && matchesSearch($0) }
+        appModel.allTools.filter { matchesFilter($0) && matchesSearch($0) }
     }
 
     private var categorySections: [ToolsSection] {
@@ -847,7 +847,7 @@ struct ToolsView: View {
     // MARK: Empty states
 
     private var showsPageEmptyState: Bool {
-        appModel.tools.isEmpty &&
+        appModel.allTools.isEmpty &&
             appModel.localMCPScanState.candidates.isEmpty &&
             !appModel.localMCPScanState.isScanning &&
             searchText.isEmpty
@@ -872,11 +872,11 @@ struct ToolsView: View {
     // MARK: Counts and filtering
 
     private var sharedCount: Int {
-        appModel.tools.count(where: { appModel.isToolExposed($0) })
+        appModel.allTools.count(where: { appModel.isToolExposed($0) })
     }
 
     private func count(for filter: ToolsFilter) -> Int {
-        appModel.tools.count(where: { matches($0, filter: filter) })
+        appModel.allTools.count(where: { matches($0, filter: filter) })
     }
 
     private func matchesFilter(_ tool: ToolDefinition) -> Bool {
@@ -919,7 +919,7 @@ struct ToolsView: View {
 
     private var selectedTool: ToolDefinition? {
         guard let selectedToolID else { return nil }
-        return appModel.tools.first { $0.id == selectedToolID }
+        return appModel.allTools.first { $0.id == selectedToolID }
     }
 
     private func shareBinding(for tool: ToolDefinition) -> Binding<Bool> {

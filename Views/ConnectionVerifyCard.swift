@@ -157,7 +157,7 @@ struct ConnectionVerifyCard: View {
     // MARK: Test a Tool… (D9 — visible, defaults to remctl.today)
 
     private var exposedTools: [ToolDefinition] {
-        appModel.tools
+        appModel.allTools
             .filter { appModel.isToolExposed($0) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }

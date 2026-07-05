@@ -72,6 +72,8 @@ final class OAuthCoordinator: @unchecked Sendable {
     static let maxRegisteredClients = 64
     static let maxPendingAuthorizations = 16
     static let maxStoredAuthorizations = 64
+    static let defaultAccessTokenLifetime: TimeInterval = 900
+    static let defaultRefreshTokenLifetime: TimeInterval = 86_400
 
     private enum ClientAuthenticationMethod: String, Sendable {
         case none
@@ -303,6 +305,8 @@ final class OAuthCoordinator: @unchecked Sendable {
     private var refreshTokensByHash: [String: RefreshTokenRecord] = [:]
     private var staticHeaderTokenHash: String?
     private var staticHeaderClientName = "Single Header Client"
+    private var accessTokenLifetime: TimeInterval = 900
+    private var refreshTokenLifetime: TimeInterval = 86_400
 
     init(
         clientAuthentication: OAuthClientAuthenticationPolicy = .dynamicPublicClients,
@@ -313,6 +317,13 @@ final class OAuthCoordinator: @unchecked Sendable {
         self.changeHandler = changeHandler
         self.grantStore = grantStore
         loadPersistedGrants()
+    }
+
+    func updateTokenLifetimes(access: TimeInterval, refresh: TimeInterval) {
+        lock.withLock {
+            accessTokenLifetime = access
+            refreshTokenLifetime = refresh
+        }
     }
 
     func updateClientAuthentication(_ policy: OAuthClientAuthenticationPolicy) {
@@ -527,12 +538,17 @@ final class OAuthCoordinator: @unchecked Sendable {
         return result.changed
     }
 
-    func exchangeToken(form: [String: String], issuer: String, resource: String) throws -> [String: Any] {
+    func exchangeToken(
+        form: [String: String],
+        issuer: String,
+        resource: String,
+        now: Date = Date()
+    ) throws -> [String: Any] {
         switch form["grant_type"] {
         case "authorization_code":
-            return try exchangeAuthorizationCode(form: form, issuer: issuer, resource: resource)
+            return try exchangeAuthorizationCode(form: form, issuer: issuer, resource: resource, now: now)
         case "refresh_token":
-            return try exchangeRefreshToken(form: form, issuer: issuer, resource: resource)
+            return try exchangeRefreshToken(form: form, issuer: issuer, resource: resource, now: now)
         default:
             throw OAuthError.invalidRequest("Unsupported grant_type.")
         }
@@ -548,21 +564,35 @@ final class OAuthCoordinator: @unchecked Sendable {
         }
     }
 
-    func validateAccessToken(_ token: String, issuer: String, resource: String, requiredScope: String = "mcp:tools") -> Bool {
-        clientContext(forAccessToken: token, issuer: issuer, resource: resource, requiredScope: requiredScope) != nil
+    func validateAccessToken(
+        _ token: String,
+        issuer: String,
+        resource: String,
+        requiredScope: String = "mcp:tools",
+        now: Date = Date()
+    ) -> Bool {
+        clientContext(
+            forAccessToken: token,
+            issuer: issuer,
+            resource: resource,
+            requiredScope: requiredScope,
+            now: now
+        ) != nil
     }
 
     func clientContext(
         forAccessToken token: String,
         issuer: String,
         resource: String,
-        requiredScope: String = "mcp:tools"
+        requiredScope: String = "mcp:tools",
+        now: Date = Date()
     ) -> AuthenticatedClientContext? {
         clientContext(
             forAccessToken: token,
             issuer: issuer,
             acceptedResources: [resource],
-            requiredScope: requiredScope
+            requiredScope: requiredScope,
+            now: now
         )
     }
 
@@ -570,10 +600,10 @@ final class OAuthCoordinator: @unchecked Sendable {
         forAccessToken token: String,
         issuer: String,
         acceptedResources: [String],
-        requiredScope: String = "mcp:tools"
+        requiredScope: String = "mcp:tools",
+        now: Date = Date()
     ) -> AuthenticatedClientContext? {
         let tokenHash = Self.sha256Hex(token)
-        let now = Date()
         let canonicalAcceptedResources = Set(acceptedResources.compactMap { try? Self.canonicalResourceURI($0) })
         guard !canonicalAcceptedResources.isEmpty else { return nil }
 
@@ -688,15 +718,18 @@ final class OAuthCoordinator: @unchecked Sendable {
         return result.summary
     }
 
-    private func exchangeAuthorizationCode(form: [String: String], issuer: String, resource _: String) throws -> [String: Any] {
+    private func exchangeAuthorizationCode(
+        form: [String: String],
+        issuer: String,
+        resource _: String,
+        now: Date
+    ) throws -> [String: Any] {
         guard let code = form["code"], !code.isEmpty else {
             throw OAuthError.invalidRequest("Missing code.")
         }
         guard let codeVerifier = form["code_verifier"], !codeVerifier.isEmpty else {
             throw OAuthError.invalidRequest("Missing code_verifier.")
         }
-
-        let now = Date()
         let tokenSubject: (clientID: String, resource: String, scopes: Set<String>) = try lock.withLock {
             expirePendingAuthorizations(now: now)
             let codeHash = Self.sha256Hex(code)
@@ -756,13 +789,17 @@ final class OAuthCoordinator: @unchecked Sendable {
         )
     }
 
-    private func exchangeRefreshToken(form: [String: String], issuer: String, resource _: String) throws -> [String: Any] {
+    private func exchangeRefreshToken(
+        form: [String: String],
+        issuer: String,
+        resource _: String,
+        now: Date
+    ) throws -> [String: Any] {
         guard let refreshToken = form["refresh_token"], !refreshToken.isEmpty else {
             throw OAuthError.invalidRequest("Missing refresh_token.")
         }
 
         let refreshHash = Self.sha256Hex(refreshToken)
-        let now = Date()
         let record: RefreshTokenRecord = try lock.withLock {
             pruneExpiredTokens(now: now)
             guard let record = refreshTokensByHash[refreshHash] else {
@@ -797,8 +834,9 @@ final class OAuthCoordinator: @unchecked Sendable {
         let refreshToken = Self.randomToken(byteCount: 32)
         let accessHash = Self.sha256Hex(accessToken)
         let refreshHash = Self.sha256Hex(refreshToken)
-        let accessExpiresIn = 900
-        let refreshExpiresIn = 86_400
+        let (accessExpiresIn, refreshExpiresIn) = lock.withLock {
+            (Int(accessTokenLifetime), Int(refreshTokenLifetime))
+        }
 
         try lock.withLock {
             accessTokensByHash[accessHash] = AccessTokenRecord(

@@ -1208,6 +1208,192 @@ struct OAuthCoordinatorTests {
         #expect(bare.tokenEndpointAuthMethodsSupported == ["none"])
     }
 
+    // MARK: - Token lifetimes
+
+    @Test func defaultTokenLifetimeIssuance() throws {
+        let coordinator = OAuthCoordinator()
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp"
+        let verifier = "lifetime-default-verifier"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Lifetime Default",
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try #require(client["client_id"] as? String)
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": "http://127.0.0.1/callback",
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+        #expect(coordinator.approve(requestID: requestID))
+        let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "code": code,
+            "code_verifier": verifier,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        #expect(token["expires_in"] as? Int == 900)
+        #expect(token["refresh_expires_in"] as? Int == 86_400)
+    }
+
+    @Test func customAccessTokenLifetimeHonored() throws {
+        let coordinator = OAuthCoordinator()
+        coordinator.updateTokenLifetimes(access: 3_600, refresh: OAuthCoordinator.defaultRefreshTokenLifetime)
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp"
+        let issuedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let issued = try issueApprovedTokensAt(
+            coordinator: coordinator,
+            clientName: "Access Lifetime",
+            redirectURI: "http://127.0.0.1/callback",
+            issuer: issuer,
+            resource: resource,
+            now: issuedAt
+        )
+        #expect(issued.expiresIn == 3_600)
+        #expect(issued.refreshExpiresIn == 86_400)
+        #expect(
+            coordinator.validateAccessToken(
+                issued.accessToken,
+                issuer: issuer,
+                resource: resource,
+                now: issuedAt.addingTimeInterval(1_800)
+            )
+        )
+        #expect(
+            coordinator.validateAccessToken(
+                issued.accessToken,
+                issuer: issuer,
+                resource: resource,
+                now: issuedAt.addingTimeInterval(3_700)
+            ) == false
+        )
+    }
+
+    @Test func customRefreshTokenLifetimeEnforced() throws {
+        let coordinator = OAuthCoordinator()
+        coordinator.updateTokenLifetimes(access: OAuthCoordinator.defaultAccessTokenLifetime, refresh: 604_800)
+        let issuer = "https://macremote.example"
+        let resource = "\(issuer)/mcp"
+        let issuedAt = Date(timeIntervalSince1970: 1_700_100_000)
+        let issued = try issueApprovedTokensAt(
+            coordinator: coordinator,
+            clientName: "Refresh Lifetime",
+            redirectURI: "http://127.0.0.1/callback",
+            issuer: issuer,
+            resource: resource,
+            now: issuedAt
+        )
+        #expect(issued.refreshExpiresIn == 604_800)
+
+        let stillValid = try coordinator.exchangeToken(
+            form: [
+                "grant_type": "refresh_token",
+                "refresh_token": issued.refreshToken,
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource,
+            now: issuedAt.addingTimeInterval(604_799)
+        )
+        #expect((stillValid["access_token"] as? String) != nil)
+
+        let expiredCoordinator = OAuthCoordinator()
+        expiredCoordinator.updateTokenLifetimes(
+            access: OAuthCoordinator.defaultAccessTokenLifetime,
+            refresh: 604_800
+        )
+        let expiredIssued = try issueApprovedTokensAt(
+            coordinator: expiredCoordinator,
+            clientName: "Refresh Lifetime Expired",
+            redirectURI: "http://127.0.0.1/callback",
+            issuer: issuer,
+            resource: resource,
+            now: issuedAt
+        )
+        #expect(throws: OAuthError.invalidGrant("Invalid refresh token.")) {
+            try expiredCoordinator.exchangeToken(
+                form: [
+                    "grant_type": "refresh_token",
+                    "refresh_token": expiredIssued.refreshToken,
+                    "resource": resource
+                ],
+                issuer: issuer,
+                resource: resource,
+                now: issuedAt.addingTimeInterval(604_800)
+            )
+        }
+    }
+
+    @Test func refreshTokenRotationWithCustomLifetimes() throws {
+        let coordinator = OAuthCoordinator()
+        coordinator.updateTokenLifetimes(access: 3_600, refresh: 604_800)
+        let verifier = "custom-rotation-verifier"
+        let issuer = "http://127.0.0.1:1234"
+        let resource = "\(issuer)/mcp/test-instance"
+        let client = try coordinator.registerClient(from: [
+            "client_name": "Custom Rotation",
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "scope": "mcp:tools"
+        ])
+        let clientID = try #require(client["client_id"] as? String)
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": clientID,
+                "redirect_uri": "http://127.0.0.1/callback",
+                "scope": "mcp:tools",
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+        #expect(coordinator.approve(requestID: requestID))
+        let redirectURI = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+        let code = try #require(URLComponents(string: redirectURI)?.queryItems?.first(where: { $0.name == "code" })?.value)
+        let token = try coordinator.exchangeToken(form: [
+            "grant_type": "authorization_code",
+            "client_id": clientID,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "code": code,
+            "code_verifier": verifier,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        #expect(token["expires_in"] as? Int == 3_600)
+        #expect(token["refresh_expires_in"] as? Int == 604_800)
+        let refreshToken = try #require(token["refresh_token"] as? String)
+        let rotated = try coordinator.exchangeToken(form: [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "resource": resource
+        ], issuer: issuer, resource: resource)
+        #expect(rotated["expires_in"] as? Int == 3_600)
+        #expect(rotated["refresh_expires_in"] as? Int == 604_800)
+        #expect((rotated["refresh_token"] as? String) != refreshToken)
+        #expect(throws: (any Error).self) {
+            try coordinator.exchangeToken(form: [
+                "grant_type": "refresh_token",
+                "refresh_token": refreshToken,
+                "resource": resource
+            ], issuer: issuer, resource: resource)
+        }
+    }
+
     // MARK: - Static header token (Single Header sign-in)
 
     @Test func staticHeaderTokenAuthenticatesAcrossIssuersAndResources() throws {
@@ -1283,6 +1469,60 @@ private func isolatedOAuthDefaults(
     }
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
+}
+
+private func issueApprovedTokensAt(
+    coordinator: OAuthCoordinator,
+    clientName: String,
+    redirectURI: String,
+    issuer: String,
+    resource: String,
+    now: Date
+) throws -> (
+    clientID: String,
+    accessToken: String,
+    refreshToken: String,
+    expiresIn: Int,
+    refreshExpiresIn: Int
+) {
+    let verifier = "verifier-\(UUID().uuidString)"
+    let client = try coordinator.registerClient(from: [
+        "client_name": clientName,
+        "redirect_uris": [redirectURI],
+        "scope": "mcp:tools"
+    ])
+    let clientID = try #require(client["client_id"] as? String)
+    let requestID = try coordinator.beginAuthorization(
+        queryItems: [
+            "response_type": "code",
+            "client_id": clientID,
+            "redirect_uri": redirectURI,
+            "scope": "mcp:tools",
+            "code_challenge": OAuthCoordinator.pkceChallenge(for: verifier),
+            "code_challenge_method": "S256",
+            "resource": resource
+        ],
+        issuer: issuer,
+        resource: resource
+    )
+    #expect(coordinator.approve(requestID: requestID))
+    let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+    let code = try #require(URLComponents(string: redirect)?.queryItems?.first(where: { $0.name == "code" })?.value)
+    let token = try coordinator.exchangeToken(form: [
+        "grant_type": "authorization_code",
+        "client_id": clientID,
+        "redirect_uri": redirectURI,
+        "code": code,
+        "code_verifier": verifier,
+        "resource": resource
+    ], issuer: issuer, resource: resource, now: now)
+    return (
+        clientID,
+        try #require(token["access_token"] as? String),
+        try #require(token["refresh_token"] as? String),
+        try #require(token["expires_in"] as? Int),
+        try #require(token["refresh_expires_in"] as? Int)
+    )
 }
 
 private func issueApprovedTokens(

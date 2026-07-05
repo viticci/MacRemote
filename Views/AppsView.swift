@@ -262,7 +262,7 @@ private struct AppCard: View {
     // MARK: Policy list
 
     private var sortedTools: [ToolDefinition] {
-        appModel.tools.sorted { lhs, rhs in
+        appModel.allTools.sorted { lhs, rhs in
             if lhs.category.title != rhs.category.title {
                 return lhs.category.title < rhs.category.title
             }
@@ -279,7 +279,7 @@ private struct AppCard: View {
     }
 
     private var sharedToolIDs: Set<String> {
-        Set(appModel.tools.filter { appModel.isToolExposed($0) }.map(\.id))
+        Set(appModel.allTools.filter { appModel.isToolExposed($0) }.map(\.id))
     }
 
     private var allowedToolIDs: Set<String> {
@@ -340,7 +340,7 @@ private struct AppCard: View {
 
     @ViewBuilder
     private var staleAllowancesFooter: some View {
-        let staleIDs = allowedToolIDs.subtracting(Set(appModel.tools.map(\.id)))
+        let staleIDs = allowedToolIDs.subtracting(Set(appModel.allTools.map(\.id)))
         if !staleIDs.isEmpty {
             HStack(spacing: Space.s2) {
                 Text("\(staleIDs.count) rule\(staleIDs.count == 1 ? "" : "s") reference\(staleIDs.count == 1 ? "s" : "") removed tools")

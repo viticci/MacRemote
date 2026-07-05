@@ -366,7 +366,7 @@ struct WelcomeView: View {
     }
 
     private var sharedTools: [ToolDefinition] {
-        appModel.tools.filter { appModel.isToolExposed($0) }
+        appModel.allTools.filter { appModel.isToolExposed($0) }
     }
 
     private var privacyServicesToPrime: [ToolPermissionRequirement] {

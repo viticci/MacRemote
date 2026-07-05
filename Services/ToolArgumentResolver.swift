@@ -77,6 +77,11 @@ enum ToolArgumentResolver {
             return
         }
 
+        if tool.backend == .native {
+            try validateNativeTool(tool)
+            return
+        }
+
         guard tool.executablePath.hasPrefix("/") else {
             throw ToolValidationError.executableNotAbsolute
         }
@@ -298,6 +303,20 @@ enum ToolArgumentResolver {
                         throw ToolValidationError.invalidMCPBridge("tomlFile header source needs an absolute filePath and keyPath")
                     }
                 }
+            }
+        }
+    }
+
+    private static func validateNativeTool(_ tool: ToolDefinition) throws {
+        guard tool.nativeToolID != nil else {
+            throw ToolValidationError.invalidNativeTool("missing nativeToolID")
+        }
+        guard tool.argumentPattern.isEmpty else {
+            throw ToolValidationError.invalidNativeTool("native tools must not use argumentPattern")
+        }
+        for parameter in tool.parameters {
+            guard isValidPlaceholderName(parameter.name) else {
+                throw ToolValidationError.invalidNativeTool("invalid parameter name \(parameter.name)")
             }
         }
     }

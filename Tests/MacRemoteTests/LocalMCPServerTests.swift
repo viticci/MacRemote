@@ -440,7 +440,6 @@ struct LocalMCPServerTests {
         #expect(listedTool["title"] as? String == "Echo")
         let description = try #require(listedTool["description"] as? String)
         #expect(description.contains("Echo a test value."))
-        #expect(description.contains("Only the documented schema parameters are accepted."))
         #expect(description.contains("Read-only"))
         #expect((listedTool["outputSchema"] as? [String: Any]) != nil)
         let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
@@ -1075,8 +1074,8 @@ struct LocalMCPServerTests {
         let tools = try await toolsList(base: base, accessToken: accessToken)
         let listedTool = try #require(tools.first)
         let description = try #require(listedTool["description"] as? String)
-        #expect(description.contains("without a shell"))
-        #expect(description.contains("do not use `~`"))
+        #expect(description.contains("No shell"))
+        #expect(description.contains("no `~`"))
         #expect(description.contains("global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`"))
         #expect(description.contains("May require macOS privacy permission for Screen Recording, Accessibility"))
 
@@ -1166,9 +1165,8 @@ struct LocalMCPServerTests {
         let description = try #require(listedTool["description"] as? String)
 
         #expect(description == [
-            "Pass exact argv items as the `args` array; optional `stdin` is sent to standard input.",
-            "MacRemote launches the executable directly without a shell: do not use `~`, `$HOME`, pipes, redirection, globs, command substitution, or environment assignments. Use absolute paths and separate every flag/value into its own argv item.",
-            "Destructive or broad CLI access: requires host approval before execution.",
+            "Pass exact argv items in `args` (optional `stdin`). No shell: absolute paths only; no `~`, `$HOME`, pipes, redirection, globs, substitution, or env assignments; one flag/value per argv item.",
+            "Destructive or broad CLI access: requires host approval.",
             "Publisher's description (Homebrew, unverified): \"Search tool like grep and The Silver Searcher\""
         ].joined(separator: " "))
     }
@@ -1237,12 +1235,7 @@ struct LocalMCPServerTests {
         let tools = try await toolsList(base: base, accessToken: accessToken)
         let listedTool = try #require(tools.first)
         let description = try #require(listedTool["description"] as? String)
-        #expect(description.contains("numeric `id` field"))
-        #expect(description.contains("do not pass the UUID embedded in `deepLink`"))
-        #expect(description.contains("synced rich URL attachments"))
-        #expect(description.contains("tag add/replace/remove"))
-        #expect(description.contains("list groups, smart lists, and templates"))
-        #expect(description.contains("Do not use `--private` for normal due dates, recurrence, or EventKit alarms"))
+        #expect(description.contains("`upcoming 1` → today and tomorrow"))
 
         let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
         let properties = try #require(inputSchema["properties"] as? [String: Any])
@@ -1257,7 +1250,7 @@ struct LocalMCPServerTests {
         #expect(argsDescription.contains("ordinary due dates, recurrence, and EventKit alarms do not"))
         // The adapter can run `upcoming N` too — its window arithmetic must
         // be spelled out (N=1 already covers today AND tomorrow).
-        #expect(description.contains("`upcoming 1` returns today and tomorrow"))
+        #expect(description.contains("today and tomorrow"))
     }
 
     @Test func remCTLUpcomingDescriptionExplainsDayWindowArithmetic() async throws {
@@ -1340,9 +1333,6 @@ struct LocalMCPServerTests {
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
         let listedTool = try #require(tools.first)
-        let description = try #require(listedTool["description"] as? String)
-        #expect(description.contains("For PocketCTL, prefer `--json`"))
-        #expect(description.contains("`--dry-run --json`"))
 
         let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
         let properties = try #require(inputSchema["properties"] as? [String: Any])
@@ -1388,9 +1378,6 @@ struct LocalMCPServerTests {
 
         let tools = try await toolsList(base: base, accessToken: accessToken)
         let listedTool = try #require(tools.first)
-        let description = try #require(listedTool["description"] as? String)
-        #expect(description.contains("For HabitCTL, prefer `--json`"))
-        #expect(description.contains("checking, logging, archiving"))
 
         let inputSchema = try #require(listedTool["inputSchema"] as? [String: Any])
         let properties = try #require(inputSchema["properties"] as? [String: Any])
@@ -1398,6 +1385,139 @@ struct LocalMCPServerTests {
         let argsDescription = try #require(argsSchema["description"] as? String)
         #expect(argsDescription.contains("Exact HabitCTL argv items"))
         #expect(argsDescription.contains("note writes"))
+    }
+
+    @Test func toolsListReturnsFullCatalogWithoutCursorWhenAtMostPageSize() async throws {
+        let coordinator = OAuthCoordinator()
+        let tools = makePaginationTestTools(count: LocalMCPServer.toolsListPageSize)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: tools,
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let response = try await toolsListResponse(base: base, accessToken: accessToken)
+        let listedTools = try #require(response.tools)
+        #expect(listedTools.count == LocalMCPServer.toolsListPageSize)
+        #expect(response.nextCursor == nil)
+        #expect(listedTools.map { $0["title"] as? String } == tools.map(\.name))
+    }
+
+    @Test func toolsListPaginatesLargeCatalogInStableOrder() async throws {
+        let coordinator = OAuthCoordinator()
+        let tools = makePaginationTestTools(count: 130)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: tools,
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let expectedTitles = tools.map(\.name)
+        var cursor: String?
+        var collectedTitles: [String] = []
+        var pageIndex = 0
+
+        repeat {
+            let response = try await toolsListResponse(base: base, accessToken: accessToken, cursor: cursor)
+            let listedTools = try #require(response.tools)
+            if pageIndex == 0 {
+                #expect(listedTools.count == LocalMCPServer.toolsListPageSize)
+                #expect(response.nextCursor != nil)
+            }
+            collectedTitles.append(contentsOf: listedTools.compactMap { $0["title"] as? String })
+            cursor = response.nextCursor
+            pageIndex += 1
+        } while cursor != nil
+
+        #expect(pageIndex == 3)
+        #expect(collectedTitles == expectedTitles)
+        #expect(Set(collectedTitles).count == expectedTitles.count)
+    }
+
+    @Test func toolsListRejectsMalformedCursor() async throws {
+        let coordinator = OAuthCoordinator()
+        let tools = makePaginationTestTools(count: 130)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: tools,
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let response = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "bad-cursor",
+                "method": "tools/list",
+                "params": [
+                    "cursor": "not-a-valid-cursor"
+                ]
+            ]
+        )
+        #expect(response.statusCode == 200)
+        let error = try #require(response.json["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32602)
+        #expect(error["message"] as? String == "Invalid cursor.")
+    }
+
+    @Test func toolsListToleratesToolCountChangeBetweenPages() async throws {
+        let coordinator = OAuthCoordinator()
+        let initialTools = makePaginationTestTools(count: 130)
+        final class ToolBox: @unchecked Sendable {
+            var tools: [ToolDefinition]
+            init(tools: [ToolDefinition]) { self.tools = tools }
+        }
+        let toolBox = ToolBox(tools: initialTools)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            toolProvider: { toolBox.tools },
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let firstPage = try await toolsListResponse(base: base, accessToken: accessToken)
+        let firstTitles = try #require(firstPage.tools).compactMap { $0["title"] as? String }
+        #expect(firstTitles.count == LocalMCPServer.toolsListPageSize)
+        let secondCursor = try #require(firstPage.nextCursor)
+
+        toolBox.tools = Array(initialTools.prefix(100))
+
+        let secondPage = try await toolsListResponse(base: base, accessToken: accessToken, cursor: secondCursor)
+        let secondTitles = try #require(secondPage.tools).compactMap { $0["title"] as? String }
+        #expect(secondTitles.count == 40)
+        #expect(secondPage.nextCursor == nil)
+
+        let expectedTitles = initialTools.prefix(100).map(\.name)
+        #expect(firstTitles + secondTitles == expectedTitles)
     }
 
     @Test func destructiveMCPToolCallRequiresHostApproval() async throws {
@@ -1851,6 +1971,61 @@ private struct ToolCallResultResponse: Sendable {
     let statusCode: Int
     let isError: Bool?
     let stderr: String?
+}
+
+private struct ToolsListPageResponse {
+    let tools: [[String: Any]]?
+    let nextCursor: String?
+}
+
+private func makePaginationTestTools(count: Int) -> [ToolDefinition] {
+    (0..<count).map { index in
+        ToolDefinition(
+            id: "test.pagination.\(index)",
+            name: "Pagination Tool \(index)",
+            summary: "Pagination test tool \(index).",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{value}"],
+            parameters: [
+                ToolParameter(
+                    name: "value",
+                    title: "Value",
+                    kind: .string,
+                    maximumLength: 64
+                )
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+    }
+}
+
+private func toolsListResponse(
+    base: URL,
+    accessToken: String,
+    cursor: String? = nil
+) async throws -> ToolsListPageResponse {
+    var body: [String: Any] = [
+        "jsonrpc": "2.0",
+        "id": "tools",
+        "method": "tools/list"
+    ]
+    if let cursor {
+        body["params"] = ["cursor": cursor]
+    }
+    let response = try await postJSON(
+        url: base.appendingPathComponent("mcp/test-instance"),
+        bearerToken: accessToken,
+        headers: ["MCP-Protocol-Version": "2025-11-25"],
+        body: body
+    )
+    #expect(response.statusCode == 200)
+    let result = try #require(response.json["result"] as? [String: Any])
+    return ToolsListPageResponse(
+        tools: result["tools"] as? [[String: Any]],
+        nextCursor: result["nextCursor"] as? String
+    )
 }
 
 private func toolsList(base: URL, accessToken: String) async throws -> [[String: Any]] {

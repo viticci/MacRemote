@@ -74,10 +74,10 @@ extension AppModel {
         // R16 pre-execution revalidation, mirroring `runToolTest`: an identity
         // change blocks the run (the model has already flipped sharing off).
         if case .identityChanged = await revalidateToolProvenance(toolID: toolID) {
-            let name = tools.first { $0.id == toolID }?.name ?? "This tool"
+            let name = tool(id: toolID)?.name ?? "This tool"
             return .failed("\(name) changed publisher since you added it — review before sharing again.")
         }
-        let executor = ConfiguredToolExecutor(tools: tools, environment: ExecutableLocator.toolEnvironment)
+        let executor = ConfiguredToolExecutor(tools: allTools, environment: ExecutableLocator.toolEnvironment)
         do {
             let outcome = try await executor.execute(toolID: toolID, parameters: parameters)
             if outcome.succeeded {

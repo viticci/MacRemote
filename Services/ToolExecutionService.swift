@@ -30,6 +30,7 @@ struct ConfiguredToolExecutor: ToolExecuting {
     private let runner = ProcessRunner()
     private let mcpBridgeClient = MCPHTTPBridgeClient()
     private let mcpStdioBridgeClient: MCPStdioBridgeClient
+    private let nativeToolExecutor = NativeToolExecutor()
 
     init(tools: [ToolDefinition], environment: [String: String]) {
         toolsByID = Dictionary(uniqueKeysWithValues: tools.map { ($0.id, $0) })
@@ -47,6 +48,13 @@ struct ConfiguredToolExecutor: ToolExecuting {
         }
         if tool.backend == .mcpStdioBridge {
             return try await mcpStdioBridgeClient.call(tool: tool, parameters: parameters)
+        }
+        if tool.backend == .native {
+            return try await nativeToolExecutor.execute(
+                tool: tool,
+                parameters: parameters,
+                timeoutSeconds: tool.timeoutSeconds
+            )
         }
 
         var arguments = try ToolArgumentResolver.arguments(for: tool, parameters: parameters)

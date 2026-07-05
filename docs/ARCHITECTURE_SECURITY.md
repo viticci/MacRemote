@@ -306,8 +306,11 @@ Security requirements:
 
 - PKCE required for authorization code flow.
 - Authorization codes are one-time use and expire within 2 minutes.
-- Access tokens expire quickly, target 15 minutes.
-- Refresh tokens rotate on every use.
+- Access tokens default to 15 minutes and are user-configurable in Settings ›
+  Security (15 minutes, 1 hour, 8 hours, or 24 hours). Changing the setting
+  affects only newly issued tokens.
+- Refresh tokens rotate on every use. They default to 24 hours and are
+  user-configurable in Settings › Security (24 hours, 7 days, or 30 days).
 - Stored tokens are hashed or encrypted.
 - Tokens are bound to client id, redirect URI, resource URI, and approved tool
   profile.

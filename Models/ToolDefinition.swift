@@ -23,6 +23,14 @@ enum ToolBackend: String, Codable, Sendable {
     case process
     case mcpHTTPBridge
     case mcpStdioBridge
+    case native
+}
+
+enum NativeToolIdentifier: String, Codable, Sendable {
+    case fsStat = "fs.stat"
+    case fsListTree = "fs.list_tree"
+    case fsReadFile = "fs.read_file"
+    case fsWriteFile = "fs.write_file"
 }
 
 enum MCPBridgeHeaderValueSourceKind: String, Codable, Sendable {
@@ -531,6 +539,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
     let backend: ToolBackend
     let mcpBridge: MCPBridgeConfiguration?
     let mcpStdioBridge: MCPStdioBridgeConfiguration?
+    let nativeToolID: NativeToolIdentifier?
     let provenance: ToolProvenance?
     /// Optional widget affordances (MCP Apps): catalog/user data, never code.
     let uiActions: [ToolUIAction]?
@@ -552,6 +561,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
             backend: backend,
             mcpBridge: mcpBridge,
             mcpStdioBridge: mcpStdioBridge,
+            nativeToolID: nativeToolID,
             provenance: provenance,
             uiActions: uiActions
         )
@@ -574,6 +584,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
             backend: backend,
             mcpBridge: mcpBridge,
             mcpStdioBridge: mcpStdioBridge,
+            nativeToolID: nativeToolID,
             provenance: provenance,
             uiActions: uiActions
         )
@@ -585,6 +596,9 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         }
         if let mcpStdioBridge {
             return "\(([mcpStdioBridge.command] + mcpStdioBridge.args).joined(separator: " ")) → \(mcpStdioBridge.toolName)"
+        }
+        if backend == .native, let nativeToolID {
+            return "native → \(nativeToolID.rawValue)"
         }
         return ([executablePath] + argumentPattern).joined(separator: " ")
     }
@@ -652,6 +666,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         case backend
         case mcpBridge
         case mcpStdioBridge
+        case nativeToolID
         case provenance
         case uiActions
     }
@@ -672,6 +687,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         backend: ToolBackend = .process,
         mcpBridge: MCPBridgeConfiguration? = nil,
         mcpStdioBridge: MCPStdioBridgeConfiguration? = nil,
+        nativeToolID: NativeToolIdentifier? = nil,
         provenance: ToolProvenance? = nil,
         uiActions: [ToolUIAction]? = nil
     ) {
@@ -690,6 +706,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         self.backend = backend
         self.mcpBridge = mcpBridge
         self.mcpStdioBridge = mcpStdioBridge
+        self.nativeToolID = nativeToolID
         self.provenance = provenance
         self.uiActions = uiActions
     }
@@ -711,8 +728,31 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         backend = try container.decodeIfPresent(ToolBackend.self, forKey: .backend) ?? .process
         mcpBridge = try container.decodeIfPresent(MCPBridgeConfiguration.self, forKey: .mcpBridge)
         mcpStdioBridge = try container.decodeIfPresent(MCPStdioBridgeConfiguration.self, forKey: .mcpStdioBridge)
+        nativeToolID = try container.decodeIfPresent(NativeToolIdentifier.self, forKey: .nativeToolID)
         provenance = try container.decodeIfPresent(ToolProvenance.self, forKey: .provenance)
         uiActions = try container.decodeIfPresent([ToolUIAction].self, forKey: .uiActions)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(summary, forKey: .summary)
+        try container.encode(executablePath, forKey: .executablePath)
+        try container.encode(argumentPattern, forKey: .argumentPattern)
+        try container.encode(parameters, forKey: .parameters)
+        try container.encode(capability, forKey: .capability)
+        try container.encode(timeoutSeconds, forKey: .timeoutSeconds)
+        try container.encode(outputByteLimit, forKey: .outputByteLimit)
+        try container.encode(origin, forKey: .origin)
+        try container.encode(category, forKey: .category)
+        try container.encode(permissionRequirements, forKey: .permissionRequirements)
+        try container.encode(backend, forKey: .backend)
+        try container.encodeIfPresent(mcpBridge, forKey: .mcpBridge)
+        try container.encodeIfPresent(mcpStdioBridge, forKey: .mcpStdioBridge)
+        try container.encodeIfPresent(nativeToolID, forKey: .nativeToolID)
+        try container.encodeIfPresent(provenance, forKey: .provenance)
+        try container.encodeIfPresent(uiActions, forKey: .uiActions)
     }
 }
 
@@ -729,6 +769,7 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
     case invalidTimeout
     case invalidOutputLimit
     case invalidMCPBridge(String)
+    case invalidNativeTool(String)
     case missingParameter(String)
     case invalidInteger(String)
     case integerOutOfRange(String)
@@ -751,6 +792,7 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
         case .invalidTimeout: "Timeout must be between 1 and 60 seconds."
         case .invalidOutputLimit: "Output limit must be between 1 KB and 5 MB."
         case .invalidMCPBridge(let detail): "Invalid MCP bridge: \(detail)"
+        case .invalidNativeTool(let detail): "Invalid native tool: \(detail)"
         case .missingParameter(let name): "Missing parameter: \(name)"
         case .invalidInteger(let name): "Expected integer for parameter: \(name)"
         case .integerOutOfRange(let name): "Integer parameter out of range: \(name)"

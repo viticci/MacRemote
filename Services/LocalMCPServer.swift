@@ -24,6 +24,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private static let faviconICOFileName = "Favicon.ico"
     private static let faviconPNGPath = "/favicon.png"
     private static let faviconPNGFileName = "Favicon.png"
+    static let toolsListPageSize = 60
 
     // Claude.ai resolves connector icons through Google's favicon service today and may
     // adopt SEP-973 serverInfo.icons later; the data: entry needs no fetch at all.
@@ -621,15 +622,18 @@ final class LocalMCPServer: @unchecked Sendable {
                 return response
             }
 
+            // RFC 6750 §3.1: a present-but-rejected token gets error="invalid_token"
+            // so clients refresh instead of restarting authorization.
+            var challenge = "Bearer realm=\"mcp\""
             if request.bearerToken != nil {
                 eventHandler?(.log(.warning, "Rejected MCP bearer token for \(request.path) on \(base)."))
+                challenge += ", error=\"invalid_token\""
             }
+            challenge += ", resource_metadata=\"\(protectedResourceMetadataURL(base: base))\", scope=\"mcp:tools\""
 
             return HTTPResponse(
                 status: .unauthorized,
-                headers: [
-                    "WWW-Authenticate": "Bearer realm=\"mcp\", resource_metadata=\"\(protectedResourceMetadataURL(base: base))\", scope=\"mcp:tools\""
-                ],
+                headers: ["WWW-Authenticate": challenge],
                 body: "{\"ok\":false,\"error\":\"authorization_required\"}"
             ).data
         }
@@ -670,13 +674,7 @@ final class LocalMCPServer: @unchecked Sendable {
             case "resources/templates/list":
                 return jsonRPCResult(id: id, result: ["resourceTemplates": []])
             case "tools/list":
-                let tools = toolProvider()
-                let toolNames = MCPToolNameMapper.publicNames(for: tools)
-                return jsonRPCResult(id: id, result: [
-                    "tools": tools.map { tool in
-                        toolJSON(tool, publicName: toolNames[tool.id] ?? MCPToolNameMapper.publicName(for: tool.id))
-                    }
-                ])
+                return toolsList(id: id, message: message)
             case "tools/call":
                 return await callTool(id: id, message: message, client: client)
             case "notifications/initialized":
@@ -1078,6 +1076,75 @@ final class LocalMCPServer: @unchecked Sendable {
         return nil
     }
 
+    private struct ToolsListCursor: Codable {
+        let offset: Int
+        let count: Int
+    }
+
+    private func toolsList(id: Any?, message: [String: Any]) -> Data {
+        let tools = toolProvider()
+        let totalCount = tools.count
+        let params = message["params"] as? [String: Any]
+        let cursorString = params?["cursor"] as? String
+
+        if totalCount <= Self.toolsListPageSize {
+            return toolsListResult(id: id, tools: tools, nextCursor: nil)
+        }
+
+        let offset: Int
+        if let cursorString {
+            guard let cursor = Self.decodeToolsListCursor(cursorString),
+                  cursor.offset >= 0,
+                  cursor.count >= 0 else {
+                return jsonRPCError(id: id, code: -32602, message: "Invalid cursor.")
+            }
+            offset = min(cursor.offset, totalCount)
+        } else {
+            offset = 0
+        }
+
+        let pageEnd = min(offset + Self.toolsListPageSize, totalCount)
+        let pageTools = offset < totalCount ? Array(tools[offset..<pageEnd]) : []
+
+        let nextCursor: String?
+        if pageEnd < totalCount {
+            nextCursor = Self.encodeToolsListCursor(offset: pageEnd, count: totalCount)
+        } else {
+            nextCursor = nil
+        }
+
+        return toolsListResult(id: id, tools: pageTools, nextCursor: nextCursor)
+    }
+
+    private func toolsListResult(id: Any?, tools: [ToolDefinition], nextCursor: String?) -> Data {
+        let toolNames = MCPToolNameMapper.publicNames(for: tools)
+        var result: [String: Any] = [
+            "tools": tools.map { tool in
+                toolJSON(tool, publicName: toolNames[tool.id] ?? MCPToolNameMapper.publicName(for: tool.id))
+            }
+        ]
+        if let nextCursor {
+            result["nextCursor"] = nextCursor
+        }
+        return jsonRPCResult(id: id, result: result)
+    }
+
+    private static func encodeToolsListCursor(offset: Int, count: Int) -> String {
+        let payload = ToolsListCursor(offset: offset, count: count)
+        let data = try! JSONEncoder().encode(payload)
+        return data.base64EncodedString()
+    }
+
+    private static func decodeToolsListCursor(_ cursor: String) -> ToolsListCursor? {
+        guard let data = Data(base64Encoded: cursor),
+              let decoded = try? JSONDecoder().decode(ToolsListCursor.self, from: data),
+              decoded.offset >= 0,
+              decoded.count >= 0 else {
+            return nil
+        }
+        return decoded
+    }
+
     private func toolJSON(_ tool: ToolDefinition, publicName: String) -> [String: Any] {
         var json: [String: Any] = [
             "name": publicName,
@@ -1108,12 +1175,11 @@ final class LocalMCPServer: @unchecked Sendable {
         var parts = harvestedFrame == nil ? [tool.summary] : []
 
         if let bridge = tool.mcpBridge {
-            parts.append("Bridged from MCP server `\(bridge.serverName)` at \(bridge.serverURL). MacRemote initializes the upstream streamable HTTP session and forwards exact JSON arguments to upstream tool `\(bridge.toolName)`. No shell or executable is used.")
+            parts.append("Bridged from MCP `\(bridge.serverName)` (\(bridge.serverURL)); forwards JSON to upstream `\(bridge.toolName)`. No shell or executable.")
         } else if let bridge = tool.mcpStdioBridge {
-            parts.append("Bridged from MCP server `\(bridge.serverName)` by launching `\(bridge.command)` directly with its configured argv and speaking JSON-RPC over stdio. MacRemote forwards exact JSON arguments to upstream tool `\(bridge.toolName)`; no shell is used.")
+            parts.append("Bridged from MCP `\(bridge.serverName)` via `\(bridge.command)` (stdio JSON-RPC); forwards JSON to upstream `\(bridge.toolName)`. No shell.")
         } else if tool.isGenericCLIAdapter {
-            parts.append("Pass exact argv items as the `args` array; optional `stdin` is sent to standard input.")
-            parts.append("MacRemote launches the executable directly without a shell: do not use `~`, `$HOME`, pipes, redirection, globs, command substitution, or environment assignments. Use absolute paths and separate every flag/value into its own argv item.")
+            parts.append("Pass exact argv items in `args` (optional `stdin`). No shell: absolute paths only; no `~`, `$HOME`, pipes, redirection, globs, substitution, or env assignments; one flag/value per argv item.")
 
             switch URL(fileURLWithPath: tool.executablePath).lastPathComponent.lowercased() {
             case "claude":
@@ -1122,20 +1188,10 @@ final class LocalMCPServer: @unchecked Sendable {
             case "codex":
                 parts.append("For Codex, global options such as `--ask-for-approval` and `--sandbox` must appear before `exec`; options after `exec` are parsed by the exec subcommand.")
             case "remctl":
-                parts.append("For RemCTL, pass the numeric `id` field from JSON results to commands such as `edit`, `info`, `done`, `delete`, `flag`, and `unflag`; do not pass the UUID embedded in `deepLink`.")
-                parts.append("`upcoming N` starts today and extends N further days: `upcoming 1` returns today and tomorrow, `upcoming 7` today plus the next week.")
-                parts.append("Use `--private` only for private Reminders metadata and private Reminders management surfaces: synced rich URL attachments, tag add/replace/remove, sections, shared-list assignment, subtasks, images, real flags, urgency, Early Reminders, location alarms, Groceries metadata, list appearance and pinning, list groups, smart lists, and templates. Do not use `--private` for normal due dates, recurrence, or EventKit alarms; use `edit ID -d DATE --alarm DATE --json`.")
-            case "pocketctl":
-                parts.append("For PocketCTL, prefer `--json` for reads. Before queue, playlist, bookmark, archive, progress, or played-state writes, use the matching command with `--dry-run --json` unless the user explicitly asked to perform the write.")
-            case "habitctl":
-                parts.append("For HabitCTL, prefer `--json` for reads. Before creating, editing, deleting, checking, logging, archiving, or note writes, use `--dry-run --json` when the command supports it unless the user explicitly asked to perform the write.")
+                parts.append("`upcoming N` starts today and extends N further days (`upcoming 1` → today and tomorrow; `upcoming 7` → today plus the next week).")
             default:
                 break
             }
-        } else if tool.parameters.isEmpty {
-            parts.append("This command has no model-supplied arguments.")
-        } else {
-            parts.append("Only the documented schema parameters are accepted.")
         }
 
         // remctl's `upcoming N` window starts today and spans N additional
@@ -1149,11 +1205,11 @@ final class LocalMCPServer: @unchecked Sendable {
 
         switch tool.capability {
         case .readOnly:
-            parts.append("Read-only: expected not to modify local state.")
+            parts.append("Read-only.")
         case .write:
-            parts.append("Write-capable: requires host approval before execution.")
+            parts.append("Write-capable: requires host approval.")
         case .destructive:
-            parts.append("Destructive or broad CLI access: requires host approval before execution.")
+            parts.append("Destructive or broad CLI access: requires host approval.")
         }
 
         if tool.permissionRequirements.contains(.fullDiskAccess) {
