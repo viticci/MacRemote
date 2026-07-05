@@ -77,7 +77,10 @@ is serving a session, prefer `--build-only`.
 
 - Do not edit installed user CLIs. Fix MacRemote, docs, or presets instead.
 - Do not introduce shell execution for tools. Use exact executable paths and argv
-  arrays.
+  arrays. Native built-in tools (`ToolBackend.native`) are the sole exception to
+  the "exact executable path + argv" rule: they implement behavior directly in
+  Swift. The `download_zip` tool shells out to `/usr/bin/ditto` via an argv array
+  only (still no `/bin/sh`).
 - Do not hardcode user-specific absolute home paths in code or docs except in
   test fixtures that explicitly require a fake path.
 - Do not make RemCTL required. It is optional and should appear only when
@@ -109,6 +112,12 @@ User tools are persisted as JSON dictionaries with:
 - `capability`: `readOnly`, `write`, or `destructive`
 - `category`
 - `permissionRequirements`
+- `backend`: `process` (default), `mcpHTTPBridge`, `mcpStdioBridge`, or `native`.
+  Native tools are the built-in File Transfer group (`builtin.fs.*`); they run
+  in-process (no subprocess, no `argv`), carry a placeholder `executablePath`,
+  and are defined in `Services/FileTransferToolCatalog.swift`. They are never
+  written to `tools.json`, are always present, and default to Not Shared (DL-2
+  first-seen pattern), so `clear-tools` does not remove them.
 
 Two authoring modes (UI names, per decision D7 — do not call these "Full Access"):
 

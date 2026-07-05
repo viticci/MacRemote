@@ -19,6 +19,7 @@ they are optional tools the user can add from detected presets or define by hand
 - Per-client tool policies for pre-approving selected tools.
 - Optional Pushover or Brrr alerts for approval requests and tunnel failures.
 - Direct process execution with no shell interpolation.
+- Built-in File Transfer tools that read, write, and download files as artifacts — no subprocess, with a sensitive-path denylist.
 - Generic CLI adapters for whole-command delegation.
 - Command templates for narrow, schema-driven MCP tools.
 - System presets and bulk preset sets for detected CLIs.
@@ -329,6 +330,26 @@ command substitution expansion.
 Current MCP tool descriptions include `title`, `description`, `inputSchema`,
 `outputSchema`, and tool `annotations` such as `readOnlyHint`,
 `destructiveHint`, `idempotentHint`, and `openWorldHint`.
+
+### Built-in File Transfer Tools
+
+MacRemote ships a built-in File Transfer tool group that runs natively in the
+app — no subprocess and no argv. These tools (`builtin.fs.stat`,
+`builtin.fs.list_tree`, `builtin.fs.read_file`, `builtin.fs.write_file`,
+`builtin.fs.download_file`, `builtin.fs.download_zip`) are always present in the
+tool list but are **Not Shared by default** — you choose to share them like any
+other tool. `builtin.fs.write_file` is write-capable, so each call asks you
+first unless you grant an app Always Allow. All of them reject relative paths
+and refuse a fixed set of sensitive locations (`~/.ssh`, `~/.gnupg`, `~/.aws`,
+`~/Library/Keychains`, `~/.cloudflared`, and MacRemote's own application-support
+folder), checked after resolving symlinks.
+
+The download tools don't return file bytes in the tool result. They return a
+one-time download handle, and MacRemote's server adds a `download_url` on the
+local `/artifact/<token>` route. That link is unauthenticated but unguessable
+(256-bit token), expires after 10 minutes, allows at most 3 downloads, is
+capped at 512 MiB, sends `Cache-Control: no-store`, and is purged when the
+server stops.
 
 ### Local MCP Bridge
 

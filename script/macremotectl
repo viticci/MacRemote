@@ -143,7 +143,16 @@ def main() -> int:
     status_parser.add_argument("--json", action="store_true")
     status_parser.set_defaults(func=command_status)
 
-    list_tools_parser = subparsers.add_parser("list-tools", help="List user-defined tools configured for the app.")
+    list_tools_parser = subparsers.add_parser(
+        "list-tools",
+        help="List user-defined tools configured for the app.",
+        description=(
+            "List the user-defined tools persisted in tools.json. This does NOT "
+            "include the app's built-in native File Transfer tools (builtin.fs.*), "
+            "which are managed only in the app's Tools UI, are off by default, and "
+            "are never written to tools.json."
+        ),
+    )
     list_tools_parser.add_argument("--json", action="store_true")
     list_tools_parser.set_defaults(func=command_list_tools)
 
@@ -364,6 +373,10 @@ def command_list_tools(args: argparse.Namespace) -> int:
         for tool in tools:
             permissions = ",".join(tool.get("permissionRequirements", [])) or "-"
             print(f"{tool.get('id')}  {tool.get('name')}  {tool.get('capability')}  {permissions}  {tool.get('executablePath')}")
+        print(
+            "\nNote: built-in File Transfer tools (builtin.fs.*) are native, off by "
+            "default, and not stored in tools.json. Manage them in the app's Tools UI."
+        )
     return 0
 
 

@@ -176,10 +176,14 @@ Every `Card`; tool/app/request/log lists and all rows; `KeyValueGrid`s; readines
 | Kept verbatim | **Scan This Mac**, **Always Allow**, **Read-only**, status words Stopped/Starting/Running | — |
 | MCP freshness | **Scan results may be out of date** (when configs changed since last refresh) | — |
 | Automatic discovery | Config-only MCP surfacing at launch/activation — **not** automatic import or share | auto-import, auto-share, background probing |
+| Built-in native tools | **Built-in** (source group) / "runs natively in MacRemote" | native backend, `builtin.fs`, subprocess (visible copy) |
+| Downloadable result | **download link** (prose) / **Public URL**-family for the link | artifact, artifact token, `/artifact` (primary copy — allowed in Details/mono) |
+
+> **Model-facing exemption.** Built-in tool *summaries* (the MCP `description` text composed in `LocalMCPServer.toolDescription(for:)`, echoed in the Inspector Overview) are metadata authored for the model, not primary UI copy. They may use technical terms (`argv`, `base64`, `host approval`, etc.) and are **exempt from this glossary**.
 
 ### 4.3 Banned words & patterns (visible copy)
 
-`host` (any compound) · `expose/exposure/exposed` · `surface` (as tool-set noun) · `client` in headlines · `connector`/`provider` in headlines · `FDA` · `rotate` (visible labels) · `Adapter`/`Template` as mode names · `bridge/bridgeable/scan-only/probe` · `smoke/preflight/proof/markers` (visible UI) · `audit trail` · `alerts` · `loopback`/`bind address` (primary copy) · `argv/stdin/stderr/tools/list/PKCE/bearer` (primary copy — allowed inside Details/mono/technical exports) · `Privacy` as an auth-mode label · "MacRemote will [enumerate artifacts]" dialog frame · passive "will appear here" · `...` three-dot ellipsis · literal backticks · **"Approve All"** (any phrasing).
+`host` (any compound) · `expose/exposure/exposed` · `surface` (as tool-set noun) · `client` in headlines · `connector`/`provider` in headlines · `FDA` · `rotate` (visible labels) · `Adapter`/`Template` as mode names · `bridge/bridgeable/scan-only/probe` · `smoke/preflight/proof/markers` (visible UI) · `audit trail` · `alerts` · `loopback`/`bind address` (primary copy) · `argv/stdin/stderr/tools/list/PKCE/bearer` (primary copy — allowed inside Details/mono/technical exports) · `artifact/artifact_token/download_url/base64/sha256/native backend` (primary copy — allowed inside Details/mono/technical exports) · `Privacy` as an auth-mode label · "MacRemote will [enumerate artifacts]" dialog frame · passive "will appear here" · `...` three-dot ellipsis · literal backticks · **"Approve All"** (any phrasing).
 
 ### 4.4 Canonical rewrites (the load-bearing strings — final)
 

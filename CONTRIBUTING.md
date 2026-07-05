@@ -35,6 +35,10 @@ script/macremotectl list-preset-sets --json
 
 - MacRemote is not a remote shell.
 - Tools run as exact executable paths plus argv arrays.
+- Built-in native tools (`ToolBackend.native`, the `builtin.fs.*` File Transfer
+  group) are the only tools that run in-process instead of as an
+  executable-plus-argv subprocess. Do not add new native backends without a
+  documented decision; user-defined and preset tools stay process/bridge only.
 - Shell wrappers such as `sh`, `bash`, `zsh`, `fish`, and `env` stay blocked.
 - RemCTL, PocketCTL, Codex, and other CLIs receive the same visual and runtime
   treatment.

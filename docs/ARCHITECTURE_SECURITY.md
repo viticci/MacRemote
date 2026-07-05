@@ -85,10 +85,19 @@ Required endpoints:
 - `GET /authorize/status`
 - `POST /token`
 - `POST /mcp`
+- `GET /artifact/<token>` and `HEAD /artifact/<token>` (unauthenticated one-time file download; see Tool Runner)
 
 Legacy local `POST /mcp/<instance-id>` requests may be accepted as a loopback
 compatibility path. Public forwarded requests advertise and use `/mcp`; the
 private instance id is not a public URL secret.
+
+The `/artifact/<token>` route is intentionally unauthenticated so a remote app
+can fetch a staged file over plain HTTP GET after the tool call returns a
+handle. Access is gated by a 256-bit capability token instead of a bearer:
+entries expire in 10 minutes, allow at most 3 downloads, are capped at 512 MiB,
+are rate-limited as their own public route group, respond with `Cache-Control:
+no-store` and `Content-Disposition: attachment`, and are purged when the server
+stops. The token — not the URL path — is the secret.
 
 `/health` is diagnostic, not discovery. Loopback health may include instance and
 tool-surface details for local verification, but public forwarded health must
@@ -161,6 +170,17 @@ to the upstream local MCP endpoint, executable command surface, or bearer
 tokens; it sees only the MacRemote OAuth-protected tool surface and approval
 gates.
 
+MacRemote also supports a native backend for its built-in File Transfer tools
+(`builtin.fs.*`, backend `native`). These are defined in code, never persisted
+to `tools.json`, and execute in-process with no subprocess and no argv template
+(the `download_zip` tool is the only one that spawns a child process —
+`/usr/bin/ditto` via an argv array, never a shell). Every native file tool
+resolves and validates its path against a sensitive-path denylist after symlink
+resolution and rejects relative paths. `write_file` is capability `write`, so it
+takes the same per-call host approval path as any write tool; the download tools
+are read-only and hand back a `/artifact/<token>` handle rather than inlining
+bytes.
+
 `script/macremotectl scan-mcp` and the app share one scanner that discovers MCP
 definitions from common local agent configs and extension manifests, including
 Codex, Claude Desktop, Claude Code (`~/.mcp.json` and `~/.claude.json`, including
@@ -208,7 +228,10 @@ generic CLI adapters for common operations: Reminders, Podcasts, Filesystem,
 Utilities, Image Processing, Text, and Developer. Presets are convenience drafts,
 not an expanded default tool surface. Filesystem presets must remain read-only
 and must not include delete, unlink, or trash commands. Write-capable image
-presets must write to explicit output paths and be labeled as write tools.
+presets must write to explicit output paths and be labeled as write tools. This
+constraint governs process-backed presets; the built-in native `write_file`
+tool is write-capable and gated by per-call approval, and no native tool
+performs delete/unlink/trash.
 Registered tools are distinct from the active exposed surface: the user chooses
 which saved tools are exposed, regardless of whether the executable is RemCTL,
 PocketCTL, Codex, or another command.
@@ -345,7 +368,11 @@ Every sensitive event is logged locally:
 - token refresh;
 - tool call requested;
 - tool call accepted/rejected;
-- process exit code, duration, and truncated output metadata.
+- process exit code, duration, and truncated output metadata;
+- download artifacts staged and purged.
+
+Staged artifact copies live in a temporary directory and are removed on expiry,
+when their download count is exhausted, or when the server stops.
 
 The audit log must not store bearer tokens, authorization codes, refresh tokens,
 or full command output by default.

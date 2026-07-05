@@ -38,6 +38,8 @@ Core boundaries:
 - HTTP server to auth/session state;
 - MCP tool call to command runner;
 - command runner to local CLIs such as `remctl`, `codex`, or `pocketctl`;
+- public `/artifact/<token>` route to staged artifact files;
+- native File Transfer tools to the local filesystem (read/write) under the path denylist;
 - app UI to persistent configuration and secrets.
 
 ## Core Assumptions
@@ -73,6 +75,24 @@ argv and optional stdin. That is universal but not a sandbox. Each generic
 adapter must be treated as delegation of the whole executable's reachable
 capability surface. Shell interpreters and `/usr/bin/env` are blocked because
 they erase the executable boundary.
+
+The built-in File Transfer tools reach the filesystem directly rather than
+through a delegated CLI. Mitigations: absolute-path-only inputs (relative paths
+and `..` traversal rejected), a sensitive-path denylist (`~/.ssh`, `~/.gnupg`,
+`~/.aws`, `~/Library/Keychains`, `~/.cloudflared`, MacRemote's
+application-support folder) enforced after symlink resolution so a symlink into
+a denied tree is blocked, bounded read chunks (≤64 KiB/call) and list depth
+(≤5) and entry counts (≤2000), and `write_file` carrying the `write` capability
+so each call needs host approval. These tools are Not Shared by default and
+never enter `tools.json`.
+
+The `/artifact/<token>` download route is unauthenticated and reachable over the
+public tunnel. It trades the bearer for a 256-bit capability token with tight
+bounds: 10-minute expiry, 3 downloads max, 512 MiB size cap, per-route rate
+limiting, `no-store`, and purge-on-server-stop. A leaked artifact URL exposes at
+most that one already-approved file, and only until the token's downloads or
+expiry run out. The token is generated with `SecRandomCopyBytes`; path traversal
+in the token is rejected (`/` disallowed in the token component).
 
 Default command categories are only preset drafts. They must not be auto-enabled
 or silently added to the exposed MCP surface. Filesystem presets are constrained
@@ -118,12 +138,16 @@ High:
   annotation, or per-call host approval for writes;
 - tools exposed before required Full Disk Access or macOS privacy gates pass
   from MacRemote's process context;
+- native `write_file` writing outside the intended location, or any File
+  Transfer tool reading a denylisted path (path-policy bypass);
 - persistent client tool policies applied to the wrong OAuth client or resource;
 - logs storing bearer tokens or Cloudflare credentials.
 
 Medium:
 
 - missing request or output size limits causing local denial of service;
+- artifact tokens not expiring, exceeding the download count, or surviving
+  server stop; artifact route missing its rate limit or size cap;
 - weak or predictable instance identifiers;
 - incomplete audit records that prevent the user from understanding which client
   called which tool;

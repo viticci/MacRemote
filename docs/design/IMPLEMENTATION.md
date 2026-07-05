@@ -11,7 +11,7 @@
 
 ```bash
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift build
-SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift test   # Swift Testing, 195 tests
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift test   # Swift Testing, 412 tests
 script/build_and_run.sh              # builds (auto-pins SDK), signs, relaunches dist/MacRemote.app
 script/build_and_run.sh --build-only # build without killing a running instance / its tunnel
 ```
@@ -29,7 +29,7 @@ Window IDs are centralized in `MacRemoteWindowID` (`Models/NavigationSection.swi
 | Main window | `MacRemoteWindowID.main` | `NavigationSplitView`; system glass sidebar + detail. Min 1040×680. Installs `AppSkeletonInstaller` (wires `appModel.windowOpener`, the AppDelegate quit bridge, and first-run Welcome). |
 | Approval window | `MacRemoteWindowID.approval` | Floating, `.windowLevel(.floating)`, hidden title bar, `.contentSize`. **Non-activating** — presented via `AppModel.presentApprovalWindow()` (decision D4). `ApprovalWindowConfigurator` (NSViewRepresentable) adds all-Spaces + full-screen-auxiliary collection behavior and `hidesOnDeactivate = false`. |
 | Welcome window | `MacRemoteWindowID.welcome` | Fixed 760×560, first run only (gated on `hasCompletedWelcome`), reopenable from Help. |
-| Settings | `Settings` scene (⌘,) | The **only** settings surface (no sidebar Settings section). Toolbar-tab `TabView`: General / Notifications / Security. |
+| Settings | `Settings` scene (⌘,) | The **only** settings surface (no sidebar Settings section). Toolbar-tab `TabView`: General / Notifications / Security. Security also hosts the D24 token-lifetime pickers (access / refresh). |
 | MenuBarExtra | — | `.menuBarExtraStyle(.menu)`, toggled by `appModel.isMenuBarExtraEnabled`. Status line + Copy URL + server verbs + "N requests waiting…" (opens the Approval window, never resolves inline — D3). Glyph rendered by `MenuBarIconRenderer` as a template `NSImage` so the badge dot survives menu-bar tinting. |
 
 Menu commands live in `MacRemoteCommands` (same file): Server (⌘R/⌘./⇧⌘R/⇧⌘./⇧⌘C,
@@ -113,7 +113,11 @@ Approval window, and onboarding alike.
 - Tools: `updateUserTool(id:draft:)` (**transactional**, D8 — preserves tool ID,
   rewrites Always Allow grants, rolls back on failure; covered by
   `AppModelToolUpdateTests`), `runToolTest(toolID:parameters:)`, `requestNewTool()`,
-  `requestAddFromLibrary()`, `isToolInspectorPresented`.
+  `requestAddFromLibrary()`, `isToolInspectorPresented`, `builtInCatalogTools`
+  (native File Transfer group, never persisted), `allTools` (= built-in + user).
+- Token lifetimes (D24): `oauthAccessTokenTTLSeconds` /
+  `setOAuthAccessTokenTTLSeconds(_:)`, `oauthRefreshTokenTTLSeconds` /
+  `setOAuthRefreshTokenTTLSeconds(_:)` — bound by the Settings › Security pickers.
 - Notifications: `refreshNotificationPermissionStatus()`,
   `requestNotificationPermission()`, `notificationPermissionStatus`. Guarded
   behind a bundle check — no-ops under `swift run`/`swift test` (UNUserNotification
@@ -163,7 +167,7 @@ globe means still-broken. Re-adding the connector in Claude.ai re-resolves the i
 
 ## Testing
 
-Swift Testing (`import Testing`), 195 tests / 21 suites. Two suites are
+Swift Testing (`import Testing`), 412 tests / 39 suites. Two suites are
 `.serialized` (`CloudflareServiceTests`, `LocalMCPServerTests`) because they share
 mock statics / bind ports and race under Swift Testing's default parallelism.
 New suites from the redesign: `AppModelToolUpdateTests` (transactional tool edit),
@@ -217,3 +221,42 @@ no auto-share, no subprocess/network on the automatic path.
 - UI: Tools MCP area (LM-19 stale line, LM-20 New chip, LM-3 summary), Tools
   sidebar badge (LM-21), CLI Found tab stale banner (`cliFreshness`).
 - Tests: `Tests/MacRemoteTests/AutomaticDiscoveryTests.swift`.
+
+## File Transfer & artifacts (added 2026-07-05)
+
+Spec: DESIGN-SPEC decisions D22–D24, parity FT-1…FT-6. First native tool
+backend (`ToolBackend.native`) — no subprocess.
+
+- Catalog: `Services/FileTransferToolCatalog.swift` — six `builtin.fs.*` tools
+  (`stat`, `list_tree`, `read_file`, `write_file`, `download_file`,
+  `download_zip`), placeholder `executablePath` `/usr/bin/true`, empty argv,
+  `origin .builtIn`, `category .filesystem`, `backend .native`. `write_file` is
+  `capability .write`; the rest read-only.
+- Executor: `Services/NativeToolExecutor.swift` — dispatches on
+  `NativeToolIdentifier` (`Models/ToolDefinition.swift`), returns the same
+  `ToolExecutionOutcome` envelope. Chunked base64 reads (≤64 KiB), list depth
+  ≤5 / ≤2000 entries, `download_zip` uses `/usr/bin/ditto` argv (no shell).
+- Path policy: `Services/FileTransferPathPolicy.swift` — tilde expansion,
+  absolute-path-only, symlink-resolved denylist. `resolveRelativePath` guards
+  the `download_zip` multi-path form against `..` traversal.
+- Artifacts: `Services/ArtifactStore.swift` — staged copies under
+  `<tmp>/MacRemoteArtifacts/<uuid>/`; 256-bit base64url token, streamed
+  SHA-256, 600 s expiry, 3 downloads, 512 MiB cap; `resolve` (HEAD) vs
+  `consume` (GET); `purgeAll()` on server stop. Route + `download_url`
+  injection live in `LocalMCPServer` (`artifactResponse`, `.artifact`
+  rate-limit group, `augmentStructuredContentWithArtifactDownloadURL`).
+- MCP surface: `tools/list` gains cursor pagination only past
+  `toolsListPageSize` (60) — base64 JSON `{offset,count}` cursor, `-32602`
+  "Invalid cursor." on malformed. A present-but-rejected bearer now gets RFC
+  6750 `error="invalid_token"` in the `WWW-Authenticate` challenge.
+- AppModel: `builtInCatalogTools` (never persisted), `allTools`
+  (= built-in + user), private `artifactStore` shared into the server and
+  `ConfiguredToolExecutor`; purged on stop. Default-Not-Shared via the
+  first-seen set `seenBuiltInFileTransferToolIDsKey` (+ legacy-flag migration),
+  DL-2 pattern. Views bind to `allTools`; the "Built-in" source group in
+  `ToolsView` shows them; `ToolInspector.BuiltInDefinitionView` renders them
+  read-only and shows "Runs natively in MacRemote" for `backend == .native`.
+- Tests: `Tests/MacRemoteTests/FileTransferToolTests.swift`,
+  `ArtifactStoreTests.swift`, plus `tools/list` pagination and
+  `invalid_token` coverage in `LocalMCPServerTests.swift`, token-lifetime
+  coverage in `OAuthCoordinatorTests.swift`.

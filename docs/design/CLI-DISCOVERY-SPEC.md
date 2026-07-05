@@ -277,7 +277,7 @@ func draft(for candidate: DiscoveredCLICandidate) -> ToolDefinitionDraft {
 }
 ```
 
-Everything downstream is the existing machine, unchanged: `ToolDefinitionDraft.makeTool` → `ToolArgumentResolver.validate` (absolute path, exists, blocklist, argv checks) → `addUserTool(s)`. Same review form, same inspector editing, same approval model, same `tools/list` serialization. **There is no new tool type.**
+Everything downstream is the existing machine, unchanged: `ToolDefinitionDraft.makeTool` → `ToolArgumentResolver.validate` (absolute path, exists, blocklist, argv checks) → `addUserTool(s)`. Same review form, same inspector editing, same approval model, same `tools/list` serialization. **The scan-to-add path introduces no new tool type — every scanned tool is a process-backed Flexible Command.** (A separate native backend, `ToolBackend.native`, was later added for the built-in File Transfer group only; it is code-defined, never scanned, never persisted, and out of scope for CLI discovery. See DESIGN-SPEC decision D22.)
 
 Two add paths, matching the tab's UI: bulk (checkboxes → `addToolsFromScan`, which builds drafts with explicit IDs and inserts all new IDs into `disabledToolIDs` in the same transaction with rollback — mirroring `addUserTools`' existing snapshot/rollback shape, per DL-2/G3) and **Customize & Save…** (prefills the draft and jumps to the Custom tab — the exact SD-3 mechanic and label).
 

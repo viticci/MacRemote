@@ -148,6 +148,19 @@ MACREMOTE_MCP_URL="https://<host>.trycloudflare.com/mcp" \
 For CLI adapters, the prompt must pass exact argv items as an array. There is no
 shell expansion.
 
+## File Download Variant
+
+To exercise the built-in File Transfer tools, share `builtin.fs.download_file`
+in **Tools**, call it against a small file, then fetch the handle. The tool
+result carries `download_url`; fetch it directly (no bearer needed):
+
+```bash
+curl -sSL -OJ "https://<host>/artifact/<token>"
+```
+
+The link stops working after 3 downloads or 10 minutes, and immediately when
+the server stops.
+
 ## Changing Tools While Connected
 
 MacRemote updates the running tool surface when tools are added, removed, or
