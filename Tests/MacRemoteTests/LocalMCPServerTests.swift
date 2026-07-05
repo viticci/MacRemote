@@ -2361,7 +2361,7 @@ private func resourceURL(base: URL, headers: [String: String], instanceID: Strin
 /// extension keep the mandated text fallback untouched, and declared UI
 /// actions ride CallToolResult._meta with public tool names.
 struct MCPUISupportTests {
-    private func makeUITestServer() -> (LocalMCPServer, OAuthCoordinator) {
+    private func makeUITestServer(artifactStore: ArtifactStore = ArtifactStore()) -> (LocalMCPServer, OAuthCoordinator) {
         let coordinator = OAuthCoordinator()
         let listTool = ToolDefinition(
             id: "test.reminders",
@@ -2436,7 +2436,8 @@ struct MCPUISupportTests {
             instanceID: "test-instance",
             tools: [listTool, mutatorTool, podcastsTool, plainTool],
             authCoordinator: coordinator,
-            toolExecutor: FakeToolExecutor()
+            toolExecutor: FakeToolExecutor(),
+            artifactStore: artifactStore
         )
         return (server, coordinator)
     }
@@ -3107,6 +3108,79 @@ struct MCPUISupportTests {
         let error = try #require(response.json["error"] as? [String: Any])
         #expect(error["code"] as? Int == -32601)
     }
+
+    @Test func smallOutputHasNoResourceLinkOrSpillArtifact() async throws {
+        let (server, coordinator) = makeUITestServer()
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "test_reminders", "arguments": ["value": "hello"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        let content = try #require(result["content"] as? [[String: Any]])
+        #expect(content.count == 1)
+        #expect(content[0]["type"] as? String == "text")
+    }
+
+    @Test func oversizedStdoutSpillsFullOutputToArtifactResourceLink() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macremote-stdout-spill-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let artifactStore = ArtifactStore(rootDirectory: root.appendingPathComponent("store", isDirectory: true))
+        let (server, coordinator) = makeUITestServer(artifactStore: artifactStore)
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let fullStdout = String(repeating: "a", count: 150_000)
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "test_reminders", "arguments": ["value": "giant-stdout"]]
+            ]
+        )
+        let result = try #require(call.json["result"] as? [String: Any])
+        let structured = try #require(result["structuredContent"] as? [String: Any])
+        let stdout = try #require(structured["stdout"] as? String)
+        #expect(stdout.count == LocalMCPServer.mcpStdoutCharacterLimit)
+        #expect(structured["truncatedStdout"] as? Bool == true)
+        #expect(structured["reason"] as? String == "output_limit")
+        #expect(structured["succeeded"] as? Bool == true)
+        #expect(result["isError"] as? Bool == false)
+
+        let content = try #require(result["content"] as? [[String: Any]])
+        #expect(content.count == 3)
+        #expect(content[0]["type"] as? String == "text")
+        let resourceLink = try #require(content[1] as? [String: Any])
+        #expect(resourceLink["type"] as? String == "resource_link")
+        let uri = try #require(resourceLink["uri"] as? String)
+        #expect(uri.hasPrefix("http://127.0.0.1:\(port)/artifact/"))
+        #expect(resourceLink["name"] as? String == "Echo-output.txt")
+        #expect(resourceLink["mimeType"] as? String == "text/plain")
+        let note = try #require(content[2] as? [String: Any])
+        #expect(note["type"] as? String == "text")
+        #expect((note["text"] as? String)?.contains("150000 bytes") == true)
+
+        let tokenString = String(uri.dropFirst("http://127.0.0.1:\(port)/artifact/".count))
+        let consumed = try #require(artifactStore.consume(token: tokenString))
+        let artifactBytes = try Data(contentsOf: consumed.fileURL)
+        #expect(String(decoding: artifactBytes, as: UTF8.self) == fullStdout)
+    }
 }
 
 /// Basename-targeted actions (preset-derived tools have random ids) and the
@@ -3266,6 +3340,17 @@ struct MCPUIActionTargetingTests {
         let stdout = try #require(structuredContent["stdout"] as? String)
         let payload = try #require(JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
         #expect(payload["download_url"] as? String == "https://macremote-test.trycloudflare.com/artifact/test-token")
+
+        let content = try #require(callResult["content"] as? [[String: Any]])
+        #expect(content.count == 2)
+        #expect(content[0]["type"] as? String == "text")
+        let resourceLink = try #require(content[1] as? [String: Any])
+        #expect(resourceLink["type"] as? String == "resource_link")
+        #expect(resourceLink["uri"] as? String == "https://macremote-test.trycloudflare.com/artifact/test-token")
+        #expect(resourceLink["name"] as? String == "download.bin")
+        #expect(resourceLink["mimeType"] as? String == "application/octet-stream")
+        #expect((resourceLink["description"] as? String)?.contains("600") == true)
+        #expect((resourceLink["description"] as? String)?.contains("4 bytes") == true)
     }
 
     @Test func artifactRouteServesBytesWithHeadersAndExpires() async throws {

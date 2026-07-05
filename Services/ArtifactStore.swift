@@ -79,33 +79,40 @@ final class ArtifactStore: @unchecked Sendable {
             throw ArtifactStoreError.stagingFailed(error.localizedDescription)
         }
 
-        let digest: (hash: String, size: Int64)
+        return try registerStagedFileLocked(
+            stagedURL: stagedURL,
+            artifactDirectory: artifactDirectory,
+            filename: filename
+        )
+    }
+
+    func register(data: Data, suggestedFilename: String) throws -> ArtifactHandle {
+        lock.lock()
+        defer { lock.unlock() }
+
+        sweepLocked(now: clock())
+
+        let sizeBytes = Int64(data.count)
+        guard sizeBytes <= maxSizeBytes else {
+            throw ArtifactStoreError.artifactTooLarge
+        }
+
+        let filename = Self.sanitizedFilename(suggestedFilename)
+        let artifactDirectory = rootDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true)
+        let stagedURL = artifactDirectory.appendingPathComponent(filename)
+
         do {
-            digest = try Self.sha256HexAndSize(of: stagedURL)
+            try data.write(to: stagedURL)
         } catch {
             try? FileManager.default.removeItem(at: artifactDirectory)
             throw ArtifactStoreError.stagingFailed(error.localizedDescription)
         }
 
-        let token = Self.randomToken(byteCount: 32)
-        let now = clock()
-        entries[token] = Entry(
-            fileURL: stagedURL,
-            filename: filename,
-            sha256: digest.hash,
-            sizeBytes: digest.size,
-            expiresAt: now.addingTimeInterval(expiryInterval),
-            remainingDownloads: maxDownloads
-        )
-
-        return ArtifactHandle(
-            token: token,
-            artifactPath: "/artifact/\(token)",
-            filename: filename,
-            sizeBytes: digest.size,
-            sha256: digest.hash,
-            expiresInSeconds: Int(expiryInterval),
-            downloadsAllowed: maxDownloads
+        return try registerStagedFileLocked(
+            stagedURL: stagedURL,
+            artifactDirectory: artifactDirectory,
+            filename: filename
         )
     }
 
@@ -143,6 +150,41 @@ final class ArtifactStore: @unchecked Sendable {
         entries.removeAll()
         try? FileManager.default.removeItem(at: rootDirectory)
         try? FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+    }
+
+    private func registerStagedFileLocked(
+        stagedURL: URL,
+        artifactDirectory: URL,
+        filename: String
+    ) throws -> ArtifactHandle {
+        let digest: (hash: String, size: Int64)
+        do {
+            digest = try Self.sha256HexAndSize(of: stagedURL)
+        } catch {
+            try? FileManager.default.removeItem(at: artifactDirectory)
+            throw ArtifactStoreError.stagingFailed(error.localizedDescription)
+        }
+
+        let token = Self.randomToken(byteCount: 32)
+        let now = clock()
+        entries[token] = Entry(
+            fileURL: stagedURL,
+            filename: filename,
+            sha256: digest.hash,
+            sizeBytes: digest.size,
+            expiresAt: now.addingTimeInterval(expiryInterval),
+            remainingDownloads: maxDownloads
+        )
+
+        return ArtifactHandle(
+            token: token,
+            artifactPath: "/artifact/\(token)",
+            filename: filename,
+            sizeBytes: digest.size,
+            sha256: digest.hash,
+            expiresInSeconds: Int(expiryInterval),
+            downloadsAllowed: maxDownloads
+        )
     }
 
     private func sweepLocked(now: Date) {

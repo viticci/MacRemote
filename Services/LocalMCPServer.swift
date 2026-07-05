@@ -802,14 +802,23 @@ final class LocalMCPServer: @unchecked Sendable {
                 outcome.succeeded ? .info : .warning,
                 "\(outcome.toolName) MCP call exited \(outcome.exitCode) in \(outcome.duration.formattedDuration)."
             ))
+            var contentItems: [[String: Any]] = [
+                [
+                    "type": "text",
+                    "text": serializedJSON(structuredContent)
+                ]
+            ]
+            if outcome.succeeded,
+               let payload = stdoutJSONPayload(from: structuredContent),
+               let artifactLink = artifactResourceLinkItem(payload: payload, base: base) {
+                contentItems.append(artifactLink)
+            }
+            if let spillItems = spillStdoutContentItems(outcome: outcome, base: base) {
+                contentItems.append(contentsOf: spillItems)
+            }
             var result: [String: Any] = [
                 "structuredContent": structuredContent,
-                "content": [
-                    [
-                        "type": "text",
-                        "text": serializedJSON(structuredContent)
-                    ]
-                ],
+                "content": contentItems,
                 "isError": !outcome.succeeded
             ]
             if let uiMeta = resultUIMeta(for: tool, tools: tools) {
@@ -966,6 +975,85 @@ final class LocalMCPServer: @unchecked Sendable {
         var updated = structuredContent
         updated["stdout"] = updatedStdout
         return updated
+    }
+
+    private func stdoutJSONPayload(from structuredContent: [String: Any]) -> [String: Any]? {
+        guard let stdout = structuredContent["stdout"] as? String,
+              let data = stdout.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return payload
+    }
+
+    private func artifactDownloadURL(from payload: [String: Any], base: String) -> String? {
+        if let url = payload["download_url"] as? String, !url.isEmpty {
+            return url
+        }
+        guard let artifactPath = payload["artifact_path"] as? String,
+              artifactPath.hasPrefix(Self.artifactPathPrefix) else {
+            return nil
+        }
+        return base + artifactPath
+    }
+
+    private func mimeType(forFilename filename: String) -> String {
+        filename.lowercased().hasSuffix(".zip") ? "application/zip" : "application/octet-stream"
+    }
+
+    private func artifactResourceLinkItem(payload: [String: Any], base: String) -> [String: Any]? {
+        guard let uri = artifactDownloadURL(from: payload, base: base) else { return nil }
+        let filename = (payload["filename"] as? String).map(ArtifactStore.sanitizedFilename) ?? "download"
+        let sizeBytes = payloadSizeBytes(payload)
+        let expiresIn = payload["expires_in_seconds"] as? Int ?? Int(ArtifactStore.defaultExpiryInterval)
+        return [
+            "type": "resource_link",
+            "uri": uri,
+            "name": filename,
+            "mimeType": mimeType(forFilename: filename),
+            "description": "Downloadable artifact (expires in \(expiresIn)s, \(sizeBytes) bytes)."
+        ]
+    }
+
+    private func payloadSizeBytes(_ payload: [String: Any]) -> Int64 {
+        if let size = payload["size_bytes"] as? Int64 {
+            return size
+        }
+        if let size = payload["size_bytes"] as? Int {
+            return Int64(size)
+        }
+        if let size = payload["size_bytes"] as? NSNumber {
+            return size.int64Value
+        }
+        return 0
+    }
+
+    private func spillStdoutContentItems(outcome: ToolExecutionOutcome, base: String) -> [[String: Any]]? {
+        guard outcome.stdout.count > Self.mcpStdoutCharacterLimit,
+              let data = outcome.stdout.data(using: .utf8) else {
+            return nil
+        }
+
+        let filename = ArtifactStore.sanitizedFilename("\(outcome.toolName)-output.txt")
+        let handle: ArtifactHandle
+        do {
+            handle = try artifactStore.register(data: data, suggestedFilename: filename)
+        } catch {
+            return nil
+        }
+
+        let resourceLink: [String: Any] = [
+            "type": "resource_link",
+            "uri": base + handle.artifactPath,
+            "name": handle.filename,
+            "mimeType": "text/plain",
+            "description": "Full tool output (expires in \(handle.expiresInSeconds)s, \(handle.sizeBytes) bytes)."
+        ]
+        let note: [String: Any] = [
+            "type": "text",
+            "text": "Full output (\(handle.sizeBytes) bytes) available at the linked artifact."
+        ]
+        return [resourceLink, note]
     }
 
     private func artifactToken(from path: String) -> String? {

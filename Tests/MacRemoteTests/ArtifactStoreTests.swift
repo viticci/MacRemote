@@ -81,7 +81,23 @@ struct ArtifactStoreTests {
         #expect(artifactDirectories.count == 1)
     }
 
-    @Test func oversizeArtifactIsRejected() throws {
+    @Test func registerFromDataRoundTrip() throws {
+        let root = try makeTemporaryDirectory()
+        let store = ArtifactStore(rootDirectory: root)
+        let payload = Data("in-memory-artifact".utf8)
+
+        let handle = try store.register(data: payload, suggestedFilename: "memory.bin")
+        #expect(handle.filename == "memory.bin")
+        #expect(handle.sizeBytes == Int64(payload.count))
+        let expected = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+        #expect(handle.sha256 == expected)
+        #expect(!handle.token.isEmpty)
+
+        let consumed = try #require(store.consume(token: handle.token))
+        #expect(try Data(contentsOf: consumed.fileURL) == payload)
+    }
+
+    @Test func oversizeFileArtifactIsRejected() throws {
         let root = try makeTemporaryDirectory()
         let store = ArtifactStore(rootDirectory: root, maxSizeBytes: 16)
         let source = root.appendingPathComponent("big.bin")
@@ -89,6 +105,16 @@ struct ArtifactStoreTests {
 
         #expect(throws: ArtifactStoreError.artifactTooLarge) {
             _ = try store.register(fileURL: source, suggestedFilename: "big.bin")
+        }
+    }
+
+    @Test func oversizeInMemoryArtifactIsRejected() throws {
+        let root = try makeTemporaryDirectory()
+        let store = ArtifactStore(rootDirectory: root, maxSizeBytes: 16)
+        let payload = Data(repeating: 0xCD, count: 32)
+
+        #expect(throws: ArtifactStoreError.artifactTooLarge) {
+            _ = try store.register(data: payload, suggestedFilename: "big.bin")
         }
     }
 
