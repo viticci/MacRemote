@@ -47,6 +47,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private let artifactStore: ArtifactStore
     private let eventHandler: EventHandler?
     private let publicRateLimiter = PublicRequestRateLimiter()
+    private let toolExecutionLimiter: ToolExecutionLimiter
 
     init(
         instanceID: String,
@@ -56,6 +57,7 @@ final class LocalMCPServer: @unchecked Sendable {
         toolExecutor: any ToolExecuting,
         clientToolPermissionStore: ClientToolPermissionStore? = nil,
         artifactStore: ArtifactStore = ArtifactStore(),
+        toolExecutionLimiter: ToolExecutionLimiter? = nil,
         eventHandler: EventHandler? = nil
     ) {
         self.instanceID = instanceID
@@ -65,6 +67,7 @@ final class LocalMCPServer: @unchecked Sendable {
         self.toolExecutor = toolExecutor
         self.clientToolPermissionStore = clientToolPermissionStore
         self.artifactStore = artifactStore
+        self.toolExecutionLimiter = toolExecutionLimiter ?? ToolExecutionLimiter()
         self.eventHandler = eventHandler
     }
 
@@ -76,6 +79,7 @@ final class LocalMCPServer: @unchecked Sendable {
         toolExecutor: any ToolExecuting,
         clientToolPermissionStore: ClientToolPermissionStore? = nil,
         artifactStore: ArtifactStore = ArtifactStore(),
+        toolExecutionLimiter: ToolExecutionLimiter? = nil,
         eventHandler: EventHandler? = nil
     ) {
         self.instanceID = instanceID
@@ -85,6 +89,7 @@ final class LocalMCPServer: @unchecked Sendable {
         self.toolExecutor = toolExecutor
         self.clientToolPermissionStore = clientToolPermissionStore
         self.artifactStore = artifactStore
+        self.toolExecutionLimiter = toolExecutionLimiter ?? ToolExecutionLimiter()
         self.eventHandler = eventHandler
     }
 
@@ -780,7 +785,17 @@ final class LocalMCPServer: @unchecked Sendable {
                 }
             }
 
-            let outcome = try await toolExecutor.execute(toolID: tool.id, parameters: arguments)
+            guard let outcome = try await toolExecutionLimiter.withSlot({
+                try await toolExecutor.execute(toolID: tool.id, parameters: arguments)
+            }) else {
+                eventHandler?(.log(.warning, "\(tool.name) was not executed: execution concurrency limit reached."))
+                return toolExecutionErrorResult(
+                    id: id,
+                    tool: tool,
+                    reason: "unavailable",
+                    message: "Server is busy; too many tool calls in progress. Retry shortly."
+                )
+            }
             var structuredContent = structuredContent(for: outcome)
             structuredContent = augmentStructuredContentWithArtifactDownloadURL(structuredContent, base: base)
             eventHandler?(.log(

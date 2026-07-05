@@ -1962,6 +1962,67 @@ private struct TimedOutToolExecutor: ToolExecuting {
     }
 }
 
+private struct HoldingToolExecutor: ToolExecuting {
+    private let gate: HoldingGate
+
+    init(gate: HoldingGate) {
+        self.gate = gate
+    }
+
+    func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
+        await gate.holdUntilReleased()
+        return ToolExecutionOutcome(
+            toolID: toolID,
+            toolName: "Echo",
+            exitCode: 0,
+            stdout: "held",
+            stderr: "",
+            duration: 0.01,
+            timedOut: false,
+            truncatedStdout: false,
+            truncatedStderr: false
+        )
+    }
+}
+
+private actor HoldingGate {
+    private var entered = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func holdUntilReleased() async {
+        entered = true
+        let pendingEntered = enteredWaiters
+        enteredWaiters.removeAll()
+        for continuation in pendingEntered {
+            continuation.resume()
+        }
+
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { continuation in
+            if entered {
+                continuation.resume()
+            } else {
+                enteredWaiters.append(continuation)
+            }
+        }
+    }
+
+    func release() {
+        let pending = releaseWaiters
+        releaseWaiters.removeAll()
+        for continuation in pending {
+            continuation.resume()
+        }
+    }
+}
+
 private struct FakeToolExecutor: ToolExecuting {
     func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
         let stdout: String
@@ -2786,6 +2847,85 @@ struct MCPUISupportTests {
         #expect(error["code"] as? Int == -32602)
         #expect((error["message"] as? String)?.contains("missing_tool") == true)
         #expect(toolCall.json["result"] == nil)
+    }
+
+    @Test func concurrentToolCallBeyondExecutionLimitReturnsUnavailable() async throws {
+        let coordinator = OAuthCoordinator()
+        let gate = HoldingGate()
+        let tool = ToolDefinition(
+            id: "test.hold",
+            name: "Hold Echo",
+            summary: "Blocks until the test releases it.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{value}"],
+            parameters: [
+                ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let limiter = ToolExecutionLimiter(maxSlots: 1, acquireTimeout: .milliseconds(200))
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: HoldingToolExecutor(gate: gate),
+            toolExecutionLimiter: limiter
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        async let firstCallResponse = postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "hold-first",
+                "method": "tools/call",
+                "params": [
+                    "name": "test_hold",
+                    "arguments": ["value": "one"]
+                ]
+            ]
+        )
+
+        await gate.waitUntilEntered()
+
+        let secondCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "hold-second",
+                "method": "tools/call",
+                "params": [
+                    "name": "test_hold",
+                    "arguments": ["value": "two"]
+                ]
+            ]
+        )
+
+        #expect(secondCall.statusCode == 200)
+        #expect(secondCall.json["error"] == nil)
+        let secondResult = try #require(secondCall.json["result"] as? [String: Any])
+        #expect(secondResult["isError"] as? Bool == true)
+        let structuredContent = try #require(secondResult["structuredContent"] as? [String: Any])
+        #expect(structuredContent["reason"] as? String == "unavailable")
+        let stderr = try #require(structuredContent["stderr"] as? String)
+        #expect(stderr.contains("busy"))
+
+        await gate.release()
+        let firstResponse = try await firstCallResponse
+        #expect(firstResponse.statusCode == 200)
+        let firstResult = try #require(firstResponse.json["result"] as? [String: Any])
+        #expect(firstResult["isError"] as? Bool == false)
     }
 
     @Test func timedOutExecutionMapsToTimeoutReason() async throws {
