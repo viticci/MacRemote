@@ -174,6 +174,7 @@ Every `Card`; tool/app/request/log lists and all rows; `KeyValueGrid`s; readines
 | Reset-app-row action | **Re-add MacRemote in System Settings** | Reset App Row (visible copy) |
 | Pings | **notifications** | alerts |
 | Kept verbatim | **Scan This Mac**, **Always Allow**, **Read-only**, status words Stopped/Starting/Running | — |
+| Public-link auto-recovery | **Reconnecting** (status word) / "Reconnecting public link (attempt N)" (prose) — shown while the watchdog is restoring a dropped public link (D28) | Recovering tunnel, Restarting tunnel, Reconnecting tunnel (visible copy) |
 | MCP freshness | **Scan results may be out of date** (when configs changed since last refresh) | — |
 | Automatic discovery | Config-only MCP surfacing at launch/activation — **not** automatic import or share | auto-import, auto-share, background probing |
 | Built-in native tools | **Built-in** (source group) / "runs natively in MacRemote" | native backend, `builtin.fs`, subprocess (visible copy) |

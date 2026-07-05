@@ -40,6 +40,12 @@ script/macremotectl list-preset-sets --json
   executable-plus-argv subprocess. Do not add new native backends without a
   documented decision; user-defined and preset tools stay process/bridge only.
 - Shell wrappers such as `sh`, `bash`, `zsh`, `fish`, and `env` stay blocked.
+- The runner's reliability invariants must not regress: the global execution
+  concurrency limiter (`Services/ToolExecutionLimiter.swift`, acquired after the
+  approval gate) with structured `reason:"unavailable"` load-shedding, timed-out
+  children killed by both process group and direct pid, concurrent stdout/stderr
+  draining, and checked numeric-argument parsing. A remote argument must not be
+  able to crash the server.
 - RemCTL, PocketCTL, Codex, and other CLIs receive the same visual and runtime
   treatment.
 - Optional CLIs must remain optional in docs, code, and `doctor`.

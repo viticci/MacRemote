@@ -167,3 +167,49 @@ MacRemote updates the running tool surface when tools are added, removed, or
 toggled. Connected clients must refresh `tools/list` to see the new surface. If a
 client caches tool lists and does not refresh, reconnect that client; the tunnel
 does not need to be stopped solely because the tool registry changed.
+
+## Stress Harness
+
+The end-to-end flow above proves the happy path over a public link. The local
+stress harness instead exercises reliability under adverse load — concurrency
+bursts, oversized output, hangs/timeouts, malformed arguments, and protocol
+edge cases — against a real `LocalMCPServer` on loopback, with no tunnel and a
+curated set of stress tools. Full operator details live in
+[`Tools/stress/README.md`](../Tools/stress/README.md); the short version:
+
+1. Launch the harness in one terminal. It runs a normal `swift test` case that
+   is inert unless `MR_STRESS_HARNESS=1`, so it never fires during a regular
+   test run. It blocks (serving requests) until stopped or its TTL expires:
+
+   ```bash
+   MR_STRESS_HARNESS=1 MR_STRESS_TOKEN="$(openssl rand -hex 16)" \
+   SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+   swift test --filter stressHarnessServer
+   ```
+
+   Optional env vars: `MR_STRESS_ENDPOINT_FILE` (default
+   `/tmp/mr_stress_harness/endpoint.json`), `MR_STRESS_STOP_FILE` (default
+   `/tmp/mr_stress_harness/stop`), and `MR_STRESS_TTL_SECONDS` (default `900`).
+   If `MR_STRESS_TOKEN` is unset the harness generates a random one and writes it
+   into the endpoint file.
+
+2. On startup the harness writes the endpoint file describing where and how to
+   connect — `baseURL` (`http://127.0.0.1:<port>`), the bearer `token`,
+   `mcpPath` (`/mcp/stress`), `healthPath` (`/health`), and the stress tool
+   list. The Python driver reads this file automatically.
+
+3. Run one category from another terminal and read the JSON summary it prints
+   (exit code `0` = passed):
+
+   ```bash
+   python3 Tools/stress/run_category.py concurrency
+   ```
+
+   Categories: `concurrency`, `largeoutput`, `hang`, `badargs`, `protocol`.
+
+4. Stop the harness by creating the stop file (it is consumed and the case
+   returns), or just let the TTL elapse:
+
+   ```bash
+   touch /tmp/mr_stress_harness/stop
+   ```

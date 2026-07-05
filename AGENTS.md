@@ -150,6 +150,18 @@ The server exposes tool metadata aligned with the current MCP schema:
 For broad CLI adapters, descriptions must explicitly say there is no shell and
 that `args` is an argv array.
 
+Tool results carry a machine-readable `reason` code
+(`ok|nonzero_exit|timeout|output_limit|killed|invalid_argument|not_approved|unavailable|internal_error`)
+in `structuredContent` and `outputSchema`. Per the 2025-11-25 error model,
+argument/validation failures return a `CallToolResult` with `isError:true` +
+`reason`, not a JSON-RPC error; JSON-RPC errors are reserved for malformed
+envelope (`-32700`), unknown tool / missing name (`-32602`), unknown request
+method (`-32601`), and internal (`-32603`). Notifications are acknowledged with
+HTTP 202. Tool executions are additionally bounded by a global concurrency
+limiter (`Services/ToolExecutionLimiter.swift`, acquired after the approval
+gate) that sheds excess load with `reason:"unavailable"` — do not remove or
+bypass it.
+
 Catalog policy (CLI-DISCOVERY-SPEC §6.4): the scanner's Ring-1 table (§4.3) is
 catalog policy too — **no preset may wrap credential/secret managers, shells,
 privilege tools, or package managers.** The scanner and the catalog share one
@@ -179,6 +191,19 @@ For docs-only changes, at least run:
 ```bash
 script/macremotectl doctor --json
 python3 -m py_compile script/macremotectl
+```
+
+The local MCP stress harness reproduces the concurrency / large-output /
+hang / bad-argument / protocol scenarios against a real `LocalMCPServer` on
+loopback, without a tunnel. It is gated by `MR_STRESS_HARNESS=1` so a normal
+`swift test` skips it. See `Tools/stress/README.md`:
+
+```bash
+MR_STRESS_HARNESS=1 MR_STRESS_TOKEN=<hex> \
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+swift test --filter stressHarnessServer
+# then, against the endpoint file it writes:
+python3 Tools/stress/run_category.py <concurrency|largeoutput|hang|badargs|protocol>
 ```
 
 After UI changes, also re-check the falsifiable rules:

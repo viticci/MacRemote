@@ -139,6 +139,28 @@ Tools are not shell snippets. A tool definition contains:
 Execution uses `Process`/`NSTask` style direct spawning with an executable and
 argv array. No `/bin/sh -c` is used for user-defined tools.
 
+The process runner is hardened for reliability under hostile or heavy load:
+
+- **Concurrent output draining.** stdout and stderr are drained on separate
+  tasks while the child runs, so a tool emitting more than a pipe buffer's worth
+  of output (historically ~64 KB) cannot deadlock the runner. Each stream is
+  capped at the tool's `outputByteLimit`.
+- **Process-tree timeout kill.** On timeout the child is signaled through both
+  its process group and its direct pid — SIGTERM first, then SIGKILL after a
+  short grace period. The direct-pid signal is a race-free backstop for the case
+  where `setpgid` lost to `exec`, so pagers and spawned subprocesses are reaped
+  even then.
+- **stdin and pager hardening.** Tools run with stdin bound to `/dev/null`
+  unless a call supplies `stdin`, and the tool environment sets `PAGER`,
+  `MANPAGER`, and `GIT_PAGER` to `cat` with `TERM=dumb`, so `--help` and similar
+  commands don't block waiting on an interactive pager.
+- **Bounded concurrency.** A global execution concurrency limiter caps how many
+  tool executions run simultaneously across all clients. The slot is acquired
+  after the approval gate (approval waits are not counted against it). When no
+  slot frees up in a short window, the call fast-fails with a structured
+  `reason: "unavailable"` result instead of spawning an unbounded number of
+  child processes under burst traffic.
+
 MacRemote supports two CLI exposure modes:
 
 - Generic CLI adapter: one MCP tool wraps one executable. The tool schema
@@ -223,6 +245,26 @@ Tool serialization follows the current MCP tool schema shape:
 - `annotations`: `title`, `readOnlyHint`, `destructiveHint`,
   `idempotentHint`, and `openWorldHint`.
 
+Structured tool results carry a machine-readable `reason` code (declared in the
+tool `outputSchema` and echoed on `structuredContent`). The taxonomy is
+`ok`, `nonzero_exit`, `timeout`, `output_limit`, `killed`, `invalid_argument`,
+`not_approved`, `unavailable`, and `internal_error`. A tool whose output exceeds
+the inline result cap spills the full stream to a downloadable artifact surfaced
+as an MCP `resource_link` content item (with a `mimeType` matching the
+`/artifact/<token>` route's `Content-Type`) rather than returning empty output —
+so large results become a link, never a silent drop. Numeric arguments are
+parsed with a checked conversion (`Int(exactly:)`), so an out-of-range or
+non-integral value returns `invalid_argument` instead of trapping the process.
+
+The MCP error model follows the 2025-11-25 spec split: argument and
+input-validation failures are **not** JSON-RPC errors — they return a
+`CallToolResult` with `isError: true`, actionable text content, and the
+`reason` code. JSON-RPC errors are reserved for envelope/protocol problems: a
+malformed body (`-32700`), a missing tool name or unknown tool (`-32602`), an
+unknown request method (`-32601`), and internal server errors (`-32603`).
+`notifications/cancelled` and other notifications are acknowledged with HTTP
+`202` and no body.
+
 The app ships opt-in preset categories that prefill fixed command templates and
 generic CLI adapters for common operations: Reminders, Podcasts, Filesystem,
 Utilities, Image Processing, Text, and Developer. Presets are convenience drafts,
@@ -262,8 +304,10 @@ Read-only helper tools can execute after OAuth token validation. Write and
 destructive tools require a second host approval for each call unless the host
 has granted that connected client persistent access to the tool. The MCP request
 waits while the call is shown in the Approvals view with the tool name,
-capability, and argument preview. Denied or expired calls return a JSON-RPC
-error and never reach the process runner.
+capability, and argument preview. Denied or expired calls, like other
+non-protocol failures, return a normal `CallToolResult` with `isError: true` and
+`reason: "not_approved"` and never reach the process runner (see the MCP error
+model below).
 
 Tool definitions can declare permission requirements. Full Disk Access is one
 requirement; macOS privacy services such as Reminders, Screen Recording,
@@ -301,6 +345,16 @@ The private instance id remains a high-entropy local identifier for rotation
 and legacy loopback paths, but public forwarded requests must use `/mcp`. The
 URL is not a secret by itself. OAuth, client authentication where configured,
 and host-side approval remain mandatory.
+
+While the user intends the public link to be up, a tunnel watchdog keeps it
+alive. It detects an unexpected `cloudflared` exit, and the
+healthy-local-server-but-dead-tunnel case via periodic origin health checks,
+and auto-restarts the tunnel with exponential backoff (starting at ~1s, capped
+at 32s, up to 5 consecutive attempts). During recovery the tunnel state is
+reported truthfully as reconnecting; a user-initiated stop is distinguished from
+an unexpected drop so a controlled stop is not treated as a failure. If recovery
+exhausts its attempts, the watchdog surfaces a failure rather than a false
+"running" state.
 
 ## Authorization Design
 

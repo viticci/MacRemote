@@ -42,5 +42,32 @@ public issues with secrets, tunnel URLs, OAuth tokens, or local command output.
   `~/Library/Application Support/MacRemote/mcp-scan-cache.json` stores hashed
   identities and a config fingerprint, never raw URLs, headers, or tokens.
 
+## Reliability and Denial of Service
+
+A remote client can send bursts, oversized payloads, hanging commands, and
+malformed arguments. These are treated as a security surface, because a client
+that can exhaust the host or crash the server can deny the local user their own
+tools. Mitigations:
+
+- **Bounded concurrency.** A global limiter caps how many tool executions run at
+  once (acquired after the approval gate, so approval waits don't count). When
+  saturated, a call fast-fails with a structured `isError` result and
+  `reason: "unavailable"` (retryable) instead of spawning unbounded child
+  processes.
+- **Process-tree reaping.** A timed-out tool is killed by both its process group
+  and its direct pid (SIGTERM, then SIGKILL), so a pager or spawned subprocess
+  cannot outlive the timeout. Child stdout/stderr are drained concurrently while
+  the process runs, so a tool emitting large output can't deadlock on a full
+  pipe buffer. Tools run with stdin from `/dev/null` and pagers disabled by
+  default.
+- **Checked argument parsing.** Numeric tool arguments are parsed with a checked
+  conversion; an out-of-range or non-integral number returns a structured
+  `invalid_argument` error instead of trapping. A single malformed remote
+  argument can no longer crash the server.
+- **Structured load-shedding and error model.** Argument/validation failures
+  return a normal tool result with `isError: true` and a machine-readable
+  `reason` code; JSON-RPC protocol errors are reserved for malformed envelopes
+  and unknown methods/tools. Output and body sizes remain capped.
+
 See [docs/ARCHITECTURE_SECURITY.md](docs/ARCHITECTURE_SECURITY.md) and
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for details.

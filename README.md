@@ -331,6 +331,22 @@ Current MCP tool descriptions include `title`, `description`, `inputSchema`,
 `outputSchema`, and tool `annotations` such as `readOnlyHint`,
 `destructiveHint`, `idempotentHint`, and `openWorldHint`.
 
+### Reliability
+
+MacRemote is built to stay responsive when a client sends slow, chatty, or
+oversized calls:
+
+- A tool that hits its timeout is stopped along with the whole process tree it
+  started, so a stuck command or pager cannot wedge the server.
+- Only a bounded number of tool calls run at once. When that limit is reached,
+  extra calls get an immediate "server is busy, retry shortly" result instead of
+  piling up, and the server keeps serving the calls already in flight.
+- A result too large to return inline is saved and handed back as a downloadable
+  link rather than being silently dropped.
+- If the public link drops while the local server is still healthy, MacRemote
+  reconnects it automatically and shows a truthful reconnecting status while it
+  retries.
+
 ### Built-in File Transfer Tools
 
 MacRemote ships a built-in File Transfer tool group that runs natively in the

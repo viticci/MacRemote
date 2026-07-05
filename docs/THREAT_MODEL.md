@@ -76,6 +76,21 @@ adapter must be treated as delegation of the whole executable's reachable
 capability surface. Shell interpreters and `/usr/bin/env` are blocked because
 they erase the executable boundary.
 
+Resource exhaustion is a remote-reachable denial-of-service surface: a client
+can send bursts, hang commands, stream oversized output, or pass malformed
+arguments to starve the host or crash the server. Mitigations: a global
+execution concurrency limiter caps simultaneous tool runs (acquired after the
+approval gate) and sheds excess load with a structured `reason: "unavailable"`
+result instead of spawning unbounded processes; timed-out tools are killed by
+both their process group and direct pid (SIGTERM then SIGKILL) so pagers and
+spawned subprocesses are reaped; child stdout/stderr are drained concurrently
+to avoid a pipe-buffer deadlock, with per-tool output byte caps; stdin defaults
+to `/dev/null` and pagers are disabled; and numeric arguments are parsed with a
+checked conversion so an out-of-range integer returns `invalid_argument`
+instead of trapping the process. Argument and validation failures return a tool
+result with `isError: true` and a machine-readable `reason`; JSON-RPC errors are
+reserved for malformed envelopes and unknown methods/tools.
+
 The built-in File Transfer tools reach the filesystem directly rather than
 through a delegated CLI. Mitigations: absolute-path-only inputs (relative paths
 and `..` traversal rejected), a sensitive-path denylist (`~/.ssh`, `~/.gnupg`,
@@ -145,7 +160,13 @@ High:
 
 Medium:
 
-- missing request or output size limits causing local denial of service;
+- missing request or output size limits causing local denial of service.
+  Remote-triggerable process exhaustion (unbounded concurrent executions or
+  unreaped child process trees) and the integer-overflow crash from a malformed
+  numeric argument are mitigated: executions are bounded by the concurrency
+  limiter with structured load-shedding, timed-out children are killed by
+  process group and direct pid, and numeric parsing is checked so a bad argument
+  returns `invalid_argument` rather than trapping the server;
 - artifact tokens not expiring, exceeding the download count, or surviving
   server stop; artifact route missing its rate limit or size cap;
 - weak or predictable instance identifiers;

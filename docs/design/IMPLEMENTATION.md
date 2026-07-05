@@ -11,7 +11,7 @@
 
 ```bash
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift build
-SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift test   # Swift Testing, 412 tests
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift test   # Swift Testing, 449 tests
 script/build_and_run.sh              # builds (auto-pins SDK), signs, relaunches dist/MacRemote.app
 script/build_and_run.sh --build-only # build without killing a running instance / its tunnel
 ```
@@ -167,7 +167,7 @@ globe means still-broken. Re-adding the connector in Claude.ai re-resolves the i
 
 ## Testing
 
-Swift Testing (`import Testing`), 412 tests / 39 suites. Two suites are
+Swift Testing (`import Testing`), 449 tests / 42 suites. Two suites are
 `.serialized` (`CloudflareServiceTests`, `LocalMCPServerTests`) because they share
 mock statics / bind ports and race under Swift Testing's default parallelism.
 New suites from the redesign: `AppModelToolUpdateTests` (transactional tool edit),
@@ -260,3 +260,76 @@ backend (`ToolBackend.native`) — no subprocess.
   `ArtifactStoreTests.swift`, plus `tools/list` pagination and
   `invalid_token` coverage in `LocalMCPServerTests.swift`, token-lifetime
   coverage in `OAuthCoordinatorTests.swift`.
+
+## Reliability & MCP conformance (added 2026-07-05)
+
+Spec: DESIGN-SPEC decisions D25–D29. Reliability + spec-conformance hardening
+that landed after three iOS-client stress runs crashed the server. Nothing here
+is a new user-facing page — these are runtime/behavior changes to how the
+in-process server survives hostile or heavy remote traffic.
+
+- Process hardening (`Services/ProcessRunner.swift`): stdout/stderr drain on
+  two detached `Task`s (fixes a single-pipe fill/deadlock); child is made its
+  own process-group leader (`setpgid`) so timeout kills reach the whole tree via
+  `kill(-pid, …)`, with a direct-pid signal as the race-free backstop; timeout
+  path escalates SIGTERM → (2 s) → SIGKILL. Stdin is `/dev/null` unless a tool
+  passes explicit `standardInput`. Tool environment
+  (`Support/ExecutableLocator.toolEnvironment`) pins `PAGER`/`MANPAGER`/
+  `GIT_PAGER=cat` and `TERM=dumb` so a child never blocks on a pager.
+- Execution limiter (`Services/ToolExecutionLimiter.swift`, D25): `actor` with
+  `maxConcurrentExecutions = 8`, `withSlot(timeout:)` (default 3 s). Acquired in
+  `LocalMCPServer.callTool` **around `toolExecutor.execute` only**, *after* the
+  approval await — so a pending approval never occupies a slot. Saturation →
+  `toolExecutionErrorResult(reason: "unavailable", …)`.
+- MCP error model (`Services/LocalMCPServer.swift`, D26): tool-execution
+  failures are `isError:true` results carrying a `reason` on
+  `structuredContent`; the `reason` enum is declared in `outputSchema()`
+  (`ok / nonzero_exit / timeout / output_limit / killed / invalid_argument /
+  not_approved / unavailable / internal_error` — `killed`/`internal_error` are
+  reserved in the schema, not yet emitted). `executionReason(for:…)` maps a
+  finished run; `toolExecutionErrorResult` maps pre-execution failures
+  (`unavailable`, `not_approved`) and `ToolValidationError.callToolReason`
+  (`invalid_argument`, or `unavailable` for
+  unavailable/blocked/write-disabled/identity-changed). JSON-RPC errors are
+  reserved for the envelope (`-32600/-32700/-32601/-32602/-32603`, in
+  `handleMCPMessage`/`callTool`/`toolsList`); unknown notifications and
+  `notifications/cancelled` return `202` with no body. Protocol versions
+  supported: `2025-11-25` (latest) / `2025-06-18` / `2025-03-26`.
+- Numeric parsing (D29): `ToolArgumentValue.integerString(from:)`
+  (`Models/ToolDefinition.swift`) and `NativeToolExecutor` route every JSON
+  number→Int through `Int(exactly:)` after an `isFinite` guard; out-of-range
+  values surface `invalidInteger`/`invalid_argument` instead of trapping the
+  in-process server.
+- Large-output spill (D27): `spillStdoutContentItems` registers the full stdout
+  with `ArtifactStore` and appends a `resource_link` (+ text note) when stdout
+  exceeds `mcpStdoutCharacterLimit` (100 000); the inline envelope stays
+  truncated. Download-tool payloads get a `download_url` via
+  `augmentStructuredContentWithArtifactDownloadURL` and a matching
+  `resource_link` whose `mimeType` follows the declared filename.
+- Tunnel watchdog (`Services/TunnelWatchdog.swift`, D28): health-checks the
+  local origin (`/health`) and the tunnel process; `handleUnexpectedFailure` /
+  the health monitor drive `runRecoveryLoop` with
+  `TunnelWatchdogBackoff.delay` (initial 1 s, ×2, cap 32 s, ceiling 5). Wired in
+  `AppModel.makeTunnelWatchdog` — `onReconnecting` sets
+  `TunnelStatus.reconnecting(attempt:)` (`Models/RuntimeState.swift`, title
+  "Reconnecting", `isRecovering == true`), `onRecoveryFailed` surfaces the
+  failure; `shouldIgnoreStoppedEvent()` suppresses the controlled-stop event so
+  Stop Sharing is never mistaken for a crash. The hero renders reconnecting as
+  `.publicPending`; the readiness card shows "Reconnecting public link
+  (attempt N)."
+- Filesystem preset dedupe: `preset.filesystem.file_info` and
+  `preset.filesystem.read_head` were removed from
+  `Models/DefaultToolPresetCatalog.swift` (superseded by the native
+  `builtin.fs.*` tools, D22). No `tools.json` migration — presets are templates,
+  so already-added user tools are untouched. Remaining `.filesystem` group
+  presets: `list_directory`, `find_by_name`.
+- Stress harness: `Tests/MacRemoteTests/StressHarnessServer.swift` — one inert
+  `@Test` (returns immediately unless `MR_STRESS_HARNESS=1`) that stands up a
+  loopback `LocalMCPServer` with Single-Header auth and five stress tools
+  (`stress.echo/cat_stdin/bigout/sleep/typed`), writing its endpoint JSON for an
+  external driver. Python driver in `Tools/stress/` (`mcp_client.py`,
+  `run_category.py`).
+- Tests: `ToolExecutionLimiterTests`, `TunnelWatchdogTests`,
+  `ProcessRunnerTests`, plus error-model/`reason`-code and spill coverage in
+  `LocalMCPServerTests`. Suite/test totals: **449 tests / 42 suites** (the
+  harness contributes its 1 inert test).
