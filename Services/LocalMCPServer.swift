@@ -693,9 +693,12 @@ final class LocalMCPServer: @unchecked Sendable {
                 return toolsList(id: id, message: message)
             case "tools/call":
                 return await callTool(id: id, message: message, client: client, base: base)
-            case "notifications/initialized":
+            case "notifications/initialized", "notifications/cancelled":
                 return HTTPResponse(status: .accepted, headers: mcpResponseHeaders(), body: "").data
             default:
+                if method.hasPrefix("notifications/") {
+                    return HTTPResponse(status: .accepted, headers: mcpResponseHeaders(), body: "").data
+                }
                 return jsonRPCError(id: id, code: -32601, message: "Method not found.")
             }
         } catch {
@@ -732,11 +735,13 @@ final class LocalMCPServer: @unchecked Sendable {
         let rawArguments = params["arguments"] as? [String: Any] ?? [:]
         let arguments = rawArguments.compactMapValues(ToolArgumentValue.fromJSONObject)
 
+        var resolvedTool: ToolDefinition?
         do {
             let tools = toolProvider()
             guard let tool = MCPToolNameMapper.resolve(name, in: tools) else {
                 throw ToolValidationError.unknownTool(name)
             }
+            resolvedTool = tool
 
             if tool.capability != .readOnly {
                 if clientToolPermissionStore?.isAllowed(
@@ -751,6 +756,7 @@ final class LocalMCPServer: @unchecked Sendable {
                         return toolExecutionErrorResult(
                             id: id,
                             tool: tool,
+                            reason: "unavailable",
                             message: "Host approval is required for this tool."
                         )
                     }
@@ -766,6 +772,7 @@ final class LocalMCPServer: @unchecked Sendable {
                         return toolExecutionErrorResult(
                             id: id,
                             tool: tool,
+                            reason: "not_approved",
                             message: "Tool call was not approved on the host Mac."
                         )
                     }
@@ -800,26 +807,39 @@ final class LocalMCPServer: @unchecked Sendable {
                 ]
             }
             return jsonRPCResult(id: id, result: result)
+        } catch ToolValidationError.unknownTool(let unknownName) {
+            return jsonRPCError(id: id, code: -32602, message: "Unknown tool: \(unknownName)")
         } catch let error as ToolValidationError {
-            return jsonRPCError(id: id, code: -32602, message: error.localizedDescription)
+            return toolExecutionErrorResult(
+                id: id,
+                tool: resolvedTool,
+                reason: error.callToolReason,
+                message: error.callToolMessage(tool: resolvedTool, arguments: arguments)
+            )
         } catch {
-            return jsonRPCError(id: id, code: -32000, message: error.localizedDescription)
+            return jsonRPCError(id: id, code: -32603, message: "Internal error.")
         }
     }
 
-    private func toolExecutionErrorResult(id: Any?, tool: ToolDefinition, message: String) -> Data {
-        let structuredContent: [String: Any] = [
-            "toolID": tool.id,
-            "toolName": tool.name,
-            "exitCode": -1,
-            "succeeded": false,
-            "stdout": "",
-            "stderr": message,
-            "durationSeconds": 0,
-            "timedOut": false,
-            "truncatedStdout": false,
-            "truncatedStderr": false
-        ]
+    private func toolExecutionErrorResult(
+        id: Any?,
+        tool: ToolDefinition?,
+        reason: String,
+        message: String
+    ) -> Data {
+        let structuredContent = makeStructuredContent(
+            toolID: tool?.id ?? "",
+            toolName: tool?.name ?? "",
+            exitCode: -1,
+            succeeded: false,
+            stdout: "",
+            stderr: message,
+            durationSeconds: 0,
+            timedOut: false,
+            truncatedStdout: false,
+            truncatedStderr: false,
+            reason: reason
+        )
         return jsonRPCResult(id: id, result: [
             "structuredContent": structuredContent,
             "content": [
@@ -843,18 +863,70 @@ final class LocalMCPServer: @unchecked Sendable {
     private func structuredContent(for outcome: ToolExecutionOutcome) -> [String: Any] {
         let stdout = String(outcome.stdout.prefix(Self.mcpStdoutCharacterLimit))
         let stderr = String(outcome.stderr.prefix(Self.mcpStderrCharacterLimit))
-        return [
-            "toolID": outcome.toolID,
-            "toolName": outcome.toolName,
-            "exitCode": Int(outcome.exitCode),
-            "succeeded": outcome.succeeded,
+        let truncatedStdout = outcome.truncatedStdout || stdout.count < outcome.stdout.count
+        let truncatedStderr = outcome.truncatedStderr || stderr.count < outcome.stderr.count
+        return makeStructuredContent(
+            toolID: outcome.toolID,
+            toolName: outcome.toolName,
+            exitCode: Int(outcome.exitCode),
+            succeeded: outcome.succeeded,
+            stdout: stdout,
+            stderr: stderr,
+            durationSeconds: outcome.duration,
+            timedOut: outcome.timedOut,
+            truncatedStdout: truncatedStdout,
+            truncatedStderr: truncatedStderr,
+            reason: executionReason(
+                for: outcome,
+                truncatedStdout: truncatedStdout,
+                truncatedStderr: truncatedStderr
+            )
+        )
+    }
+
+    private func makeStructuredContent(
+        toolID: String,
+        toolName: String,
+        exitCode: Int,
+        succeeded: Bool,
+        stdout: String,
+        stderr: String,
+        durationSeconds: TimeInterval,
+        timedOut: Bool,
+        truncatedStdout: Bool,
+        truncatedStderr: Bool,
+        reason: String
+    ) -> [String: Any] {
+        [
+            "toolID": toolID,
+            "toolName": toolName,
+            "exitCode": exitCode,
+            "succeeded": succeeded,
             "stdout": stdout,
             "stderr": stderr,
-            "durationSeconds": outcome.duration,
-            "timedOut": outcome.timedOut,
-            "truncatedStdout": outcome.truncatedStdout || stdout.count < outcome.stdout.count,
-            "truncatedStderr": outcome.truncatedStderr || stderr.count < outcome.stderr.count
+            "durationSeconds": durationSeconds,
+            "timedOut": timedOut,
+            "truncatedStdout": truncatedStdout,
+            "truncatedStderr": truncatedStderr,
+            "reason": reason
         ]
+    }
+
+    private func executionReason(
+        for outcome: ToolExecutionOutcome,
+        truncatedStdout: Bool,
+        truncatedStderr: Bool
+    ) -> String {
+        if outcome.timedOut {
+            return "timeout"
+        }
+        if truncatedStdout || truncatedStderr {
+            return "output_limit"
+        }
+        if outcome.succeeded {
+            return "ok"
+        }
+        return "nonzero_exit"
     }
 
     private func augmentStructuredContentWithArtifactDownloadURL(
@@ -1351,7 +1423,21 @@ final class LocalMCPServer: @unchecked Sendable {
                 "durationSeconds": ["type": "number"],
                 "timedOut": ["type": "boolean"],
                 "truncatedStdout": ["type": "boolean"],
-                "truncatedStderr": ["type": "boolean"]
+                "truncatedStderr": ["type": "boolean"],
+                "reason": [
+                    "type": "string",
+                    "enum": [
+                        "ok",
+                        "nonzero_exit",
+                        "timeout",
+                        "output_limit",
+                        "killed",
+                        "invalid_argument",
+                        "not_approved",
+                        "unavailable",
+                        "internal_error"
+                    ]
+                ]
             ],
             "required": [
                 "toolID",
@@ -1363,7 +1449,8 @@ final class LocalMCPServer: @unchecked Sendable {
                 "durationSeconds",
                 "timedOut",
                 "truncatedStdout",
-                "truncatedStderr"
+                "truncatedStderr",
+                "reason"
             ],
             "additionalProperties": false
         ]

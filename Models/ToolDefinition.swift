@@ -804,4 +804,97 @@ enum ToolValidationError: LocalizedError, Equatable, Sendable {
         case .identityChanged(let name): "\(name) changed publisher since you added it — review before sharing again."
         }
     }
+
+    /// Actionable MCP tool-call failure text for `CallToolResult` content.
+    func callToolMessage(tool: ToolDefinition?, arguments: [String: ToolArgumentValue]) -> String {
+        switch self {
+        case .unknownTool(let id):
+            return "Unknown tool: \(id)"
+        case .emptyName:
+            return "Tool name is required."
+        case .executableNotAbsolute:
+            return "Executable path must be absolute."
+        case .executableUnavailable(let path):
+            return "Executable is not available: \(path)"
+        case .blockedExecutable(let path):
+            return "Shell-style executable is blocked: \(path)"
+        case .invalidArgument(let argument):
+            if let got = Self.formattedArgumentValue(arguments[argument]) {
+                return "Parameter '\(argument)' is invalid; got \(got)."
+            }
+            return "Invalid argument: \(argument)"
+        case .tooManyArguments:
+            return "Too many arguments were provided; reduce the number of items and try again."
+        case .invalidPlaceholder(let placeholder):
+            return "Invalid argument placeholder: \(placeholder)"
+        case .undefinedPlaceholder(let name):
+            return "Argument placeholder '\(name)' has no matching parameter on this tool."
+        case .invalidTimeout:
+            return "Timeout must be between 1 and 60 seconds."
+        case .invalidOutputLimit:
+            return "Output limit must be between 1 KB and 5 MB."
+        case .invalidMCPBridge(let detail):
+            return "Invalid MCP bridge configuration: \(detail)"
+        case .invalidNativeTool(let detail):
+            return "Invalid native tool configuration: \(detail)"
+        case .missingParameter(let name):
+            return "Missing required parameter '\(name)'."
+        case .invalidInteger(let name):
+            if let got = Self.formattedArgumentValue(arguments[name]) {
+                return "Parameter '\(name)' must be an integer; got \(got)."
+            }
+            return "Parameter '\(name)' must be an integer."
+        case .integerOutOfRange(let name):
+            let constraint = Self.integerConstraintDescription(for: name, in: tool) ?? "within the allowed range"
+            if let got = Self.formattedArgumentValue(arguments[name]) {
+                return "Parameter '\(name)' must be an integer \(constraint); got \(got)."
+            }
+            return "Parameter '\(name)' must be an integer \(constraint)."
+        case .stringTooLong(let name):
+            let maximumLength = tool?.parameters.first(where: { $0.name == name })?.maximumLength
+            if let value = arguments[name]?.stringValue, let maximumLength {
+                return "Parameter '\(name)' must be at most \(maximumLength) characters; got \(value.count) characters."
+            }
+            return "Parameter '\(name)' exceeds the maximum allowed length."
+        case .nulByte(let name):
+            return "Parameter '\(name)' must not contain a NUL byte."
+        case .writeToolDisabled(let id):
+            return "Write-capable tool disabled: \(id)"
+        case .identityChanged(let name):
+            return "\(name) changed publisher since you added it — review before sharing again."
+        }
+    }
+
+    var callToolReason: String {
+        switch self {
+        case .executableUnavailable, .blockedExecutable, .writeToolDisabled, .identityChanged:
+            return "unavailable"
+        default:
+            return "invalid_argument"
+        }
+    }
+
+    private static func formattedArgumentValue(_ value: ToolArgumentValue?) -> String? {
+        guard let value else { return nil }
+        if let string = value.stringValue {
+            return "'\(string)'"
+        }
+        switch value {
+        case .stringArray(let values):
+            return "'\(values.joined(separator: ", "))'"
+        case .json, .string:
+            return nil
+        }
+    }
+
+    private static func integerConstraintDescription(for name: String, in tool: ToolDefinition?) -> String? {
+        guard let parameter = tool?.parameters.first(where: { $0.name == name }),
+              let range = parameter.integerRange else {
+            return nil
+        }
+        if range.lowerBound == range.upperBound {
+            return "equal to \(range.lowerBound)"
+        }
+        return "between \(range.lowerBound) and \(range.upperBound)"
+    }
 }

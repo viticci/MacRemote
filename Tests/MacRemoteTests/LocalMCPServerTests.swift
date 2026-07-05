@@ -476,6 +476,7 @@ struct LocalMCPServerTests {
         #expect(structuredContent["toolID"] as? String == "test.echo")
         #expect(structuredContent["stdout"] as? String == "echo:hello")
         #expect(structuredContent["succeeded"] as? Bool == true)
+        #expect(structuredContent["reason"] as? String == "ok")
         let content = try #require(callResult["content"] as? [[String: Any]])
         let text = try #require(content.first?["text"] as? String)
         #expect(text.contains("\"stdout\":\"echo:hello\""))
@@ -1578,7 +1579,8 @@ struct LocalMCPServerTests {
             return ToolCallResultResponse(
                 statusCode: response.statusCode,
                 isError: result?["isError"] as? Bool,
-                stderr: structuredContent?["stderr"] as? String
+                stderr: structuredContent?["stderr"] as? String,
+                reason: structuredContent?["reason"] as? String
             )
         }
 
@@ -1592,6 +1594,7 @@ struct LocalMCPServerTests {
         #expect(deniedCall.statusCode == 200)
         #expect(deniedCall.isError == true)
         #expect(deniedCall.stderr == "Tool call was not approved on the host Mac.")
+        #expect(deniedCall.reason == "not_approved")
     }
 
     @Test func clientToolPermissionSkipsHostApprovalForDestructiveTool() async throws {
@@ -1943,6 +1946,22 @@ private final class TestClock: @unchecked Sendable {
     init(now: Date) { self.now = now }
 }
 
+private struct TimedOutToolExecutor: ToolExecuting {
+    func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
+        ToolExecutionOutcome(
+            toolID: toolID,
+            toolName: "Timeout",
+            exitCode: 1,
+            stdout: "",
+            stderr: "Timed out.",
+            duration: 2,
+            timedOut: true,
+            truncatedStdout: false,
+            truncatedStderr: false
+        )
+    }
+}
+
 private struct FakeToolExecutor: ToolExecuting {
     func execute(toolID: String, parameters: [String: ToolArgumentValue]) async throws -> ToolExecutionOutcome {
         let stdout: String
@@ -1995,6 +2014,7 @@ private struct ToolCallResultResponse: Sendable {
     let statusCode: Int
     let isError: Bool?
     let stderr: String?
+    let reason: String?
 }
 
 private struct ToolsListPageResponse {
@@ -2658,6 +2678,294 @@ struct MCPUISupportTests {
         let stdout = try #require(structured["stdout"] as? String)
         #expect(stdout.count == LocalMCPServer.mcpStdoutCharacterLimit)
         #expect(structured["truncatedStdout"] as? Bool == true)
+        #expect(structured["reason"] as? String == "output_limit")
+        #expect(structured["succeeded"] as? Bool == true)
+    }
+
+    @Test func validationFailureReturnsCallToolResultNotJSONRPCError() async throws {
+        let coordinator = OAuthCoordinator()
+        let tool = ToolDefinition(
+            id: "test.limit",
+            name: "Limit Test",
+            summary: "Echo with a bounded limit parameter.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{limit}"],
+            parameters: [
+                ToolParameter(
+                    name: "limit",
+                    title: "Limit",
+                    kind: .integer,
+                    required: true,
+                    integerRange: 1...100
+                )
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: ConfiguredToolExecutor(
+                tools: [tool],
+                environment: [
+                    "HOME": ExecutableLocator.homeDirectory,
+                    "PATH": ExecutableLocator.searchDirectories.joined(separator: ":")
+                ]
+            )
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "invalid-limit",
+                "method": "tools/call",
+                "params": [
+                    "name": "test_limit",
+                    "arguments": [
+                        "limit": "banana"
+                    ]
+                ]
+            ]
+        )
+        #expect(toolCall.statusCode == 200)
+        #expect(toolCall.json["error"] == nil)
+        let result = try #require(toolCall.json["result"] as? [String: Any])
+        #expect(result["isError"] as? Bool == true)
+        let structuredContent = try #require(result["structuredContent"] as? [String: Any])
+        #expect(structuredContent["reason"] as? String == "invalid_argument")
+        let stderr = try #require(structuredContent["stderr"] as? String)
+        #expect(stderr.contains("limit"))
+        #expect(stderr.contains("banana"))
+        let content = try #require(result["content"] as? [[String: Any]])
+        let text = try #require(content.first?["text"] as? String)
+        #expect(text.contains("banana"))
+    }
+
+    @Test func unknownToolReturnsJSONRPC32602() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "missing-tool",
+                "method": "tools/call",
+                "params": [
+                    "name": "missing_tool",
+                    "arguments": [:]
+                ]
+            ]
+        )
+        #expect(toolCall.statusCode == 200)
+        let error = try #require(toolCall.json["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32602)
+        #expect((error["message"] as? String)?.contains("missing_tool") == true)
+        #expect(toolCall.json["result"] == nil)
+    }
+
+    @Test func timedOutExecutionMapsToTimeoutReason() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.timeout",
+                    name: "Timeout",
+                    summary: "Timed out tool.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [
+                        ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)
+                    ],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: TimedOutToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let toolCall = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "timeout",
+                "method": "tools/call",
+                "params": [
+                    "name": "test_timeout",
+                    "arguments": ["value": "x"]
+                ]
+            ]
+        )
+        #expect(toolCall.statusCode == 200)
+        let result = try #require(toolCall.json["result"] as? [String: Any])
+        #expect(result["isError"] as? Bool == true)
+        let structuredContent = try #require(result["structuredContent"] as? [String: Any])
+        #expect(structuredContent["reason"] as? String == "timeout")
+        #expect(structuredContent["timedOut"] as? Bool == true)
+    }
+
+    @Test func outputSchemaIncludesReasonField() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test.echo",
+                    name: "Echo",
+                    summary: "Echo a test value.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: ["{value}"],
+                    parameters: [],
+                    capability: .readOnly,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let tools = try await toolsList(base: base, accessToken: accessToken)
+        let outputSchema = try #require(tools.first?["outputSchema"] as? [String: Any])
+        let properties = try #require(outputSchema["properties"] as? [String: Any])
+        let reasonSchema = try #require(properties["reason"] as? [String: Any])
+        #expect(reasonSchema["type"] as? String == "string")
+        #expect((reasonSchema["enum"] as? [String])?.contains("ok") == true)
+        let required = try #require(outputSchema["required"] as? [String])
+        #expect(required.contains("reason"))
+    }
+
+    @Test func notificationsCancelledReturnsAcceptedWithoutBody() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let cancelled = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": [
+                    "requestId": "call-1",
+                    "reason": "user"
+                ]
+            ]
+        )
+        #expect(cancelled.statusCode == 202)
+        #expect(cancelled.json.isEmpty)
+    }
+
+    @Test func unknownNotificationIsIgnoredWithAcceptedResponse() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let response = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "method": "notifications/unknown",
+                "params": [:]
+            ]
+        )
+        #expect(response.statusCode == 202)
+        #expect(response.json.isEmpty)
+    }
+
+    @Test func unknownRequestMethodReturns32601() async throws {
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [],
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let response = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: accessToken,
+            headers: ["MCP-Protocol-Version": "2025-11-25"],
+            body: [
+                "jsonrpc": "2.0",
+                "id": "missing-method",
+                "method": "tools/unknown",
+                "params": [:]
+            ]
+        )
+        #expect(response.statusCode == 200)
+        let error = try #require(response.json["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32601)
     }
 }
 

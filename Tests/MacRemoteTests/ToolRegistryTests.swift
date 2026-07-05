@@ -286,6 +286,35 @@ struct ToolRegistryTests {
         #expect(try store.loadUserDefinedTools() == [tool])
     }
 
+    @Test func typedIntegerParameterRejectsInvalidValues() throws {
+        let tool = ToolDefinition(
+            id: "test.limit",
+            name: "Limit Test",
+            summary: "Bounded limit.",
+            executablePath: "/bin/echo",
+            argumentPattern: ["{limit}"],
+            parameters: [
+                ToolParameter(
+                    name: "limit",
+                    title: "Limit",
+                    kind: .integer,
+                    required: true,
+                    integerRange: 1...100
+                )
+            ],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024
+        )
+
+        #expect(throws: ToolValidationError.invalidInteger("limit")) {
+            try ToolArgumentResolver.arguments(for: tool, stringParameters: ["limit": "banana"])
+        }
+        #expect(throws: ToolValidationError.integerOutOfRange("limit")) {
+            try ToolArgumentResolver.arguments(for: tool, parameters: ["limit": .json(.number(-1))])
+        }
+    }
+
     @Test func toolArgumentValuePreservesJSONNumbersForBridgeArguments() throws {
         let value = try #require(ToolArgumentValue.fromJSONObject([
             "count": 2,
