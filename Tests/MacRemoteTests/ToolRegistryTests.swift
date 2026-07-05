@@ -640,6 +640,8 @@ struct ToolRegistryTests {
     @Test func retiredPresetsNeverAppear() {
         #expect(DefaultToolPresetCatalog.preset(id: "preset.matter.run") == nil)
         #expect(DefaultToolPresetCatalog.preset(id: "preset.cora.run") == nil)
+        #expect(DefaultToolPresetCatalog.preset(id: "preset.filesystem.file_info") == nil)
+        #expect(DefaultToolPresetCatalog.preset(id: "preset.filesystem.read_head") == nil)
     }
 
     // DL-14: URL-fetching templates must not be read-only — read-only skips the

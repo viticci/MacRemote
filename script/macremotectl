@@ -1964,10 +1964,8 @@ def presets() -> dict[str, dict[str, Any]]:
 
 def base_presets() -> list[dict[str, Any]]:
     return [
-        preset("preset.filesystem.list_directory", "List Directory", "List a directory without modifying it.", "/bin/ls", ["-la", "{path}"], "readOnly", "filesystem", 10, 1024),
-        preset("preset.filesystem.file_info", "File Info", "Return size and modification metadata for one path.", "/usr/bin/stat", ["-f", "%N %z bytes %Sm", "{path}"], "readOnly", "filesystem", 10, 512),
-        preset("preset.filesystem.read_head", "Read File Head", "Read the first N lines of a text file.", "/usr/bin/head", ["-n", "{lines}", "{path}"], "readOnly", "filesystem", 10, 1024),
-        preset("preset.filesystem.find_by_name", "Find By Name", "Search filenames under a chosen root path.", "/usr/bin/find", ["{root}", "-iname", "{pattern}"], "readOnly", "filesystem", 20, 1024),
+        preset("preset.filesystem.list_directory", "List Directory", "List a directory without modifying it. For binary-safe file reads and metadata, use the built-in File Transfer tools.", "/bin/ls", ["-la", "{path}"], "readOnly", "filesystem", 10, 1024),
+        preset("preset.filesystem.find_by_name", "Find By Name", "Search filenames under a chosen root path. For binary-safe file reads and metadata, use the built-in File Transfer tools.", "/usr/bin/find", ["{root}", "-iname", "{pattern}"], "readOnly", "filesystem", 20, 1024),
         preset("preset.utilities.current_date", "Current Date", "Return the current local timestamp.", "/bin/date", ["+%Y-%m-%dT%H:%M:%S%z"], "readOnly", "utilities", 5, 64),
         preset("preset.utilities.disk_usage", "Disk Usage", "Return mounted filesystem usage.", "/bin/df", ["-h"], "readOnly", "utilities", 10, 512),
         preset("preset.utilities.uptime", "System Uptime", "Return uptime and load averages.", "/usr/bin/uptime", [], "readOnly", "utilities", 5, 64),

@@ -260,7 +260,7 @@ enum DefaultToolPresetCatalog {
             DefaultToolPreset(
                 id: "preset.filesystem.list_directory",
                 name: "List Directory",
-                summary: "List a directory without modifying it.",
+                summary: "List a directory without modifying it. For binary-safe file reads and metadata, use the built-in File Transfer tools.",
                 executablePath: "/bin/ls",
                 argumentPattern: ["-la", "{path}"],
                 capability: .readOnly,
@@ -269,31 +269,9 @@ enum DefaultToolPresetCatalog {
                 outputLimitKB: 1024
             ),
             DefaultToolPreset(
-                id: "preset.filesystem.file_info",
-                name: "File Info",
-                summary: "Return size and modification metadata for one path.",
-                executablePath: "/usr/bin/stat",
-                argumentPattern: ["-f", "%N %z bytes %Sm", "{path}"],
-                capability: .readOnly,
-                category: .filesystem,
-                timeoutSeconds: 10,
-                outputLimitKB: 512
-            ),
-            DefaultToolPreset(
-                id: "preset.filesystem.read_head",
-                name: "Read File Head",
-                summary: "Read the first N lines of a text file.",
-                executablePath: "/usr/bin/head",
-                argumentPattern: ["-n", "{lines}", "{path}"],
-                capability: .readOnly,
-                category: .filesystem,
-                timeoutSeconds: 10,
-                outputLimitKB: 1024
-            ),
-            DefaultToolPreset(
                 id: "preset.filesystem.find_by_name",
                 name: "Find By Name",
-                summary: "Search filenames under a chosen root path.",
+                summary: "Search filenames under a chosen root path. For binary-safe file reads and metadata, use the built-in File Transfer tools.",
                 executablePath: "/usr/bin/find",
                 argumentPattern: ["{root}", "-iname", "{pattern}"],
                 capability: .readOnly,
