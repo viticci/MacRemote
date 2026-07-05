@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct CommandRunResult: Sendable, Equatable {
@@ -48,10 +49,22 @@ struct ProcessRunner: Sendable {
         let stdinPipe = standardInput.map { _ in Pipe() }
         if let stdinPipe {
             process.standardInput = stdinPipe
+        } else {
+            process.standardInput = FileHandle.nullDevice
+        }
+
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        let stderrHandle = stderrPipe.fileHandleForReading
+        let stdoutDrain = Task.detached {
+            Self.collectOutput(from: stdoutHandle, limit: outputByteLimit)
+        }
+        let stderrDrain = Task.detached {
+            Self.collectOutput(from: stderrHandle, limit: outputByteLimit)
         }
 
         let started = Date()
         let timeoutState = TimeoutState()
+        var processGroupLeaderPID: pid_t = 0
 
         let termination = Task {
             await withCheckedContinuation { continuation in
@@ -62,6 +75,9 @@ struct ProcessRunner: Sendable {
         }
 
         try process.run()
+        processGroupLeaderPID = process.processIdentifier
+        Self.makeProcessGroupLeader(pid: processGroupLeaderPID)
+
         if let standardInput, let stdinPipe {
             stdinPipe.fileHandleForWriting.write(Data(standardInput.utf8))
             try? stdinPipe.fileHandleForWriting.close()
@@ -71,10 +87,10 @@ struct ProcessRunner: Sendable {
             try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
             if process.isRunning {
                 await timeoutState.markTimedOut()
-                process.terminate()
+                Self.signalProcessGroup(leaderPID: processGroupLeaderPID, signal: SIGTERM)
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if process.isRunning {
-                    process.interrupt()
+                    Self.signalProcessGroup(leaderPID: processGroupLeaderPID, signal: SIGKILL)
                 }
             }
         }
@@ -82,10 +98,10 @@ struct ProcessRunner: Sendable {
         await termination.value
         timeout.cancel()
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        let stdout = cappedString(from: stdoutData, limit: outputByteLimit)
-        let stderr = cappedString(from: stderrData, limit: outputByteLimit)
+        let stdoutCollected = await stdoutDrain.value
+        let stderrCollected = await stderrDrain.value
+        let stdout = cappedString(from: stdoutCollected.data, truncated: stdoutCollected.truncated)
+        let stderr = cappedString(from: stderrCollected.data, truncated: stderrCollected.truncated)
 
         return CommandRunResult(
             executablePath: executablePath,
@@ -100,10 +116,46 @@ struct ProcessRunner: Sendable {
         )
     }
 
-    private func cappedString(from data: Data, limit: Int) -> (value: String, truncated: Bool) {
-        let truncated = data.count > limit
-        let cappedData = truncated ? data.prefix(limit) : data[...]
-        return (String(decoding: cappedData, as: UTF8.self), truncated)
+    private static func collectOutput(from handle: FileHandle, limit: Int) -> (data: Data, truncated: Bool) {
+        var data = Data()
+        var truncated = false
+        while true {
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                break
+            }
+            guard !truncated else {
+                continue
+            }
+            let remaining = limit - data.count
+            if chunk.count > remaining {
+                if remaining > 0 {
+                    data.append(chunk.prefix(remaining))
+                }
+                truncated = true
+            } else {
+                data.append(chunk)
+            }
+        }
+        return (data, truncated)
+    }
+
+    private static func makeProcessGroupLeader(pid: pid_t) {
+        guard pid > 1 else {
+            return
+        }
+        _ = setpgid(pid, pid)
+    }
+
+    private static func signalProcessGroup(leaderPID: pid_t, signal: Int32) {
+        guard leaderPID > 1 else {
+            return
+        }
+        _ = kill(-leaderPID, signal)
+    }
+
+    private func cappedString(from data: Data, truncated: Bool) -> (value: String, truncated: Bool) {
+        (String(decoding: data, as: UTF8.self), truncated)
     }
 }
 

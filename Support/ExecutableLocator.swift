@@ -10,7 +10,11 @@ enum ExecutableLocator {
             "HOME": homeDirectory,
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
-            "PATH": searchDirectories.joined(separator: ":")
+            "PATH": searchDirectories.joined(separator: ":"),
+            "PAGER": "cat",
+            "MANPAGER": "cat",
+            "GIT_PAGER": "cat",
+            "TERM": "dumb"
         ]
     }
 
