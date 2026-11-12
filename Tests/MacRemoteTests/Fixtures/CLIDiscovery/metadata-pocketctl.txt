@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: pocketctl
+Version: 0.1.0
+Summary: Power-user CLI for Pocket Casts.
+Project-URL: Homepage, https://github.com/fixture/pocketctl
+Project-URL: Repository, https://github.com/fixture/pocketctl
+Author: Fixture Author
+License-Expression: MIT
+License-File: LICENSE
+Keywords: agents,cli,pocket-casts,podcasts,transcripts
+Classifier: Development Status :: 3 - Alpha
+Classifier: Environment :: Console
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
+# pocketctl
+
+Body text is not part of the headers and must be ignored.

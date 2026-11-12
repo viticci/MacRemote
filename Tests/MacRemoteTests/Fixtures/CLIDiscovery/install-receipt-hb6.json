@@ -1,0 +1,22 @@
+{
+  "homebrew_version": "6.0.5-11-redacted",
+  "used_options": [],
+  "unused_options": [],
+  "built_as_bottle": true,
+  "poured_from_bottle": true,
+  "loaded_from_api": true,
+  "loaded_from_internal_api": true,
+  "installed_on_request": false,
+  "installed_as_dependency": null,
+  "changed_files": [],
+  "time": 1780040678,
+  "aliases": [],
+  "source": {
+    "spec": "stable",
+    "versions": {
+      "stable": "20260107.1"
+    },
+    "path": "/Users/fixture/Library/Caches/Homebrew/api/internal/packages.arm64_fixture.jws.json"
+  },
+  "arch": "arm64"
+}

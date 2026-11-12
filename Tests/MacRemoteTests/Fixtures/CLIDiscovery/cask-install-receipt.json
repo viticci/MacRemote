@@ -1,0 +1,23 @@
+{
+  "homebrew_version": "5.0.14",
+  "loaded_from_api": true,
+  "installed_as_dependency": false,
+  "installed_on_request": true,
+  "time": 1771240573,
+  "source": {
+    "tap": "homebrew/cask",
+    "version": "0.101.0",
+    "path": "/Users/fixture/Library/Caches/Homebrew/api/cask.jws.json"
+  },
+  "arch": "arm64",
+  "uninstall_artifacts": [
+    {
+      "binary": [
+        "codex-aarch64-apple-darwin",
+        {
+          "target": "codex"
+        }
+      ]
+    }
+  ]
+}
