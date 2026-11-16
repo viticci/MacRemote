@@ -104,6 +104,10 @@ else
   /usr/bin/git -C "$FOLDER/Source" remote remove origin
 fi
 [[ "$(/usr/bin/git -C "$FOLDER/Source" rev-parse HEAD)" == "$HEAD_REVISION" ]] || fail "the source copy is at the wrong commit"
+# Git still sends an annotated tag object that points into this history, even
+# with --no-tags, so the copy would hold a tag object with no ref. Repacking
+# keeps only objects that main reaches; the check below then confirms it.
+/usr/bin/git -C "$FOLDER/Source" repack -a -d -q
 if /usr/bin/git -C "$FOLDER/Source" fsck --unreachable --no-reflogs 2>/dev/null | /usr/bin/grep -q '^unreachable'; then
   fail "the source copy carries objects that are not part of the published history"
 fi
