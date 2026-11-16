@@ -13,7 +13,7 @@ set -euo pipefail
 # docs/CLUB_BETA.md describes this layout to members. Change both together.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="1.0"
+VERSION="1.1"
 OUTPUT_DIR="$ROOT_DIR/dist/release"
 
 usage() {

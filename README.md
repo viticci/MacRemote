@@ -4,13 +4,13 @@
 
 <p align="center">
   <b>Private beta for MacStories Club members</b><br>
-  macOS 26 or later · Apple silicon and Intel · Version 1.0
+  macOS 26 or later · Apple silicon and Intel · Version 1.1
 </p>
 
 <p align="center">
   <a href="docs/CLUB_BETA.md">Club Beta Guide</a> ·
   <a href="docs/GUIDE.md">Guide</a> ·
-  <a href="docs/releases/1.0.md">What's New</a> ·
+  <a href="docs/releases/1.1.md">What's New</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
 
@@ -47,8 +47,11 @@ asks you first and shows you exactly what it's about to run.
 - **Goes public in a minute.** An **Instant Link** gives you a temporary
   address with no account. **Your Domain** gives you a stable address on a
   domain you own through Cloudflare.
-- **Looks good in chat.** Apps that support MCP Apps show formatted results.
-  Everything else gets clean text and structured data.
+- **Looks good in chat, if you want it to.** Apps that support MCP Apps can
+  show results as cards; turn them on for all tools or only some. Everything
+  else gets clean text and structured data.
+- **Stays up on an always-on Mac.** MacRemote can open at login and bring your
+  own domain back online by itself after a restart.
 - **Works with my apps out of the box.** If you use RemCTL, NotesCTL,
   PocketCTL, MusicCTL, or my other command-line apps, MacRemote finds them and
   knows how to share them safely. All of them are optional.
@@ -84,9 +87,9 @@ ChatGPT or Claude), and at least one tool to share. You don't need Xcode,
 Homebrew, or a Cloudflare account. MacRemote installs and verifies the one
 helper it needs by itself.
 
-1. **Download it.** Club members download `MacRemote-1.0.zip` from the Club
+1. **Download it.** Club members download `MacRemote-1.1.zip` from the Club
    post.
-2. **Install it.** Unzip it, open the **MacRemote 1.0** folder, move
+2. **Install it.** Unzip it, open the **MacRemote 1.1** folder, move
    **MacRemote** to Applications, and open it. It's signed and notarized by
    Apple, so it opens like any other app.
 3. **Pick a tool.** For your first test, select **Current Date** in the
@@ -113,7 +116,7 @@ ChatGPT users should also read the
 | [Guide](docs/GUIDE.md) | Everything else: sign-in methods, Cloudflare, approvals, File Transfer, permissions, and troubleshooting |
 | [ChatGPT developer mode](docs/CHATGPT_DEVELOPER_MODE.md) | Connecting ChatGPT |
 | [Federico Viticci tools](docs/FEDERICO_CLI_TOOLS.md) | What MacRemote shares from my command-line apps |
-| [What's new in 1.0](docs/releases/1.0.md) | The release notes, and what changed if you tried an earlier beta |
+| [What's new in 1.1](docs/releases/1.1.md) · [1.0](docs/releases/1.0.md) | The release notes, and what changed if you tried an earlier version |
 | [Security](SECURITY.md) | The rules, and how to report a problem |
 | [Architecture and Security](docs/ARCHITECTURE_SECURITY.md) · [Threat Model](docs/THREAT_MODEL.md) | How it all works, and why |
 

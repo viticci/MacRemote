@@ -6,13 +6,15 @@ Cloudflare account. New here? The [Club Beta Guide](CLUB_BETA.md) walks you
 through the first run, and the [README](../README.md) explains what MacRemote is.
 
 - [Get Started](#get-started): [Instant Link](#fastest-instant-link),
-  [Your Domain](#stable-address-your-domain), and
+  [Your Domain](#stable-address-your-domain),
+  [back after a restart](#always-on-macs-back-after-a-restart), and
   [sign-in methods](#sign-in-methods)
 - [Cloudflare Helper](#cloudflare-helper) and
   [Cloudflare API Token](#cloudflare-api-token)
 - [Notifications](#notifications)
 - [Tool Model](#tool-model): [sharing](#sharing), [approvals](#approvals),
-  [reliability](#reliability), [File Transfer](#built-in-file-transfer-tools),
+  [result cards](#result-cards), [reliability](#reliability),
+  [File Transfer](#built-in-file-transfer-tools),
   and the [Local MCP Bridge](#local-mcp-bridge)
 - [Presets](#presets) and [Permissions](#permissions)
 - [Connected Apps](#connected-apps)
@@ -69,6 +71,30 @@ With **Your Domain** chosen and nothing deployed yet, **Go Public** opens the
 Address card so you can deploy the domain. It does not start an Instant Link.
 MacRemote's local server reuses the port your domain was deployed with. If
 another program has taken that port, deploy your domain again.
+
+### Always-on Macs: back after a restart
+
+For a Mac that stays on with nobody at it, such as a Mac mini, **Settings ›
+General ▸ Startup** has two settings. Both start off.
+
+- **Open at login** opens MacRemote when you log in. After a restart, someone
+  has to log in, or automatic login must be on. If macOS asks you to allow
+  MacRemote first, the setting says so and **Open Login Items Settings** takes
+  you there.
+- **Go public at launch** works only with a deployed Your Domain, never with an
+  Instant Link. Turning it on shows the Go Public confirmation once. After
+  that, each time MacRemote opens, it starts the local server and makes your
+  domain public with the key saved in your Keychain. It waits up to two
+  minutes for the network after a restart. If you stop sharing, or start or
+  stop the server yourself while it waits, it leaves the link to you.
+
+Each time MacRemote goes public by itself, Activity and a notification say so.
+When it can't (you changed the domain, the saved key is gone or Cloudflare
+refuses it, the port is taken, no tools are shared, or the link never
+connected), nothing goes public, and Activity and a notification say why. The
+setting is tied to the address you confirmed: after you change the domain, turn
+it off and on again. New apps still need your approval, and tools that ask
+first still ask.
 
 The public URL ends in `/mcp`:
 
@@ -291,6 +317,17 @@ saved tool starts Not Shared.
 
 Tools can be added while the local server is running. Connected apps may need
 to refresh their tool list.
+
+### Result cards
+
+Apps that support MCP Apps, such as Claude and ChatGPT, can show a tool's
+result as a card. Cards are off until you turn on **Show result cards** in
+**Settings › General ▸ Result Cards**. Then each tool family has its own
+switch: each MCP server (such as RemCTL), each of my command-line apps (such as
+PocketCTL), File Transfer, and other command-line tools grouped by program.
+With a card off, the app gets the same result as plain text; sharing and
+approvals don't change. A tool's inspector shows its **Result Card** state.
+Apps pick up a change the next time they reload MacRemote's tools.
 
 ### Approvals
 
