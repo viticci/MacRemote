@@ -254,7 +254,7 @@ struct ConnectionView: View {
 
     // Canonical rewrite #1 with live counts (GUIDELINES §4.4).
     private var goPublicMessage: String {
-        "\(appModel.toolExposureSummary.publicLinkSentence) New apps still need your approval to connect."
+        appModel.goPublicConfirmationMessage
     }
 
     // MARK: Sub-facts line (DA-13/DA-14/TU-35 — every count is a live control)
