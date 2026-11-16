@@ -283,21 +283,42 @@ enum DefaultToolPresetCatalog {
         )
     }
 
+    /// The process catalog's providers. Identity is explicit and does not
+    /// depend on which executables are installed.
+    struct ProviderDefinition: Hashable, Sendable {
+        let id: String
+        let name: String
+        let category: ToolCategory
+        let presetIDPrefix: String
+
+        /// The prefix every tool installed from this provider's presets
+        /// carries: `preset.pocketctl.` installs `pocketctl_…` tools.
+        var toolIDPrefix: String {
+            String(presetIDPrefix.dropFirst("preset.".count)).replacingOccurrences(of: ".", with: "_")
+        }
+    }
+
+    static let providerDefinitions: [ProviderDefinition] = [
+        ProviderDefinition(id: "provider.alexandria", name: "Alexandria", category: .ai, presetIDPrefix: "preset.alexandria."),
+        ProviderDefinition(id: "provider.habitctl", name: "HabitCTL", category: .habits, presetIDPrefix: "preset.habitctl."),
+        ProviderDefinition(id: "provider.pocketctl", name: "PocketCTL", category: .podcasts, presetIDPrefix: "preset.pocketctl."),
+        ProviderDefinition(id: "provider.overctl", name: "OverCTL", category: .podcasts, presetIDPrefix: "preset.overctl."),
+        ProviderDefinition(id: "provider.musicctl", name: "MusicCTL", category: .music, presetIDPrefix: "preset.musicctl."),
+        ProviderDefinition(id: "provider.goodlinksctl", name: "GoodLinksCTL", category: .readLater, presetIDPrefix: "preset.goodlinksctl."),
+        ProviderDefinition(id: "provider.frames", name: "Apple Frames CLI", category: .imageProcessing, presetIDPrefix: "preset.frames."),
+        ProviderDefinition(id: "provider.iris", name: "Iris", category: .iphone, presetIDPrefix: "preset.iris.")
+    ]
+
+    /// The catalog provider a tool ID belongs to, whether or not its
+    /// executable is installed right now.
+    static func provider(forToolID toolID: String) -> ProviderDefinition? {
+        providerDefinitions.first { toolID.hasPrefix($0.toolIDPrefix) }
+    }
+
     private static func makeAppGroups(
         availablePresets: [DefaultToolPreset]
     ) -> [DefaultToolPresetProviderGroup] {
-        let definitions: [(id: String, name: String, category: ToolCategory, presetIDPrefix: String)] = [
-            ("provider.alexandria", "Alexandria", .ai, "preset.alexandria."),
-            ("provider.habitctl", "HabitCTL", .habits, "preset.habitctl."),
-            ("provider.pocketctl", "PocketCTL", .podcasts, "preset.pocketctl."),
-            ("provider.overctl", "OverCTL", .podcasts, "preset.overctl."),
-            ("provider.musicctl", "MusicCTL", .music, "preset.musicctl."),
-            ("provider.goodlinksctl", "GoodLinksCTL", .readLater, "preset.goodlinksctl."),
-            ("provider.frames", "Apple Frames CLI", .imageProcessing, "preset.frames."),
-            ("provider.iris", "Iris", .iphone, "preset.iris.")
-        ]
-
-        return definitions.compactMap { definition in
+        providerDefinitions.compactMap { definition in
             let presets = availablePresets.filter {
                 $0.category == definition.category && $0.id.hasPrefix(definition.presetIDPrefix)
             }

@@ -132,11 +132,14 @@ system Keychain.
   structured fallbacks, tool `securitySchemes`, and the normal approval path
   must keep working for Anthropic and generic clients. OpenAI `_meta` keys are
   additive aliases.
-- The current widget URI is `ui://macremote/output-v7.html`; v6, v5, v4, v3, v2, and
-  the unversioned URI stay readable. When the client negotiates MCP Apps, every
-  shared tool links the widget unless its catalog presentation sets
-  `automatic: false`, as intermediate lookups and diagnostics do; those keep
-  complete text and structured results (see `docs/design/MCP-UI-SPEC.md`).
+- The current widget URI is `ui://macremote/output-v8.html`; v7, v6, v5, v4, v3, v2, and
+  the unversioned URI stay readable. Result cards are off until the owner turns
+  them on in Settings › General ▸ Result Cards, globally or per tool family
+  (decision D77). When they are on and the client negotiates MCP Apps, every
+  shared tool links the widget unless its family is switched off or its catalog
+  presentation sets `automatic: false`, as intermediate lookups and diagnostics
+  do; unlinked tools keep complete text and structured results (see
+  `docs/design/MCP-UI-SPEC.md`).
   Bridged NotesCTL reads use yellow `noteRows`, bridged RemCTL reads use purple `reminderRows`, dedicated OverCTL tools use
   orange `episodeRows`, and tools without a curated profile use
   `semanticResult`. The pretty UI must not expose raw JSON, terminal

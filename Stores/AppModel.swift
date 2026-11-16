@@ -139,6 +139,14 @@ final class AppModel {
             userDefaults.set(fileTransferFolders, forKey: FileTransferPathPolicy.allowedFoldersDefaultsKey)
         }
     }
+    /// Result cards (Settings › General, SPEC D77). The server reads the saved
+    /// value on every request, so a change applies to the next tool list and
+    /// the next result.
+    var resultCardPreferences: ResultCardPreferences {
+        didSet {
+            resultCardPreferences.save(to: userDefaults)
+        }
+    }
     var warnBeforeQuitWhileSharing: Bool {
         didSet {
             userDefaults.set(warnBeforeQuitWhileSharing, forKey: Self.warnBeforeQuitWhileSharingKey)
@@ -260,6 +268,7 @@ final class AppModel {
     ) {
         self.userDefaults = userDefaults
         self.fileTransferFolders = FileTransferPathPolicy(userDefaults: userDefaults).allowedFolders
+        self.resultCardPreferences = ResultCardPreferences(userDefaults: userDefaults)
         self.toolStore = toolStore
         // The helper manager owns cloudflared resolution for the whole app, so
         // it is built before anything that can launch or look for the helper.
@@ -679,6 +688,8 @@ final class AppModel {
             toolSurfaceRuntime.update(tools: toolsToExpose)
             let runtime = toolSurfaceRuntime
             let tunnelService = tunnelService
+            // UserDefaults is documented thread-safe; the server only reads it.
+            nonisolated(unsafe) let userDefaults = userDefaults
             let server = LocalMCPServer(
                 instanceID: instanceID,
                 toolProvider: {
@@ -688,6 +699,9 @@ final class AppModel {
                 // link is up; the tunnel is the one place that knows it.
                 publicHost: {
                     tunnelService.publicHost()
+                },
+                resultCardPreferences: {
+                    ResultCardPreferences(userDefaults: userDefaults)
                 },
                 authCoordinator: authCoordinator,
                 toolCallApprovalCoordinator: toolCallApprovalCoordinator,

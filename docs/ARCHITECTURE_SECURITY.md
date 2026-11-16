@@ -438,8 +438,8 @@ stale-name recovery without replacing the authoritative tool schemas.
 ## MCP Apps Contract
 
 MacRemote exposes one versioned HTML app resource:
-`ui://macremote/output-v7.html`. The older
-`ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
+`ui://macremote/output-v8.html`. The older
+`ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
 `ui://macremote/output-v2.html`, and `ui://macremote/output` URIs remain readable
 as cache-compatibility paths. Explicit typed `ToolWidgetPresentation` metadata
 is authoritative and preserves curated columns, documents, accents, and row
@@ -451,7 +451,10 @@ schema. Historical fixed Reminders, Podcasts, and Habits tools retain their
 richer category fallback. Native text `content` and `structuredContent` remain
 available to clients that do not render the app. Early tool-execution errors
 carry the same result-resource linkage, so they do not fall back to a host's
-developer-facing JSON view.
+developer-facing JSON view. Linkage is also the owner's choice (decision D77):
+it is off by default and can be turned off per tool family. A tool without
+linkage returns the same text and `structuredContent`; the choice never
+changes a security fingerprint, permission, or approval.
 
 The HTML resource applies a final display-safety boundary after any curated
 presentation hint. It constructs text through DOM APIs and removes commands,

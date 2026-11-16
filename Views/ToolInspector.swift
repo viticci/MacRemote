@@ -414,6 +414,7 @@ private struct ToolOverviewTab: View {
                 "\(formattedToolTimeout(tool.timeoutSeconds)) · \(tool.outputByteLimit / 1024) KB"
             )
         )
+        rows.append(KeyValueRow("Result Card", appModel.resultCardStatus(for: tool)))
         return rows
     }
 

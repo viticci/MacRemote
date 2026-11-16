@@ -152,6 +152,16 @@ class MCPAppsWidgetBrowserTests(unittest.TestCase):
             exercise="context",
         )
 
+    def test_text_stays_legible_when_host_theme_and_colors_disagree(self):
+        # Every run checks that the root's color scheme follows the theme and
+        # that the title, status line, and caption reach 4.5:1. These variants
+        # add a host that sends the other theme's colors, and one that sends
+        # colors without naming a theme.
+        for host in ("mismatch", "themeless"):
+            for theme in ("light", "dark"):
+                with self.subTest(host=host, theme=theme):
+                    self.render_harness(fixture="safefallback", theme=theme, host=host)
+
     def test_malformed_messages_and_unknown_methods_are_safe(self):
         self.render_harness(
             fixture="table",

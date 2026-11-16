@@ -56,6 +56,8 @@ private struct GeneralSettingsPane: View {
                 ConnectorAdvancedSignIn()
             }
 
+            ResultCardsSettingsSection()
+
             Section("App Behavior") {
                 Toggle("Show menu bar icon", isOn: $appModel.isMenuBarExtraEnabled)
                 Toggle("Warn before quitting while sharing", isOn: $appModel.warnBeforeQuitWhileSharing)

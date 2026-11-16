@@ -92,7 +92,7 @@ so it stays app-assignable — but **approvals never navigate** (D4).
 | `ApprovalCard.swift` | The approval anatomy (actor/capability/scope/countdown); window + inline + onboarding variants. `ApprovalArgumentList` shows every argument of a tool call in full (D68); `consequenceSection` shows a sign-in's matching code and return destination (D69) | §5.4 |
 | `ApprovalWindowView.swift` | Floating-window host; "1 of N" paging over `pendingInterrupts`; reports the card on screen through `AppModel.presentedInterruptID` (D70) | §5.4 |
 | `ActivityView.swift` | Log list, level + Events/Everything filters, Export/Copy/Clear | §5.5 |
-| `SettingsView.swift` | General / Notifications / Security panes. General splits into `ConnectorSetupSteps`, `ConnectorSignInMethodRow` (read-only), `ConnectorAdvancedSignIn` (**the only** `setConnectorAuthMode` call site), and `CloudflareHelperSettingsSection` | §5.6 |
+| `SettingsView.swift` | General / Notifications / Security panes. General splits into `ConnectorSetupSteps`, `ConnectorSignInMethodRow` (read-only), `ConnectorAdvancedSignIn` (**the only** `setConnectorAuthMode` call site), `ResultCardsSettingsSection` (own file, `ResultCardsSettingsSection.swift`, D77), and `CloudflareHelperSettingsSection` | §5.6 |
 | `WelcomeView.swift` | Five-screen onboarding; reuses ConnectionHero + ApprovalCard + AccessFixer; S2 keeps all catalog bundles and adds an explicit optional Current Date starter card for Macs with no optional CLIs; S4 chooses Instant Link or hands Your Domain off to the expanded Address form; S1 flags copies running outside `/Applications` | §3, D59 |
 
 ## Design system (`Views/DesignSystem/`) — replaces the old `SharedViews.swift`
@@ -148,6 +148,12 @@ Approval window, and onboarding alike.
   `addFileTransferFolder(_:)` (returns the reason a folder was refused), and
   `removeFileTransferFolder(_:)`. The list is saved under
   `FileTransferPathPolicy.allowedFoldersDefaultsKey` and read on every call.
+- Result cards (D77, `Stores/AppModel+ResultCards.swift`):
+  `resultCardPreferences` (saved under `ResultCardPreferences.showsCardsKey` and
+  `hiddenFamiliesKey`; the server reads the saved value on every request),
+  `resultCardFamilies` (families of shared, eligible tools),
+  `isResultCardFamilyOn(_:)` / `setResultCardFamily(_:isOn:)`, and
+  `resultCardStatus(for:)` for the Tools inspector's **Result Card** row.
 - Menu bar: `isMenuBarExtraEnabled`, `menuBarStatusLine`.
 - Tools: `updateUserTool(id:draft:)` (**transactional**, D8 — preserves semantic
   ID and permission epoch, retains only grants whose security fingerprint still
@@ -662,8 +668,8 @@ The server deliberately supports two protocol eras:
   `ui/resourceUri` and `openai/outputTemplate` mirrors, but never the standard
   nested `ui` object.
 
-The versioned resource is `ui://macremote/output-v7.html`; the prior
-`ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
+The versioned resource is `ui://macremote/output-v8.html`; the prior
+`ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
 `ui://macremote/output-v2.html`, and old `ui://macremote/output` URIs remain
 readable but are not listed. Standard
 metadata defaults `ui.visibility` to `["model", "app"]`.
@@ -671,7 +677,16 @@ metadata defaults `ui.visibility` to `["model", "app"]`.
 contains `"app"`. Resource reads carry standard `_meta.ui` sandbox policy plus
 additive OpenAI description, border, and CSP aliases.
 
-Every registered tool is widget-eligible. `ToolWidgetPresentation` is an
+Every registered tool is widget-eligible unless its catalog presentation sets
+`automatic: false`, but an eligible tool links the widget only while the
+owner's result-card choice allows it (D77). `ResultCardPreferences`
+(`Models/ResultCardPreferences.swift`) holds the global switch (off by default)
+and the families switched off; `ToolFamily` (`Models/ToolFamily.swift`) is the
+one family rule, shared with the Tools page's server groups. `AppModel` passes
+`LocalMCPServer` a `resultCardPreferences` provider that reads the saved value
+on every request; `toolJSON` and `resultUIMeta` consult it, so an unlinked
+tool's descriptor and results carry no UI metadata while `content` and
+`structuredContent` stay identical. `ToolWidgetPresentation` is an
 optional catalog-authored refinement: its typed profiles are `reminderRows`,
 `episodeRows`, `habitRows`, and `noteRows`; its optional `accent` and `rootPath`
 are presentation only and do not enter the security fingerprint. A tool without
@@ -684,6 +699,10 @@ this field retain their richer historical category fallback. Flexible Commands
 always use `semanticResult` unless a catalog explicitly authored a profile. No
 provider ID, executable name, semantic tool-name switch, or product payload
 schema selects a profile.
+
+Widget v8 keeps the v7 renderer and fixes legibility: the color scheme lives on
+the document root and follows the app's theme, and host colors apply only when
+they fit it (D77; MCP-UI-SPEC "Theme and legibility").
 
 Widget v6 links every tool and replaces raw JSON/terminal views with safe
 semantic summaries, text content, and attachment affordances. The v5 features

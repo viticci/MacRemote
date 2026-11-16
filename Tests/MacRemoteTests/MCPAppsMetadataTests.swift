@@ -134,8 +134,9 @@ struct MCPAppsMetadataTests {
         #expect(MCPAppsMetadata.widgetDescription.contains("attachments"))
         #expect(!MCPAppsMetadata.widgetDescription.lowercased().contains("terminal"))
         #expect(!MCPAppsMetadata.widgetDescription.lowercased().contains("tree"))
-        #expect(MCPAppsMetadata.resourceURI == "ui://macremote/output-v7.html")
+        #expect(MCPAppsMetadata.resourceURI == "ui://macremote/output-v8.html")
         #expect(MCPAppsMetadata.priorResourceURIs == [
+            "ui://macremote/output-v7.html",
             "ui://macremote/output-v6.html",
             "ui://macremote/output-v5.html",
             "ui://macremote/output-v4.html",
@@ -144,6 +145,7 @@ struct MCPAppsMetadataTests {
         ])
         #expect(MCPAppsMetadata.legacyResourceURI == "ui://macremote/output")
         #expect(MCPAppsMetadata.readableResourceURIs == [
+            "ui://macremote/output-v8.html",
             "ui://macremote/output-v7.html",
             "ui://macremote/output-v6.html",
             "ui://macremote/output-v5.html",
@@ -152,7 +154,7 @@ struct MCPAppsMetadataTests {
             "ui://macremote/output-v2.html",
             "ui://macremote/output"
         ])
-        #expect(Set(MCPAppsMetadata.readableResourceURIs).count == 7)
+        #expect(Set(MCPAppsMetadata.readableResourceURIs).count == 8)
     }
 
     /// Hosts may read the sandbox policy from the `resources/list` descriptor

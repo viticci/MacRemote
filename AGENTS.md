@@ -14,7 +14,7 @@ to pre-redesign patterns:
 
 - `docs/design/DESIGN-SPEC.md` — information architecture, every page's layout,
   onboarding flow, the parity mapping (§7), and the binding decision log (§1.2,
-  decisions D1–D75). When in doubt about *what* a screen does, this wins.
+  decisions D1–D77). When in doubt about *what* a screen does, this wins.
   Removing a feature is allowed when the decision log records it.
 - `docs/design/DESIGN-GUIDELINES.md` — the living rulebook: design tokens,
   component library, the Liquid Glass usage map, and the copy glossary. When in
@@ -149,12 +149,20 @@ public link stays unavailable until a manual reinstall.
 - Keep standard MCP and MCP Apps fields primary. ChatGPT-specific `_meta` keys
   are additive compatibility aliases; never replace the standard field with an
   OpenAI-only field.
-- Shared tools are widget-eligible by default when the client negotiates MCP Apps and
-  use standard `_meta.ui.resourceUri` with the versioned
-  `ui://macremote/output-v7.html` cache key. A tool without a curated profile
+- Result cards are the owner's choice and **off by default** (decision D77):
+  Settings › General ▸ Result Cards holds one global switch plus one switch
+  per tool family (`Models/ToolFamily.swift`). The server gets the choice
+  through its `resultCardPreferences` provider, read on every request. A
+  shared tool links the widget only when the client negotiates MCP Apps, the
+  catalog allows a card (`widgetPresentation.automatic: false` suppresses it
+  for intermediate lookups and diagnostics), and the owner's choice allows it.
+  Linked tools use standard `_meta.ui.resourceUri` with the versioned
+  `ui://macremote/output-v8.html` cache key. A tool without a curated profile
   uses the safe `semanticResult` profile; that is not the same as having no
-  widget. Catalog-authored `widgetPresentation.automatic: false` suppresses UI linkage
-  for intermediate lookups and diagnostics, preserving their full text/structured results. Keep `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`,
+  widget. An unlinked tool and its results carry no UI metadata or aliases,
+  while text `content` and `structuredContent` stay identical. The choice is
+  presentation only: never put it in `tools.json`, a security fingerprint, a
+  permission epoch, or an approval decision. Keep `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`,
   `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
   `ui://macremote/output-v2.html`, and `ui://macremote/output` readable for
   existing clients. The pretty UI and its clipboard action must not expose raw
@@ -228,8 +236,8 @@ public link stays unavailable until a manual reinstall.
   Claude Extension `manifest.json` files, not general Codex or Claude plugin
   registries.
 - `Services/MCPAppsMetadata.swift` owns the standard MCP Apps extension,
-  tool/resource metadata, the versioned `ui://macremote/output-v7.html` URI, the
-  universal linkage/default `semanticResult` policy, and additive legacy/OpenAI
+  tool/resource metadata, the versioned `ui://macremote/output-v8.html` URI, the
+  catalog eligibility/default `semanticResult` policy, and additive legacy/OpenAI
   aliases. Do not duplicate those constants in the server, scanners, or views.
 
 ## Tool Definitions
@@ -366,8 +374,9 @@ cross-tool `instructions`, `resultType:"complete"`, cache metadata, and
 `io.modelcontextprotocol/serverInfo` under `_meta`. Legacy `initialize` returns
 the negotiated 2025 `protocolVersion`, capabilities, top-level `serverInfo`, and
 the same concise instructions without modern completion/cache fields. Every
-shared tool uses standard `_meta.ui.resourceUri` when Apps is negotiated;
-legacy MCP and OpenAI aliases may mirror the same URI but never replace it.
+shared tool whose result card is on (D77) uses standard `_meta.ui.resourceUri`
+when Apps is negotiated; legacy MCP and OpenAI aliases may mirror the same URI
+but never replace it.
 
 For broad CLI adapters, descriptions must explicitly say there is no shell and
 that `args` is an argv array.
