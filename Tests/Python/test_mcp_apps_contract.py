@@ -154,13 +154,23 @@ class MCPAppsWidgetBrowserTests(unittest.TestCase):
 
     def test_text_stays_legible_when_host_theme_and_colors_disagree(self):
         # Every run checks that the root's color scheme follows the theme and
-        # that the title, status line, and caption reach 4.5:1. These variants
-        # add a host that sends the other theme's colors, and one that sends
-        # colors without naming a theme.
-        for host in ("mismatch", "themeless"):
+        # that the title, status line, caption, and dim text reach 4.5:1.
+        # These variants add a host that sends the other theme's colors, one
+        # that sends colors without naming a theme, one whose secondary text
+        # is too faint for its background, and one whose secondary text
+        # can't be measured. The last two must fall back to the widget's own.
+        for host in ("mismatch", "themeless", "lowsecondary", "unmeasurable"):
             for theme in ("light", "dark"):
                 with self.subTest(host=host, theme=theme):
                     self.render_harness(fixture="safefallback", theme=theme, host=host)
+
+    def test_dim_text_reaches_contrast_in_both_themes(self):
+        # Dim cells and completed rows (table) and queue positions (Up Next)
+        # use the tertiary gray, which must reach 4.5:1 too.
+        for fixture in ("table", "changeupnext"):
+            for theme in ("light", "dark"):
+                with self.subTest(fixture=fixture, theme=theme):
+                    self.render_harness(fixture=fixture, theme=theme)
 
     def test_malformed_messages_and_unknown_methods_are_safe(self):
         self.render_harness(

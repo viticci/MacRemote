@@ -72,9 +72,13 @@ enum GoPublicAtLaunchBlock: Equatable, Sendable {
     case noSharedTools
     case serverFailed(String)
     case portTaken(port: Int)
-    /// Cloudflare's helper refused to start. Reported by the app, not by
+    /// The public link didn't come up: the helper refused to start, or the
+    /// watchdog gave up before it connected. Reported by the app, not by
     /// `GoPublicAtLaunchCheck`, because it is only known after the attempt.
     case linkFailed(String)
+    /// Cloudflare refused the saved key, so MacRemote deleted it. Also known
+    /// only after the attempt.
+    case savedKeyRefused(hostname: String)
 
     /// One sentence for Activity and the notification body: what stopped it
     /// and what to do.
@@ -97,7 +101,9 @@ enum GoPublicAtLaunchBlock: Equatable, Sendable {
         case .portTaken(let port):
             "Port \(port) is in use, so your domain must be deployed again from Address."
         case .linkFailed(let detail):
-            "Cloudflare's helper didn't start: \(detail)"
+            "Your public link didn't come up: \(detail)"
+        case .savedKeyRefused(let hostname):
+            "Cloudflare no longer accepts the saved key for \(hostname). Deploy your domain again from Address."
         }
     }
 }

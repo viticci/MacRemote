@@ -532,6 +532,77 @@ struct TunnelServiceTests {
         #expect(relaunch.runTokenStore.token(forTunnelID: "tunnel-id") == "tunnel-secret")
     }
 
+    /// D76: with the setting on, a launch brings the deployed domain back by
+    /// itself and announces it once.
+    @MainActor
+    @Test func goPublicAtLaunchBringsTheDeployedDomainBack() async throws {
+        let relaunch = try DeployedDomainRelaunch(helper: """
+        printf '%s\\n' 'INF Registered tunnel connection connIndex=0'
+        exec /usr/bin/tail -f /dev/null
+        """)
+        defer { relaunch.tearDown() }
+        let model = try await relaunch.makeLaunchReadyModel()
+        defer { model.stopTunnel() }
+
+        await model.goPublicAtLaunchIfEnabled()
+        await waitUntil { model.tunnelStatus.isRunning }
+
+        #expect(model.tunnelStatus == .running(URL(string: "https://macremote-m5.example.com")!))
+        #expect(model.logs.filter { $0.message.contains("went public at launch") }.count == 1)
+    }
+
+    /// The launch waits for the network. Stop Sharing or Stop Server in that
+    /// time is the owner's decision, and the launch must not undo it.
+    @MainActor
+    @Test(arguments: [false, true])
+    func anOwnerStopWhileTheLaunchWaitsIsKept(stopsServer: Bool) async throws {
+        let relaunch = try DeployedDomainRelaunch(helper: "exec /usr/bin/tail -f /dev/null")
+        defer { relaunch.tearDown() }
+        let model = try await relaunch.makeLaunchReadyModel()
+        defer { model.stopTunnel() }
+        model.waitForNetworkAtLaunch = { [unowned model] _ in
+            if stopsServer {
+                model.stopLocalServer()
+                // Started again for local use only.
+                let url = URL(string: "http://127.0.0.1:54900")!
+                model.localServerURL = url
+                model.serverStatus = .running(url)
+                model.refreshTunnelStatus()
+            } else {
+                model.stopTunnel()
+            }
+            return true
+        }
+
+        await model.goPublicAtLaunchIfEnabled()
+
+        #expect(model.tunnelStatus == .ready)
+        #expect(!model.logs.contains { $0.message.contains("didn't run") })
+    }
+
+    /// A refused saved key at launch is reported once, as a launch that
+    /// didn't go public, since nobody may be at the Mac to see Address.
+    @MainActor
+    @Test func aRefusedSavedKeyAtLaunchIsReportedOnce() async throws {
+        let relaunch = try DeployedDomainRelaunch(helper: """
+        printf '%s\\n' 'ERR Register tunnel error from server side error="Unauthorized: Invalid tunnel secret"'
+        exit 1
+        """)
+        defer { relaunch.tearDown() }
+        let model = try await relaunch.makeLaunchReadyModel()
+
+        await model.goPublicAtLaunchIfEnabled()
+        await waitUntil {
+            if case .failed = model.tunnelStatus { return true }
+            return false
+        }
+
+        let reports = model.logs.filter { $0.message.hasPrefix("Go Public at Launch didn't run.") }
+        #expect(reports.map(\.message) == [
+            "Go Public at Launch didn't run. Cloudflare no longer accepts the saved key for macremote-m5.example.com. Deploy your domain again from Address.",
+        ])
+    }
+
     @MainActor
     @Test func appModelCurrentPublicMCPURLUsesStableAlias() throws {
         let defaults = try makeIsolatedDefaults()
@@ -950,6 +1021,17 @@ private struct DeployedDomainRelaunch {
         model.localServerURL = localServerURL
         model.serverStatus = .running(localServerURL)
         model.refreshTunnelStatus()
+        return model
+    }
+
+    /// A relaunched model with Go Public at Launch on for the deployed
+    /// domain, Welcome done, tools shared, and no wait for the network.
+    func makeLaunchReadyModel() async throws -> AppModel {
+        let model = try await makeRelaunchedModel()
+        model.completeWelcome()
+        model.disabledToolIDs = []
+        model.turnOnGoPublicAtLaunch(hostname: "macremote-m5.example.com")
+        model.waitForNetworkAtLaunch = { _ in true }
         return model
     }
 

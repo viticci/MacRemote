@@ -306,9 +306,12 @@ title and "Completed" at 1.1:1. Now:
 1. The root scheme follows `hostContext.theme`. A host that sends style
    variables but no theme gets the theme its `--color-text-primary` implies
    (relative luminance above 0.179 reads as light text, so a dark theme).
-2. Host color variables are used only when they fit that theme: primary and
-   secondary text light on dark (dark on light), `--color-background-primary`
-   the reverse, and primary text at least 4.5:1 on that background. Otherwise
+2. Host color variables are used only when they fit that theme: primary,
+   secondary, and tertiary text light on dark (dark on light), the primary
+   and secondary backgrounds the reverse, and each of those text colors at
+   least 4.5:1 on each background as rendered (a color the host leaves out is
+   the widget's own fallback). A checked color the host sends but the canvas
+   can't measure (unsupported syntax, mostly transparent) fails. Otherwise
    the root gets `data-mrw-host-colors="ignored"`, which resets the consumed
    `--color-*` properties to `initial` inside the widget so every token falls
    back to its own `light-dark()` value. Fonts and other variables still apply.
@@ -316,6 +319,8 @@ title and "Completed" at 1.1:1. Now:
    fitting one, so host text always sits on the host's own background;
    otherwise it stays transparent.
 4. The fallback secondary gray is solid (`#6e6e73` light, `#a1a1a6` dark),
+   and so is the tertiary gray (`#6e6e73` light, the same as secondary,
+   because no lighter gray reaches 4.5:1 on the panel; `#8e8e93` dark), all
    at least 4.5:1 on the card and panel colors in both schemes.
 
 The document is self-contained and loads no external
@@ -651,8 +656,12 @@ initiates:
   `color-scheme` equals the theme in effect and that the tool title, the
   empty/semantic title and caption, and the error title reach 4.5:1 against
   the backdrop the browser paints (the root background, else the opaque canvas
-  of the root's scheme). `?host=mismatch` sends the other theme's colors and
-  expects them set aside; `?host=themeless` sends colors with no theme and
+  of the root's scheme), with dim cells, completed rows, and queue positions
+  measured too wherever a fixture renders them (translucent text is
+  composited over the backdrop first). `?host=mismatch` sends the other
+  theme's colors and expects them set aside; `?host=lowsecondary` (secondary
+  text 2.17:1 on a `#444444` background) and `?host=unmeasurable` (a mostly
+  transparent secondary color) expect the same; `?host=themeless` sends colors with no theme and
   expects the theme to be inferred. Against the v7 widget the dark run measured
   1.1:1 for the title and "Completed" and 2.56:1 for the caption. `Tests/Python/test_mcp_apps_contract.py` drives it in headless
   Chrome and checks the handshake, capability gates, host context, finite

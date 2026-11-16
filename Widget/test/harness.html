@@ -131,7 +131,10 @@ const supportsServerTools = params.get("serverTools") !== "0";
 const supportsOpenLinks = params.get("openLinks") !== "0";
 const exercise = params.get("exercise") || "";
 // host=mismatch declares `theme` but sends the other theme's colors;
-// host=themeless sends `theme`'s colors without declaring a theme.
+// host=themeless sends `theme`'s colors without declaring a theme;
+// host=lowsecondary sends `theme`'s colors with a secondary text color under
+// 4.5:1 on the host background; host=unmeasurable sends a secondary text
+// color too transparent to measure. Each of the last two must be set aside.
 const hostVariant = params.get("host") || "";
 if (theme === "dark") { document.body.classList.add("dark"); }
 
@@ -1245,9 +1248,15 @@ iframe.addEventListener("load", () => {
 
 // WCAG luminance of a computed color, through a canvas so every syntax the
 // browser can compute (rgb, color(srgb …), light-dark results) resolves.
+// With `over`, the color is painted on that opaque backdrop first, so a
+// translucent text color is measured as it shows, not as its raw channels.
 const harnessColorProbe = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
-function harnessLuminance(color) {
+function harnessLuminance(color, over) {
   harnessColorProbe.clearRect(0, 0, 1, 1);
+  if (over) {
+    harnessColorProbe.fillStyle = over;
+    harnessColorProbe.fillRect(0, 0, 1, 1);
+  }
   harnessColorProbe.fillStyle = "#000";
   harnessColorProbe.fillStyle = color;
   harnessColorProbe.fillRect(0, 0, 1, 1);
@@ -1262,18 +1271,43 @@ function harnessLuminance(color) {
 // (the frame's own scheme differs from the harness page's in half the runs).
 function widgetTextContrast(doc) {
   const rootStyle = getComputedStyle(doc.documentElement);
-  const backdrop = harnessLuminance(rootStyle.backgroundColor) ??
-    (rootStyle.colorScheme.trim() === "dark" ? harnessLuminance("rgb(18, 18, 18)") : 1);
-  const selectors = [".mrw-tool", ".mrw-empty-title", ".mrw-empty-sub", ".mrw-error-title"];
+  const backdropColor = harnessLuminance(rootStyle.backgroundColor) !== null
+    ? rootStyle.backgroundColor
+    : (rootStyle.colorScheme.trim() === "dark" ? "rgb(18, 18, 18)" : "rgb(255, 255, 255)");
+  const backdrop = harnessLuminance(backdropColor);
+  // Primary, secondary, and tertiary (dim cells, completed rows, queue
+  // positions) text, wherever the fixture renders them.
+  const selectors = [
+    ".mrw-tool", ".mrw-empty-title", ".mrw-empty-sub", ".mrw-error-title",
+    ".mrw-td-dim", "tr.mrw-row-done td", ".mrw-td-pos"
+  ];
   const ratios = {};
   for (const selector of selectors) {
     const node = doc.querySelector(selector);
     if (!node) continue;
-    const text = harnessLuminance(getComputedStyle(node).color);
+    const text = harnessLuminance(getComputedStyle(node).color, backdropColor);
     ratios[selector] = text === null ? 0 :
       Math.round((Math.max(text, backdrop) + 0.05) / (Math.min(text, backdrop) + 0.05) * 100) / 100;
   }
   return ratios;
+}
+
+// The style variables the harness host sends; see `hostVariant`.
+function harnessHostVariables() {
+  const dark = hostVariant === "mismatch" ? theme !== "dark" : theme === "dark";
+  const variables = dark
+    ? { "--color-text-primary": "rgb(244, 244, 245)", "--color-text-secondary": "rgb(161, 161, 170)" }
+    : { "--color-text-primary": "rgb(24, 24, 27)", "--color-text-secondary": "rgb(82, 82, 91)" };
+  if (hostVariant === "lowsecondary") {
+    // Right polarity for the theme, but 2.17:1 (dark) and about 4:1 (light).
+    Object.assign(variables, dark
+      ? { "--color-text-primary": "#f5f5f7", "--color-text-secondary": "#777777", "--color-background-primary": "#444444" }
+      : { "--color-text-primary": "#1d1d1f", "--color-text-secondary": "#757575", "--color-background-primary": "#f0f0f0" });
+  } else if (hostVariant === "unmeasurable") {
+    variables["--color-text-secondary"] = dark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.2)";
+  }
+  variables["--font-sans"] = "-apple-system, BlinkMacSystemFont, sans-serif";
+  return variables;
 }
 
 function inspectWidget() {
@@ -1480,9 +1514,10 @@ function updateAssertions() {
     legibleText: Object.keys(report.textContrast).length > 0 &&
       Object.values(report.textContrast).every(ratio => ratio >= 4.5)
   };
-  if (hostVariant === "mismatch") {
-    // Light text under a declared light theme: the widget sets the host
-    // colors aside and its own colors stay readable.
+  if (["mismatch", "lowsecondary", "unmeasurable"].includes(hostVariant)) {
+    // Light text under a declared light theme, secondary text too faint for
+    // the host background, or a color the widget can't measure: the widget
+    // sets the host colors aside and its own colors stay readable.
     checks.hostColorsIgnored = report.hostColors === "ignored";
   } else if (hostVariant === "themeless") {
     // No declared theme: the host's text color implies one.
@@ -1994,17 +2029,7 @@ window.addEventListener("message", (event) => {
         // dark screenshot unreadable and told the widget nothing true; the
         // `mismatch` variant does it on purpose to prove the widget copes.
         styles: {
-          variables: (hostVariant === "mismatch" ? theme !== "dark" : theme === "dark")
-            ? {
-                "--color-text-primary": "rgb(244, 244, 245)",
-                "--color-text-secondary": "rgb(161, 161, 170)",
-                "--font-sans": "-apple-system, BlinkMacSystemFont, sans-serif"
-              }
-            : {
-                "--color-text-primary": "rgb(24, 24, 27)",
-                "--color-text-secondary": "rgb(82, 82, 91)",
-                "--font-sans": "-apple-system, BlinkMacSystemFont, sans-serif"
-              },
+          variables: harnessHostVariables(),
           css: {
             fonts: "@font-face { font-family: HarnessHost; src: local(-apple-system); }"
           }

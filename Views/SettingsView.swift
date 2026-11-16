@@ -325,9 +325,11 @@ private struct StartupSettingsSection: View {
                 "Go public at launch?",
                 isPresented: $isConfirmingGoPublicAtLaunch,
                 presenting: candidateHostname
-            ) { _ in
+            ) { hostname in
+                // The hostname this dialog shows, so a candidate that changed
+                // while it was open is not saved.
                 Button("Go Public at Launch") {
-                    appModel.turnOnGoPublicAtLaunch()
+                    appModel.turnOnGoPublicAtLaunch(hostname: hostname)
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { hostname in

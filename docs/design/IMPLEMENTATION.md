@@ -92,7 +92,7 @@ so it stays app-assignable — but **approvals never navigate** (D4).
 | `ApprovalCard.swift` | The approval anatomy (actor/capability/scope/countdown); window + inline + onboarding variants. `ApprovalArgumentList` shows every argument of a tool call in full (D68); `consequenceSection` shows a sign-in's matching code and return destination (D69) | §5.4 |
 | `ApprovalWindowView.swift` | Floating-window host; "1 of N" paging over `pendingInterrupts`; reports the card on screen through `AppModel.presentedInterruptID` (D70) | §5.4 |
 | `ActivityView.swift` | Log list, level + Events/Everything filters, Export/Copy/Clear | §5.5 |
-| `SettingsView.swift` | General / Notifications / Security panes. General splits into `ConnectorSetupSteps`, `ConnectorSignInMethodRow` (read-only), `ConnectorAdvancedSignIn` (**the only** `setConnectorAuthMode` call site), `ResultCardsSettingsSection` (own file, `ResultCardsSettingsSection.swift`, D77), and `CloudflareHelperSettingsSection` | §5.6 |
+| `SettingsView.swift` | General / Notifications / Security panes. General splits into `ConnectorSetupSteps`, `ConnectorSignInMethodRow` (read-only), `ConnectorAdvancedSignIn` (**the only** `setConnectorAuthMode` call site), `ResultCardsSettingsSection` (own file, `ResultCardsSettingsSection.swift`, D77), `StartupSettingsSection` (Open at login and Go public at launch, D76), and `CloudflareHelperSettingsSection` | §5.6 |
 | `WelcomeView.swift` | Five-screen onboarding; reuses ConnectionHero + ApprovalCard + AccessFixer; S2 keeps all catalog bundles and adds an explicit optional Current Date starter card for Macs with no optional CLIs; S4 chooses Instant Link or hands Your Domain off to the expanded Address form; S1 flags copies running outside `/Applications` | §3, D59 |
 
 ## Design system (`Views/DesignSystem/`) — replaces the old `SharedViews.swift`
@@ -153,11 +153,19 @@ Approval window, and onboarding alike.
   (`MacRemote.goPublicAtLaunch.hostname`; nil = off),
   `goPublicAtLaunchCandidateHostname` is the deployed, chosen Your Domain it
   can be turned on for (never an Instant Link), and
-  `turnOnGoPublicAtLaunch()` / `turnOffGoPublicAtLaunch()` change it; the
-  view calls turn-on only after its one-time confirmation.
+  `turnOnGoPublicAtLaunch(hostname:)` / `turnOffGoPublicAtLaunch()` change
+  it; the view calls turn-on only after its one-time confirmation, passing the
+  hostname the dialog showed, which is saved only if it is still the candidate.
   `goPublicAtLaunchIfEnabled()` runs once per launch from `AppModel.init`
   when the app passes `runsLaunchActions: true` (tests never do), so it needs
-  no window. The decision is the pure `GoPublicAtLaunchCheck`
+  no window. Each run holds an attempt ID that every owner action changing
+  sharing clears (`cancelGoPublicAtLaunchAttempt()`: `startLocalServer()`,
+  `stopLocalServer()`, `startTunnel()`, `stopTunnel()`,
+  `deployCustomDomainTunnel()`, `rotateInstanceID()`, turning the setting
+  off); the attempt checks it after every wait and stops quietly once it is
+  gone. The launch itself starts the link through the private
+  `startTunnelForOwnerOrLaunch()`, so it does not cancel itself.
+  `waitForNetworkAtLaunch` is the network wait, replaceable by tests. The decision is the pure `GoPublicAtLaunchCheck`
   (`Models/GoPublicAtLaunch.swift`), asked before and after
   `ensureLocalServerRunning()`; a block is written to Activity and posted as a
   status notification. Before the helper starts it waits up to 2 minutes for

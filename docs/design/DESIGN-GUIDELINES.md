@@ -203,6 +203,8 @@ Every `Card`; tool/app/request/log lists and all rows; **`AppCard`s and the `Con
 | Automatic discovery | Config-only MCP surfacing at launch/activation — **not** automatic import or share; the Tools count means unimported candidates marked **New**, never approvals | auto-import, auto-share, background probing |
 | Built-in native tools | **Built-in** (source group) / "runs natively in MacRemote" | native backend, `filesystem_*`, subprocess (visible copy) |
 | Downloadable result | **download link** (prose) / **Public URL**-family for the link | artifact, artifact token, `/artifact` (primary copy — allowed in Details/mono) |
+| The card an app draws for a tool's result (D77) | **result card** (prose); **Result Cards** (Settings section) / **Show result cards** (switch) | widget, MCP App, UI resource, rich output (visible copy) |
+| Making a deployed Your Domain public when MacRemote opens (D76) | **Go public at launch** (toggle); **Go Public at Launch** (confirmation button) | auto-public, auto-tunnel, start tunnel at login, auto-share |
 
 > **Model-facing exemption.** Built-in tool *summaries* (the MCP `description` text composed in `LocalMCPServer.toolDescription(for:)`, echoed in the Inspector Overview) are metadata authored for the model, not primary UI copy. They may use technical terms (`argv`, `base64`, `host approval`, etc.) and are **exempt from this glossary**.
 >

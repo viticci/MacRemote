@@ -77,7 +77,7 @@ struct GoPublicAtLaunchTests {
         )
 
         #expect(model.goPublicAtLaunchCandidateHostname == nil)
-        model.turnOnGoPublicAtLaunch()
+        model.turnOnGoPublicAtLaunch(hostname: "quiet-river-123.trycloudflare.com")
         #expect(model.goPublicAtLaunchHostname == nil)
         #expect(defaults.string(forKey: "MacRemote.goPublicAtLaunch.hostname") == nil)
     }

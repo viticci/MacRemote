@@ -75,9 +75,12 @@ tr.mrw-inputrow td { background: var(--panel); padding: 0; }
   --bg:          var(--color-background-primary, light-dark(#ffffff, #1d1d20));
   --panel:       var(--color-background-secondary, light-dark(#f6f6f8, #161619));
   --text:        var(--color-text-primary, light-dark(#1d1d1f, #f5f5f7));
-  /* Solid grays: at least 4.5:1 on the card and panel colors in both schemes. */
+  /* Solid grays: at least 4.5:1 on the card and panel colors in both schemes.
+     Light has no room for a third, lighter gray that still reads at 4.5:1,
+     so there --text3 equals --text2; dark keeps a step dimmer. Keep these in
+     step with WIDGET_COLORS in the script. */
   --text2:       var(--color-text-secondary, light-dark(#6e6e73, #a1a1a6));
-  --text3:       var(--color-text-tertiary, light-dark(rgba(60,60,67,.34), rgba(235,235,245,.30)));
+  --text3:       var(--color-text-tertiary, light-dark(#6e6e73, #8e8e93));
   --line:        var(--color-border-primary, light-dark(rgba(0,0,0,.10),  rgba(255,255,255,.11)));
   --line2:       var(--color-border-secondary, light-dark(rgba(0,0,0,.055), rgba(255,255,255,.065)));
   --accent:      var(--color-text-info, light-dark(#0071e3, #0a84ff));
@@ -2979,18 +2982,45 @@ function resolvedTheme(ctx, colors) {
   return null;
 }
 
+// The widget's own fallbacks for the host colors hostColorsFit checks, the
+// same values as the .mrw tokens' light-dark() pairs.
+const WIDGET_COLORS = {
+  light: {
+    "--color-text-primary": "#1d1d1f", "--color-text-secondary": "#6e6e73",
+    "--color-text-tertiary": "#6e6e73",
+    "--color-background-primary": "#ffffff", "--color-background-secondary": "#f6f6f8"
+  },
+  dark: {
+    "--color-text-primary": "#f5f5f7", "--color-text-secondary": "#a1a1a6",
+    "--color-text-tertiary": "#8e8e93",
+    "--color-background-primary": "#1d1d20", "--color-background-secondary": "#161619"
+  }
+};
+const CHECKED_TEXT_COLORS = ["--color-text-primary", "--color-text-secondary", "--color-text-tertiary"];
+const CHECKED_BACKGROUND_COLORS = ["--color-background-primary", "--color-background-secondary"];
+
 // Host colors fit when their text is light on a dark theme (dark on a light
-// one), their background is the reverse, and primary text on that background
-// meets WCAG AA (4.5:1).
+// one), their backgrounds are the reverse, and every text color reaches WCAG
+// AA (4.5:1) on every background, as rendered: a color the host leaves out
+// is the widget's own. A color the host sends but the widget can't measure
+// fails, so nothing unchecked reaches the card.
 function hostColorsFit(theme, colors) {
   const dark = theme ? theme === "dark" : !!(prefersDarkQuery && prefersDarkQuery.matches);
-  const primary = colorLuminance(colors["--color-text-primary"]);
-  const secondary = colorLuminance(colors["--color-text-secondary"]);
-  const background = colorLuminance(colors["--color-background-primary"]);
+  const own = WIDGET_COLORS[dark ? "dark" : "light"];
   const isLight = (value) => value > LIGHT_LUMINANCE;
-  if ([primary, secondary].some(value => value !== null && isLight(value) !== dark)) return false;
-  if (background !== null && isLight(background) === dark) return false;
-  return primary === null || background === null || contrastRatio(primary, background) >= 4.5;
+  const rendered = (key) => {
+    const sent = typeof colors[key] === "string" && colors[key].trim() !== "";
+    return { sent, luminance: colorLuminance(sent ? colors[key] : own[key]) };
+  };
+  const texts = CHECKED_TEXT_COLORS.map(rendered);
+  const backgrounds = CHECKED_BACKGROUND_COLORS.map(rendered);
+  for (const color of texts.concat(backgrounds)) {
+    if (color.luminance === null) return false;
+  }
+  if (texts.some(text => text.sent && isLight(text.luminance) !== dark)) return false;
+  if (backgrounds.some(background => background.sent && isLight(background.luminance) === dark)) return false;
+  return texts.every(text => backgrounds.every(background =>
+    contrastRatio(text.luminance, background.luminance) >= 4.5));
 }
 
 function applyColorScheme() {
