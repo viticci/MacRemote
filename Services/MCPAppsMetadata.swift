@@ -9,10 +9,13 @@ import Foundation
 enum MCPAppsMetadata {
     static let extensionIdentifier = "io.modelcontextprotocol/ui"
     static let protocolVersion = "2026-01-26"
-    // v7: quiet intermediate tools, text-fallback delivery, and modern reminder
-    // receipts. Prior cache keys remain readable for existing conversations.
-    static let resourceURI = "ui://macremote/output-v7.html"
+    // v8: the widget's color scheme follows the app's theme and host colors
+    // are used only when they match it, so text stays readable on the
+    // backdrop the browser actually paints. Prior cache keys remain readable
+    // for existing conversations.
+    static let resourceURI = "ui://macremote/output-v8.html"
     static let priorResourceURIs = [
+        "ui://macremote/output-v7.html",
         "ui://macremote/output-v6.html",
         "ui://macremote/output-v5.html",
         "ui://macremote/output-v4.html",

@@ -6,6 +6,24 @@ capability-scoped: modern clients receive it only when they negotiate Apps, and
 legacy clients keep the compatibility behavior below. Plain text and structured
 results remain complete for clients that do not render the widget.
 
+**The owner decides (2026-11-16, DESIGN-SPEC D77).** Linkage is off by default.
+Settings › General ▸ Result Cards has one **Show result cards** switch and one
+switch per tool family (`ToolFamily`: bridged server, File Transfer, catalog
+provider, or executable). A tool links the widget only when the catalog allows
+a card (`LocalMCPServer.widgetEligible`, which honors `automatic: false`) **and**
+`ResultCardPreferences.allowsCard(for:)` says the owner wants one. Otherwise
+`tools/list` carries no `_meta.ui`, `ui/resourceUri`, `openai/outputTemplate`,
+or `openai/widgetAccessible` for that tool, and its results carry no
+`net.viticci.macremote/ui` hints or link aliases. `content` and
+`structuredContent` are identical either way, and the resource stays listed and
+readable so old conversations still load their cards. The server receives the
+choice as a `@Sendable` provider that reads the saved value on every request,
+so the next tool list and the next result follow a change. MacRemote advertises
+`tools.listChanged: false` and sends no change notification; apps pick up a
+change when they reload the tool list. The choice is presentation only: it
+never enters `tools.json`, a security fingerprint, a permission epoch, or an
+approval.
+
 **Default linkage (2026-10-01 amendment to the 2026-08-30 universal rule):** the renderer now has a defensive semantic-summary boundary that omits
 raw JSON, terminal commands, executable details, local paths, credentials, and
 hidden result metadata. A tool without catalog curation therefore uses the safe
@@ -78,14 +96,14 @@ Decision log for this feature lives here.
 
 ## Server surface (Services/LocalMCPServer.swift)
 
-- **Resource**: `ui://macremote/output-v7.html`, MIME
+- **Resource**: `ui://macremote/output-v8.html`, MIME
   `text/html;profile=mcp-app`, served via standard `resources/list` /
   `resources/read`. The versioned URI is a host cache key: change the version
   when the widget artifact changes materially. `resources/read` still accepts
-  `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
+  `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
   `ui://macremote/output-v2.html`, and the
   legacy `ui://macremote/output` URI for existing hosts, but Apps-negotiated
-  requests advertise v7 alongside
+  requests advertise v8 alongside
   the always-present compact catalog resource `macremote://catalog/v1`. Every read result carries
   `_meta.ui` sandbox hints: `prefersBorder`, CSP allowlists
   (`connectDomains` empty — no fetch/XHR; `resourceDomains` allows exactly
@@ -105,9 +123,9 @@ Decision log for this feature lives here.
   artwork. That is exactly what happened to claude.ai on the web, which
   negotiates as a legacy client whose cached capability is lost on every
   relaunch: it rendered the widget with the artwork column silently empty.
-- **Tool linkage**: tool descriptors are linkage-eligible unless catalog presentation explicitly sets `automatic: false`. When standard
+- **Tool linkage**: tool descriptors are linkage-eligible unless catalog presentation explicitly sets `automatic: false`, and an eligible tool links only while the owner's result-card choice allows it (D77, above). When standard
   Apps linkage is allowed, its `tools/list` entry carries
-  `"_meta": {"ui": {"resourceUri": "ui://macremote/output-v7.html",
+  `"_meta": {"ui": {"resourceUri": "ui://macremote/output-v8.html",
   "visibility": ["model", "app"]}}` (SEP-1865 nested form). The deprecated
   flat `ui/resourceUri` and ChatGPT's `openai/outputTemplate` are additive
   aliases pointing at the same resource; `openai/widgetAccessible: true`
@@ -164,7 +182,8 @@ Decision log for this feature lives here.
   `openai/outputTemplate`, and `openai/widgetAccessible` for host paths that
   resolve the widget from the result. Standard MCP Apps fields are
   authoritative; every `openai/*` field
-  is an additive ChatGPT compatibility alias, never a replacement.
+  is an additive ChatGPT compatibility alias, never a replacement. A result
+  from a tool whose card the owner turned off carries none of these fields.
 - **Payload cap**: the inline envelope keeps at most 48,000 UTF-8 bytes of
   `stdout` and 16,000 characters of `stderr`; the complete bounded stdout is
   linked as an artifact when needed. The full serialized result is capped at
@@ -275,7 +294,36 @@ Design: **Instrument Panel** (winner of a three-direction judged
 competition). One card; the whole status story is a single 2px accent line
 (green/red/amber); `light-dark()` theming honoring
 both `prefers-color-scheme` and a host-forced `hostContext.theme` (via
-`data-mrw-theme`). The document is self-contained and loads no external
+`data-mrw-theme`).
+
+**Theme and legibility (v8, 2026-11-16).** `color-scheme` lives on the
+document root, not only on the card. A browser paints a frame's backdrop
+opaque, in the frame root's own scheme, whenever that scheme differs from the
+embedding page's; v7 set no root scheme, so in Claude's dark theme the frame
+got a white backdrop while the host's dark-theme text variables colored the
+title and "Completed" at 1.1:1. Now:
+
+1. The root scheme follows `hostContext.theme`. A host that sends style
+   variables but no theme gets the theme its `--color-text-primary` implies
+   (relative luminance above 0.179 reads as light text, so a dark theme).
+2. Host color variables are used only when they fit that theme: primary,
+   secondary, and tertiary text light on dark (dark on light), the primary
+   and secondary backgrounds the reverse, and each of those text colors at
+   least 4.5:1 on each background as rendered (a color the host leaves out is
+   the widget's own fallback). A checked color the host sends but the canvas
+   can't measure (unsupported syntax, mostly transparent) fails. Otherwise
+   the root gets `data-mrw-host-colors="ignored"`, which resets the consumed
+   `--color-*` properties to `initial` inside the widget so every token falls
+   back to its own `light-dark()` value. Fonts and other variables still apply.
+3. The root paints `--color-background-primary` when the host supplies a
+   fitting one, so host text always sits on the host's own background;
+   otherwise it stays transparent.
+4. The fallback secondary gray is solid (`#6e6e73` light, `#a1a1a6` dark),
+   and so is the tertiary gray (`#6e6e73` light, the same as secondary,
+   because no lighter gray reaches 4.5:1 on the panel; `#8e8e93` dark), all
+   at least 4.5:1 on the card and panel colors in both schemes.
+
+The document is self-contained and loads no external
 scripts or styles and makes no fetch/XHR/WebSocket requests. The only declared
 external resource is static podcast artwork from
 `https://static.pocketcasts.com`.
@@ -576,8 +624,16 @@ initiates:
   and versioned resource descriptors — including that the `resources/list`
   descriptor declares exactly the policy the read result does.
   `everyFirstPartyCatalogCommandIsWidgetEligible` also pins the complete 74/74
-  process catalog to universal linkage, including every Flexible Command;
+  process catalog to catalog-side eligibility, including every Flexible Command;
   bridged first-party tools are imported tools and are eligible like any other.
+  Whether an eligible tool actually links is the owner's choice:
+  `ResultCardPreferenceTests` proves that a fresh install (nothing saved) links
+  nothing in `tools/list` or results, that turning cards on links every tool on
+  the next request, that a family switched off loses only its own linkage, that
+  `content` and `structuredContent` are byte-identical with and without a card,
+  and that the widget resource stays readable while cards are off. It also pins
+  the family rule (catalog provider by tool-ID prefix, File Transfer,
+  executable name).
   `MCPUISupportTests` covers the same fix
   end to end: a client negotiating `text/html; profile="mcp-app"` must still get
   `_meta.ui` back from `resources/read`. Both suites assert the CSP allowlist on
@@ -596,7 +652,18 @@ initiates:
   overrows, overdry, overunverified, notesdocument, notestranscripts;
   `?theme=dark`, which also hands the widget theme-appropriate host style
   variables — a light `--color-text-primary` under a dark theme made every dark
-  render unreadable). `Tests/Python/test_mcp_apps_contract.py` drives it in headless
+  render unreadable). Every run also checks that the widget root's computed
+  `color-scheme` equals the theme in effect and that the tool title, the
+  empty/semantic title and caption, and the error title reach 4.5:1 against
+  the backdrop the browser paints (the root background, else the opaque canvas
+  of the root's scheme), with dim cells, completed rows, and queue positions
+  measured too wherever a fixture renders them (translucent text is
+  composited over the backdrop first). `?host=mismatch` sends the other
+  theme's colors and expects them set aside; `?host=lowsecondary` (secondary
+  text 2.17:1 on a `#444444` background) and `?host=unmeasurable` (a mostly
+  transparent secondary color) expect the same; `?host=themeless` sends colors with no theme and
+  expects the theme to be inferred. Against the v7 widget the dark run measured
+  1.1:1 for the title and "Completed" and 2.56:1 for the caption. `Tests/Python/test_mcp_apps_contract.py` drives it in headless
   Chrome and checks the handshake, capability gates, host context, finite
   positive width-and-height size payloads, cancellation and teardown, arbitrary
   JSON `structuredContent`, safe link behavior, and a recorded `tools/call` with

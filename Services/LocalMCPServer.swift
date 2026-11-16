@@ -101,6 +101,9 @@ final class LocalMCPServer: @unchecked Sendable {
     /// Returns the host name of the public link while it is up, or nil. Asked
     /// on every request, so it must be cheap and safe to call from any thread.
     typealias PublicHostProvider = @Sendable () -> String?
+    /// Returns the owner's result-card choice (SPEC D77). Asked once per
+    /// tools/list and once per tool result, from any thread.
+    typealias ResultCardPreferencesProvider = @Sendable () -> ResultCardPreferences
 
     private static let modernProtocolVersion = "2026-07-28"
     private static let latestLegacyProtocolVersion = "2025-11-25"
@@ -164,6 +167,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private let instanceID: String
     private let toolProvider: ToolProvider
     private let publicHost: PublicHostProvider
+    private let resultCardPreferences: ResultCardPreferencesProvider
     private let authCoordinator: OAuthCoordinator
     private let legacyClientCapabilityStore = LegacyMCPClientCapabilityStore()
     private let clientSuppliedIconStore = MCPClientSuppliedIconStore()
@@ -180,6 +184,7 @@ final class LocalMCPServer: @unchecked Sendable {
         instanceID: String,
         tools: [ToolDefinition],
         publicHost: @escaping PublicHostProvider = { nil },
+        resultCardPreferences: @escaping ResultCardPreferencesProvider = { .everyTool },
         authCoordinator: OAuthCoordinator,
         toolCallApprovalCoordinator: ToolCallApprovalCoordinator? = nil,
         toolExecutor: any ToolExecuting,
@@ -192,6 +197,7 @@ final class LocalMCPServer: @unchecked Sendable {
         self.instanceID = instanceID
         self.toolProvider = { tools }
         self.publicHost = publicHost
+        self.resultCardPreferences = resultCardPreferences
         self.authCoordinator = authCoordinator
         self.toolCallApprovalCoordinator = toolCallApprovalCoordinator
         self.toolExecutor = toolExecutor
@@ -206,6 +212,7 @@ final class LocalMCPServer: @unchecked Sendable {
         instanceID: String,
         toolProvider: @escaping ToolProvider,
         publicHost: @escaping PublicHostProvider = { nil },
+        resultCardPreferences: @escaping ResultCardPreferencesProvider = { .everyTool },
         authCoordinator: OAuthCoordinator,
         toolCallApprovalCoordinator: ToolCallApprovalCoordinator? = nil,
         toolExecutor: any ToolExecuting,
@@ -218,6 +225,7 @@ final class LocalMCPServer: @unchecked Sendable {
         self.instanceID = instanceID
         self.toolProvider = toolProvider
         self.publicHost = publicHost
+        self.resultCardPreferences = resultCardPreferences
         self.authCoordinator = authCoordinator
         self.toolCallApprovalCoordinator = toolCallApprovalCoordinator
         self.toolExecutor = toolExecutor
@@ -2882,8 +2890,10 @@ final class LocalMCPServer: @unchecked Sendable {
 
     /// Render hints attached to CallToolResult._meta. Stable semantic tool ids
     /// are also the public MCP names used by widget calls through the host.
+    /// Nil when the tool shows no card, so the result carries no UI linkage.
     private func resultUIMeta(for tool: ToolDefinition, tools: [ToolDefinition]) -> [String: Any]? {
         guard widgetAvailable,
+              resultCardPreferences().allowsCard(for: tool),
               let presentation = Self.widgetPresentation(for: tool) else { return nil }
         var payload: [String: Any] = [
             "version": 1,
@@ -3321,11 +3331,18 @@ final class LocalMCPServer: @unchecked Sendable {
         let tools = Self.activeProtocolContext?.isModern == true
             ? supplied.sorted { $0.id < $1.id }
             : supplied
-        let descriptors = tools.map(toolJSON)
+        let cards = resultCardPreferences()
+        let descriptors = tools.map { toolJSON($0, cards: cards) }
         return (tools, descriptors, MCPCatalogMetadata.revision(for: descriptors))
     }
 
-    private func toolJSON(_ tool: ToolDefinition) -> [String: Any] {
+    /// Whether `tool` links the result card: the catalog allows one and the
+    /// owner has cards on for its family (SPEC D77).
+    private static func showsResultCard(for tool: ToolDefinition, cards: ResultCardPreferences) -> Bool {
+        cards.allowsCard(for: tool) && widgetEligible(tool: tool)
+    }
+
+    private func toolJSON(_ tool: ToolDefinition, cards: ResultCardPreferences) -> [String: Any] {
         let securitySchemes: [[String: Any]] = [
             [
                 "type": "oauth2",
@@ -3348,11 +3365,11 @@ final class LocalMCPServer: @unchecked Sendable {
         var meta: [String: Any] = ["securitySchemes": securitySchemes]
         if widgetAvailable,
            requestAllowsWidgetCompatibility,
-           Self.widgetEligible(tool: tool) {
+           Self.showsResultCard(for: tool, cards: cards) {
             // Standard MCP Apps metadata stays primary. The flat MCP key and
-            // OpenAI key are additive aliases for older host paths. Every
-            // registered tool is eligible; explicit profiles only refine the
-            // shared presentation.
+            // OpenAI key are additive aliases for older host paths. A tool
+            // without this linkage returns the same text and structured
+            // result; the app just shows it as plain text.
             meta = widgetLinkMetadata(merging: meta)
         }
         json["_meta"] = meta

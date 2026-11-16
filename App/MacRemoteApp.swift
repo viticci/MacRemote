@@ -14,7 +14,12 @@ enum MacRemoteMain {
 
 struct MacRemoteApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var appModel = AppModel(helperTetherExecutableURL: Bundle.main.executableURL)
+    // `runsLaunchActions` starts Go Public at Launch (D76) from the model
+    // itself, so it runs even when no window opens at login.
+    @State private var appModel = AppModel(
+        helperTetherExecutableURL: Bundle.main.executableURL,
+        runsLaunchActions: true
+    )
 
     init() {
         // Downloads staged by a launch that crashed can never be fetched:

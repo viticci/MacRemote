@@ -5,7 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MacRemote Tool Output</title>
 <style>
-html, body { box-sizing: border-box; width: 100%; margin: 0; background: transparent; }
+/* The color scheme lives on the root, not only on the card. When the root's
+   scheme differs from the page that embeds the frame, the browser paints the
+   frame's backdrop opaque in the root's scheme. With no scheme on the root,
+   a dark app got a white backdrop under dark-theme text (D77/v8). Following
+   the app's theme here keeps text and backdrop in the same scheme. */
+:root { color-scheme: light dark; background: var(--color-background-primary, transparent); }
+:root[data-mrw-theme="dark"] { color-scheme: dark; }
+:root[data-mrw-theme="light"] { color-scheme: light; }
+/* Host colors that contradict the theme (light text with a light theme, or
+   too little contrast with the host background) are set aside, and the
+   widget's own light-dark() colors take over. `initial` makes a custom
+   property invalid, so each var() below falls back. */
+:root[data-mrw-host-colors="ignored"] { background: transparent; }
+:root[data-mrw-host-colors="ignored"] :is(.mrw, .mrw-waiting) {
+  --color-background-primary: initial;
+  --color-background-secondary: initial;
+  --color-text-primary: initial;
+  --color-text-secondary: initial;
+  --color-text-tertiary: initial;
+  --color-text-info: initial;
+  --color-text-success: initial;
+  --color-text-danger: initial;
+  --color-text-warning: initial;
+  --color-border-primary: initial;
+  --color-border-secondary: initial;
+  --color-border-success: initial;
+  --color-border-danger: initial;
+  --color-border-warning: initial;
+}
+html, body { box-sizing: border-box; width: 100%; margin: 0; }
+body { background: transparent; }
 body {
   padding:
     var(--mrw-safe-top, 0px)
@@ -15,8 +45,8 @@ body {
 }
 .mrw-waiting {
   font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif);
-  font-size: 12px; color: var(--color-text-secondary, light-dark(rgba(60,60,67,.62), rgba(235,235,245,.60)));
-  padding: 18px; text-align: center; color-scheme: light dark;
+  font-size: 12px; color: var(--color-text-secondary, light-dark(#6e6e73, #a1a1a6));
+  padding: 18px; text-align: center;
 }
 /* Destructive arm state + inline input forms */
 .mrw-rowbtn[data-state="armed"] { color: var(--bad); border-color: var(--bad-line); }
@@ -31,11 +61,6 @@ tr.mrw-inputrow td { background: var(--panel); padding: 0; }
 }
 .mrw-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-/* Host-forced theme (SEP-1865 hostContext.theme) overrides the ambient
-   scheme: light-dark() tokens key off color-scheme, so forcing is one rule. */
-:root[data-mrw-theme="dark"] .mrw, :root[data-mrw-theme="dark"] .mrw-waiting { color-scheme: dark; }
-:root[data-mrw-theme="light"] .mrw, :root[data-mrw-theme="light"] .mrw-waiting { color-scheme: light; }
-
 /* ════════════════════════════════════════════════════════════════════════
    MACREMOTE WIDGET — REUSABLE STYLES  (everything scoped under .mrw)
    The widget is a precision instrument: one card, one accent line for
@@ -45,14 +70,17 @@ tr.mrw-inputrow td { background: var(--panel); padding: 0; }
 .mrw, .mrw * { box-sizing: border-box; margin: 0; padding: 0; }
 
 .mrw {
-  color-scheme: light dark;
-
+  /* color-scheme is inherited from :root, which follows the app's theme. */
   /* — instrument palette — */
   --bg:          var(--color-background-primary, light-dark(#ffffff, #1d1d20));
   --panel:       var(--color-background-secondary, light-dark(#f6f6f8, #161619));
   --text:        var(--color-text-primary, light-dark(#1d1d1f, #f5f5f7));
-  --text2:       var(--color-text-secondary, light-dark(rgba(60,60,67,.62), rgba(235,235,245,.60)));
-  --text3:       var(--color-text-tertiary, light-dark(rgba(60,60,67,.34), rgba(235,235,245,.30)));
+  /* Solid grays: at least 4.5:1 on the card and panel colors in both schemes.
+     Light has no room for a third, lighter gray that still reads at 4.5:1,
+     so there --text3 equals --text2; dark keeps a step dimmer. Keep these in
+     step with WIDGET_COLORS in the script. */
+  --text2:       var(--color-text-secondary, light-dark(#6e6e73, #a1a1a6));
+  --text3:       var(--color-text-tertiary, light-dark(#6e6e73, #8e8e93));
   --line:        var(--color-border-primary, light-dark(rgba(0,0,0,.10),  rgba(255,255,255,.11)));
   --line2:       var(--color-border-secondary, light-dark(rgba(0,0,0,.055), rgba(255,255,255,.065)));
   --accent:      var(--color-text-info, light-dark(#0071e3, #0a84ff));
@@ -2680,6 +2708,7 @@ const state = {
   toolInput: {},
   hostCapabilities: {},
   hostContext: {},
+  hostColorVariables: {},
   initialized: false,
   tornDown: false
 };
@@ -2904,26 +2933,125 @@ function finitePixels(value) {
     ? Math.min(value, 100000) + "px" : "";
 }
 
+// ——— color scheme and host colors ———
+// The frame's backdrop comes from the widget's own color scheme whenever it
+// differs from the page around the frame, so the scheme must follow the app's
+// theme, and host text colors are used only when they belong to that theme.
+const colorProbe = (() => {
+  try { return document.createElement("canvas").getContext("2d", { willReadFrequently: true }); }
+  catch (_) { return null; }
+})();
+const prefersDarkQuery = typeof matchMedia === "function"
+  ? matchMedia("(prefers-color-scheme: dark)") : null;
+// Above this relative luminance a color reads as light: it has more contrast
+// with black than with white.
+const LIGHT_LUMINANCE = 0.179;
+
+// WCAG relative luminance of any CSS color the canvas understands, or null
+// when it can't tell (unsupported syntax, mostly transparent).
+function colorLuminance(value) {
+  if (!colorProbe || typeof value !== "string" || !value.trim()) return null;
+  const sentinel = "#010203";
+  colorProbe.fillStyle = sentinel;
+  colorProbe.fillStyle = value;
+  if (String(colorProbe.fillStyle).toLowerCase() === sentinel &&
+      value.trim().toLowerCase() !== sentinel) return null;
+  colorProbe.clearRect(0, 0, 1, 1);
+  colorProbe.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = colorProbe.getImageData(0, 0, 1, 1).data;
+  if (a < 128) return null;
+  const linear = (channel) => {
+    const c = channel / 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+function contrastRatio(a, b) {
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+// The app's declared theme wins. A host that sends colors but no theme gets
+// the theme its primary text color implies.
+function resolvedTheme(ctx, colors) {
+  if (ctx.theme === "dark" || ctx.theme === "light") return ctx.theme;
+  const text = colorLuminance(colors["--color-text-primary"]);
+  if (text !== null) return text > LIGHT_LUMINANCE ? "dark" : "light";
+  const background = colorLuminance(colors["--color-background-primary"]);
+  if (background !== null) return background > LIGHT_LUMINANCE ? "light" : "dark";
+  return null;
+}
+
+// The widget's own fallbacks for the host colors hostColorsFit checks, the
+// same values as the .mrw tokens' light-dark() pairs.
+const WIDGET_COLORS = {
+  light: {
+    "--color-text-primary": "#1d1d1f", "--color-text-secondary": "#6e6e73",
+    "--color-text-tertiary": "#6e6e73",
+    "--color-background-primary": "#ffffff", "--color-background-secondary": "#f6f6f8"
+  },
+  dark: {
+    "--color-text-primary": "#f5f5f7", "--color-text-secondary": "#a1a1a6",
+    "--color-text-tertiary": "#8e8e93",
+    "--color-background-primary": "#1d1d20", "--color-background-secondary": "#161619"
+  }
+};
+const CHECKED_TEXT_COLORS = ["--color-text-primary", "--color-text-secondary", "--color-text-tertiary"];
+const CHECKED_BACKGROUND_COLORS = ["--color-background-primary", "--color-background-secondary"];
+
+// Host colors fit when their text is light on a dark theme (dark on a light
+// one), their backgrounds are the reverse, and every text color reaches WCAG
+// AA (4.5:1) on every background, as rendered: a color the host leaves out
+// is the widget's own. A color the host sends but the widget can't measure
+// fails, so nothing unchecked reaches the card.
+function hostColorsFit(theme, colors) {
+  const dark = theme ? theme === "dark" : !!(prefersDarkQuery && prefersDarkQuery.matches);
+  const own = WIDGET_COLORS[dark ? "dark" : "light"];
+  const isLight = (value) => value > LIGHT_LUMINANCE;
+  const rendered = (key) => {
+    const sent = typeof colors[key] === "string" && colors[key].trim() !== "";
+    return { sent, luminance: colorLuminance(sent ? colors[key] : own[key]) };
+  };
+  const texts = CHECKED_TEXT_COLORS.map(rendered);
+  const backgrounds = CHECKED_BACKGROUND_COLORS.map(rendered);
+  for (const color of texts.concat(backgrounds)) {
+    if (color.luminance === null) return false;
+  }
+  if (texts.some(text => text.sent && isLight(text.luminance) !== dark)) return false;
+  if (backgrounds.some(background => background.sent && isLight(background.luminance) === dark)) return false;
+  return texts.every(text => backgrounds.every(background =>
+    contrastRatio(text.luminance, background.luminance) >= 4.5));
+}
+
+function applyColorScheme() {
+  const colors = state.hostColorVariables || {};
+  const theme = resolvedTheme(state.hostContext, colors);
+  if (theme) documentRoot.dataset.mrwTheme = theme;
+  documentRoot.dataset.mrwHostColors = hostColorsFit(theme, colors) ? "used" : "ignored";
+}
+
+if (prefersDarkQuery && typeof prefersDarkQuery.addEventListener === "function") {
+  prefersDarkQuery.addEventListener("change", applyColorScheme);
+}
+
 function applyHostContext(patch) {
   if (!isPlainObject(patch)) return;
   state.hostContext = mergeContext(state.hostContext, patch);
   const ctx = state.hostContext;
 
-  // light-dark() tokens key off color-scheme, so a host-forced theme is one
-  // property write away.
-  if (ctx.theme === "dark" || ctx.theme === "light") {
-    documentRoot.dataset.mrwTheme = ctx.theme;
-  }
-
   const variables = isPlainObject(ctx.styles) && isPlainObject(ctx.styles.variables)
     ? ctx.styles.variables : {};
+  const applied = {};
   for (const key of appliedStyleVariables) documentRoot.style.removeProperty(key);
   appliedStyleVariables.clear();
   for (const [key, value] of Object.entries(variables)) {
     if (!HOST_STYLE_VARIABLES.has(key) || typeof value !== "string" || value.length > 4096) continue;
     documentRoot.style.setProperty(key, value);
     appliedStyleVariables.add(key);
+    applied[key] = value;
   }
+  state.hostColorVariables = applied;
+  applyColorScheme();
 
   const css = isPlainObject(ctx.styles) && isPlainObject(ctx.styles.css)
     ? ctx.styles.css : {};

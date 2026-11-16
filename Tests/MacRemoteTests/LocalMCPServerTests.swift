@@ -3893,11 +3893,11 @@ struct MCPUISupportTests {
             let mirroredSecurity = try #require(meta["securitySchemes"] as? [[String: Any]])
             #expect(mirroredSecurity.first?["type"] as? String == "oauth2")
             let ui = try #require(meta["ui"] as? [String: Any])
-            #expect(ui["resourceUri"] as? String == "ui://macremote/output-v7.html")
+            #expect(ui["resourceUri"] as? String == "ui://macremote/output-v8.html")
             #expect(ui["visibility"] as? [String] == ["model", "app"])
             // Deprecated flat form rides along for hosts that still read it.
-            #expect(meta["ui/resourceUri"] as? String == "ui://macremote/output-v7.html")
-            #expect(meta["openai/outputTemplate"] as? String == "ui://macremote/output-v7.html")
+            #expect(meta["ui/resourceUri"] as? String == "ui://macremote/output-v8.html")
+            #expect(meta["openai/outputTemplate"] as? String == "ui://macremote/output-v8.html")
             #expect(meta["openai/widgetAccessible"] as? Bool == true)
         }
     }
@@ -4012,11 +4012,11 @@ struct MCPUISupportTests {
         #expect(legacyEligibleMeta["ui"] == nil)
         #expect(
             legacyEligibleMeta["ui/resourceUri"] as? String ==
-                "ui://macremote/output-v7.html"
+                "ui://macremote/output-v8.html"
         )
         #expect(
             legacyEligibleMeta["openai/outputTemplate"] as? String ==
-                "ui://macremote/output-v7.html"
+                "ui://macremote/output-v8.html"
         )
         #expect(legacyEligibleMeta["openai/widgetAccessible"] as? Bool == true)
 
@@ -4031,7 +4031,7 @@ struct MCPUISupportTests {
             url: mcp, bearerToken: token,
             body: [
                 "jsonrpc": "2.0", "id": "legacy-no-cap", "method": "resources/read",
-                "params": ["uri": "ui://macremote/output-v7.html"]
+                "params": ["uri": "ui://macremote/output-v8.html"]
             ]
         )
         let legacyNoCapabilityContents = try #require(
@@ -4100,7 +4100,7 @@ struct MCPUISupportTests {
         )
         #expect(catalogDescriptor["mimeType"] as? String == "application/json")
         let widgetDescriptor = try #require(
-            resources.first { $0["uri"] as? String == "ui://macremote/output-v7.html" }
+            resources.first { $0["uri"] as? String == "ui://macremote/output-v8.html" }
         )
         #expect(widgetDescriptor["mimeType"] as? String == "text/html;profile=mcp-app")
         let widgetDescription = try #require(widgetDescriptor["description"] as? String)
@@ -4158,12 +4158,12 @@ struct MCPUISupportTests {
             url: mcp, bearerToken: token,
             body: [
                 "jsonrpc": "2.0", "id": 2, "method": "resources/read",
-                "params": ["uri": "ui://macremote/output-v7.html"]
+                "params": ["uri": "ui://macremote/output-v8.html"]
             ]
         )
         let contents = try #require((read.json["result"] as? [String: Any])?["contents"] as? [[String: Any]])
         let item = try #require(contents.first)
-        #expect(item["uri"] as? String == "ui://macremote/output-v7.html")
+        #expect(item["uri"] as? String == "ui://macremote/output-v8.html")
         #expect(item["mimeType"] as? String == "text/html;profile=mcp-app")
         let html = try #require(item["text"] as? String)
         #expect(html.contains("<!DOCTYPE html>"))
@@ -4257,7 +4257,7 @@ struct MCPUISupportTests {
             url: mcp, bearerToken: token,
             body: [
                 "jsonrpc": "2.0", "id": "spaced-read", "method": "resources/read",
-                "params": ["uri": "ui://macremote/output-v7.html"]
+                "params": ["uri": "ui://macremote/output-v8.html"]
             ]
         )
         let contents = try #require(
@@ -4278,7 +4278,7 @@ struct MCPUISupportTests {
         let podcasts = try #require(listed.first { $0["name"] as? String == "test_podcasts" })
         let toolMeta = try #require(podcasts["_meta"] as? [String: Any])
         let toolUI = try #require(toolMeta["ui"] as? [String: Any])
-        #expect(toolUI["resourceUri"] as? String == "ui://macremote/output-v7.html")
+        #expect(toolUI["resourceUri"] as? String == "ui://macremote/output-v8.html")
     }
 
     @Test func podcastToolResultCuratesGroupSectionsAndChangeConfirmation() async throws {
@@ -6805,5 +6805,161 @@ private final class LockedLogLines: @unchecked Sendable {
 
     var lines: [String] {
         lock.withLock { stored }
+    }
+}
+
+// MARK: - Result cards (SPEC D77)
+
+/// Stands in for the saved Settings value, which the server reads on each request.
+private final class CurrentResultCards: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: ResultCardPreferences
+
+    init(_ value: ResultCardPreferences) {
+        stored = value
+    }
+
+    var value: ResultCardPreferences {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
+@Suite(.serialized)
+struct ResultCardPreferenceTests {
+    private static let linkageKeys = ["ui", "ui/resourceUri", "openai/outputTemplate", "openai/widgetAccessible"]
+
+    private static func tool(id: String, executablePath: String) -> ToolDefinition {
+        ToolDefinition(
+            id: id,
+            name: id,
+            summary: "Return a fixed payload.",
+            executablePath: executablePath,
+            argumentPattern: ["{value}"],
+            parameters: [ToolParameter(name: "value", title: "Value", kind: .string, maximumLength: 64)],
+            capability: .readOnly,
+            timeoutSeconds: 2,
+            outputByteLimit: 1024,
+            category: .utilities
+        )
+    }
+
+    private static func call(_ name: String, base: URL, token: String) async throws -> [String: Any] {
+        let response = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": name, "method": "tools/call",
+                "params": ["name": name, "arguments": ["value": "x"]]
+            ]
+        )
+        return try #require(response.json["result"] as? [String: Any])
+    }
+
+    /// The parts of a result an app shows when it draws no card.
+    private static func plainResult(_ result: [String: Any]) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "content": result["content"] ?? NSNull(),
+                "structuredContent": result["structuredContent"] ?? NSNull()
+            ],
+            options: [.sortedKeys]
+        )
+    }
+
+    private static func linkedToolNames(_ tools: [[String: Any]]) -> Set<String> {
+        Set(tools.compactMap { tool -> String? in
+            let meta = tool["_meta"] as? [String: Any] ?? [:]
+            return linkageKeys.contains { meta[$0] != nil } ? tool["name"] as? String : nil
+        })
+    }
+
+    @Test func savedChoiceDecidesUILinkageWhileResultsStayTheSame() async throws {
+        let suiteName = "ResultCardPreferenceTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // Nothing saved yet: a fresh install shows no cards.
+        let cards = CurrentResultCards(ResultCardPreferences(userDefaults: defaults))
+        #expect(cards.value.showsCards == false)
+
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                Self.tool(id: "echo_tool", executablePath: "/bin/echo"),
+                Self.tool(id: "cat_tool", executablePath: "/bin/cat")
+            ],
+            resultCardPreferences: { cards.value },
+            authCoordinator: coordinator,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+        _ = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": [
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": [
+                        "extensions": [
+                            "io.modelcontextprotocol/ui": ["mimeTypes": ["text/html;profile=mcp-app"]]
+                        ]
+                    ],
+                    "clientInfo": ["name": "UI Host", "version": "1.0"]
+                ]
+            ]
+        )
+
+        // Off (the default): no linkage in tools/list or in the result.
+        let offTools = try await toolsList(base: base, accessToken: token)
+        #expect(Self.linkedToolNames(offTools).isEmpty)
+        #expect(offTools.allSatisfy { ($0["_meta"] as? [String: Any])?["securitySchemes"] != nil })
+        let offResult = try await Self.call("echo_tool", base: base, token: token)
+        #expect(offResult["_meta"] == nil)
+        // Old conversations can still load the card.
+        let read = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": "read", "method": "resources/read",
+                "params": ["uri": LocalMCPServer.widgetResourceURI]
+            ]
+        )
+        #expect(((read.json["result"] as? [String: Any])?["contents"] as? [[String: Any]])?.isEmpty == false)
+
+        // On: the very next requests carry linkage, and the result is otherwise unchanged.
+        cards.value = ResultCardPreferences(showsCards: true)
+        #expect(Self.linkedToolNames(try await toolsList(base: base, accessToken: token)) == ["echo_tool", "cat_tool"])
+        let onResult = try await Self.call("echo_tool", base: base, token: token)
+        let onMeta = try #require(onResult["_meta"] as? [String: Any])
+        #expect(onMeta[LocalMCPServer.resultUIMetaKey] != nil)
+        #expect(try Self.plainResult(onResult) == Self.plainResult(offResult))
+
+        // One family off: only that family loses its card.
+        cards.value = ResultCardPreferences(showsCards: true, hiddenFamilyIDs: ["executable:cat"])
+        #expect(Self.linkedToolNames(try await toolsList(base: base, accessToken: token)) == ["echo_tool"])
+        #expect((try await Self.call("cat_tool", base: base, token: token))["_meta"] == nil)
+        #expect((try await Self.call("echo_tool", base: base, token: token))["_meta"] != nil)
+    }
+
+    @Test func familiesFollowServerProviderBuiltInAndExecutable() throws {
+        let pocket = Self.tool(id: "pocketctl_up_next", executablePath: "/somewhere/pctl")
+        #expect(ToolFamily(pocket) == ToolFamily(id: "provider.pocketctl", name: "PocketCTL"))
+
+        let ripgrep = Self.tool(id: "scan_homebrew_rg", executablePath: "/opt/homebrew/bin/rg")
+        #expect(ToolFamily(ripgrep) == ToolFamily(id: "executable:rg", name: "rg"))
+
+        let fileTransfer = try #require(FileTransferToolCatalog.builtInTools.first)
+        #expect(ToolFamily(fileTransfer).id == ToolFamily.fileTransferID)
+
+        for definition in DefaultToolPresetCatalog.providerDefinitions {
+            let toolID = ToolIdentifier.presetToolID(from: definition.presetIDPrefix + "example")
+            #expect(DefaultToolPresetCatalog.provider(forToolID: toolID)?.id == definition.id)
+        }
     }
 }

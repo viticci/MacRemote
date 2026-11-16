@@ -3,6 +3,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import Observation
+import ServiceManagement
 import UserNotifications
 
 @MainActor
@@ -139,6 +140,14 @@ final class AppModel {
             userDefaults.set(fileTransferFolders, forKey: FileTransferPathPolicy.allowedFoldersDefaultsKey)
         }
     }
+    /// Result cards (Settings › General, SPEC D77). The server reads the saved
+    /// value on every request, so a change applies to the next tool list and
+    /// the next result.
+    var resultCardPreferences: ResultCardPreferences {
+        didSet {
+            resultCardPreferences.save(to: userDefaults)
+        }
+    }
     var warnBeforeQuitWhileSharing: Bool {
         didSet {
             userDefaults.set(warnBeforeQuitWhileSharing, forKey: Self.warnBeforeQuitWhileSharingKey)
@@ -148,6 +157,32 @@ final class AppModel {
         didSet {
             userDefaults.set(isSetupChecklistEnabled, forKey: Self.setupChecklistEnabledKey)
         }
+    }
+    /// D76 — the deployed Your Domain hostname the owner confirmed for going
+    /// public at launch. Nil while the setting is off. Tied to the hostname,
+    /// so a different address never inherits the confirmation.
+    private(set) var goPublicAtLaunchHostname: String? {
+        didSet {
+            userDefaults.set(goPublicAtLaunchHostname, forKey: Self.goPublicAtLaunchHostnameKey)
+        }
+    }
+    /// D76 — MacRemote's login item as macOS reports it. The owner can change
+    /// it in System Settings, so Settings re-reads it instead of trusting a
+    /// saved copy.
+    private(set) var openAtLoginStatus: SMAppService.Status = .notRegistered
+    /// The last Open at Login change macOS refused, stated under the toggle.
+    private(set) var openAtLoginError: String?
+    /// The hostname a launch is bringing back, until its link is up. Its
+    /// `started` event posts the "went public" notice; ending the session
+    /// clears it.
+    @ObservationIgnored private var launchGoPublicHostname: String?
+    /// The Go Public at Launch attempt still waiting for the server or the
+    /// network. Nil when none is, or when an owner action ended it.
+    @ObservationIgnored private var goPublicAtLaunchAttemptID: UUID?
+    /// How Go Public at Launch waits for the network. Tests replace it to act
+    /// as the owner while the launch waits.
+    @ObservationIgnored var waitForNetworkAtLaunch: @MainActor (Duration) async -> Bool = { timeout in
+        await NetworkReadiness.waitUntilAvailable(timeout: timeout)
     }
 
     /// Opens SwiftUI scenes by ID; installed once by `MacRemoteApp` (AppSkeletonInstaller).
@@ -185,6 +220,7 @@ final class AppModel {
     private static let menuBarExtraEnabledKey = "MacRemote.menuBarExtraEnabled"
     private static let warnBeforeQuitWhileSharingKey = "MacRemote.warnBeforeQuitWhileSharing"
     private static let setupChecklistEnabledKey = "MacRemote.setupChecklistEnabled"
+    private static let goPublicAtLaunchHostnameKey = "MacRemote.goPublicAtLaunch.hostname"
     private static let notificationPromptOfferedKey = "MacRemote.notificationPromptOffered"
     private static let hasResolvedFirstApprovalKey = "MacRemote.hasResolvedFirstApproval"
 
@@ -256,10 +292,12 @@ final class AppModel {
         provenanceInspector: any ToolProvenanceInspecting = SecStaticCodeProvenanceInspector(),
         cloudflaredManager: CloudflaredManager? = nil,
         cloudflareRunTokenStore: CloudflareRunTokenStore? = nil,
-        helperTetherExecutableURL: URL? = nil
+        helperTetherExecutableURL: URL? = nil,
+        runsLaunchActions: Bool = false
     ) {
         self.userDefaults = userDefaults
         self.fileTransferFolders = FileTransferPathPolicy(userDefaults: userDefaults).allowedFolders
+        self.resultCardPreferences = ResultCardPreferences(userDefaults: userDefaults)
         self.toolStore = toolStore
         // The helper manager owns cloudflared resolution for the whole app, so
         // it is built before anything that can launch or look for the helper.
@@ -315,6 +353,7 @@ final class AppModel {
         self.isMenuBarExtraEnabled = Self.loadBool(Self.menuBarExtraEnabledKey, from: userDefaults, defaultValue: true)
         self.warnBeforeQuitWhileSharing = Self.loadBool(Self.warnBeforeQuitWhileSharingKey, from: userDefaults, defaultValue: true)
         self.isSetupChecklistEnabled = Self.loadBool(Self.setupChecklistEnabledKey, from: userDefaults, defaultValue: true)
+        self.goPublicAtLaunchHostname = userDefaults.string(forKey: Self.goPublicAtLaunchHostnameKey)
         // Non-interactive: a Keychain prompt here (e.g. after a re-signed rebuild)
         // would block the app before its first window. Locked entries surface in
         // Settings › Security with a user-initiated Unlock instead.
@@ -553,6 +592,11 @@ final class AppModel {
             self?.refreshTunnelStatus()
         }
         self.cloudflaredManager.refresh()
+        // Only the app passes this. A window may never open at login, so the
+        // launch work cannot wait for one.
+        if runsLaunchActions {
+            Task { await goPublicAtLaunchIfEnabled() }
+        }
     }
 
     // MARK: - Cloudflare helper (D44)
@@ -619,6 +663,7 @@ final class AppModel {
     }
 
     func startLocalServer() {
+        cancelGoPublicAtLaunchAttempt()
         Task {
             _ = await ensureLocalServerRunning()
         }
@@ -679,6 +724,8 @@ final class AppModel {
             toolSurfaceRuntime.update(tools: toolsToExpose)
             let runtime = toolSurfaceRuntime
             let tunnelService = tunnelService
+            // UserDefaults is documented thread-safe; the server only reads it.
+            nonisolated(unsafe) let userDefaults = userDefaults
             let server = LocalMCPServer(
                 instanceID: instanceID,
                 toolProvider: {
@@ -688,6 +735,9 @@ final class AppModel {
                 // link is up; the tunnel is the one place that knows it.
                 publicHost: {
                     tunnelService.publicHost()
+                },
+                resultCardPreferences: {
+                    ResultCardPreferences(userDefaults: userDefaults)
                 },
                 authCoordinator: authCoordinator,
                 toolCallApprovalCoordinator: toolCallApprovalCoordinator,
@@ -721,6 +771,7 @@ final class AppModel {
     }
 
     func stopLocalServer() {
+        cancelGoPublicAtLaunchAttempt()
         resolvePendingRequestsForServerStop()
         deactivateTunnelWatchdog()
         clearTunnelSupervision()
@@ -741,6 +792,7 @@ final class AppModel {
     func rotateInstanceID() {
         let previousInstanceID = instanceID
 
+        cancelGoPublicAtLaunchAttempt()
         stopExposureForInstanceRotation()
 
         var nextInstanceID = Self.newInstanceID()
@@ -3137,7 +3189,14 @@ final class AppModel {
         }
     }
 
+    /// The owner's Go Public. It ends a waiting Go Public at Launch attempt,
+    /// which then leaves the link to the owner.
     func startTunnel() {
+        cancelGoPublicAtLaunchAttempt()
+        startTunnelForOwnerOrLaunch()
+    }
+
+    private func startTunnelForOwnerOrLaunch() {
         // Already public, or on the way: a second start would fail and mark a
         // link that then comes up as failed.
         guard !tunnelStatus.isRunning, !tunnelStatus.isRecovering,
@@ -3173,7 +3232,10 @@ final class AppModel {
         }
     }
 
+    /// Stop Sharing, and the stop before a quit or relaunch. It also ends a
+    /// waiting Go Public at Launch attempt, so the link stays stopped.
     func stopTunnel() {
+        cancelGoPublicAtLaunchAttempt()
         deactivateTunnelWatchdog()
         clearTunnelSupervision()
         tunnelService.stop()
@@ -3256,6 +3318,8 @@ final class AppModel {
             appendLog(level: .warning, "Stop the current tunnel before deploying a custom domain tunnel.")
             return
         }
+        // The owner is setting up the link by hand now.
+        cancelGoPublicAtLaunchAttempt()
         guard tunnelStatus != .unavailable else {
             let message = CloudflareServiceError.cloudflaredUnavailable.localizedDescription
             cloudflareCustomDomainState = .failed(.deploying(stage: .start, message: message))
@@ -3794,8 +3858,207 @@ final class AppModel {
         goPublicConfirmationRequested = true
     }
 
+    /// The Go Public confirmation's body, shared by Connection and by the
+    /// one-time confirmation for Go Public at Launch.
+    var goPublicConfirmationMessage: String {
+        "\(toolExposureSummary.publicLinkSentence) New apps still need your approval to connect."
+    }
+
     func dismissInstanceRotationConfirmation() {
         instanceRotationConfirmation = nil
+    }
+
+    // MARK: - Open at Login and Go Public at Launch (D76)
+
+    func refreshOpenAtLoginStatus() {
+        openAtLoginStatus = SMAppService.mainApp.status
+    }
+
+    /// Registers or removes MacRemote's login item. macOS can refuse, or can
+    /// hold the item until the owner allows it in Login Items; both are
+    /// stated, never swallowed.
+    func setOpenAtLogin(_ enabled: Bool) {
+        var failure: String?
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            failure = error.localizedDescription
+        }
+        refreshOpenAtLoginStatus()
+        if enabled, openAtLoginStatus == .requiresApproval {
+            // Registered, but macOS waits for the owner. That is not an error.
+            openAtLoginError = nil
+            appendLog(level: .warning, "Allow MacRemote in System Settings › General › Login Items so it can open at login.")
+        } else if let failure {
+            openAtLoginError = failure
+            appendLog(level: .error, "MacRemote couldn't \(enabled ? "turn on" : "turn off") Open at Login: \(failure)")
+        } else {
+            openAtLoginError = nil
+            appendLog(level: .info, enabled ? "MacRemote opens at login." : "MacRemote no longer opens at login.")
+        }
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+
+    /// The deployed Your Domain that Go Public at Launch can be turned on
+    /// for: Your Domain is the chosen address and the chosen domain is
+    /// deployed. Nil for an Instant Link, which never goes public by itself.
+    var goPublicAtLaunchCandidateHostname: String? {
+        prefersCustomDomain ? chosenDeployedHostname : nil
+    }
+
+    /// Call after the owner accepts the one-time confirmation, with the
+    /// hostname the confirmation showed. It is saved only if it is still the
+    /// candidate, so the owner never turns the setting on for an address
+    /// they did not see; a later launch goes public only for it.
+    func turnOnGoPublicAtLaunch(hostname: String) {
+        guard let candidate = goPublicAtLaunchCandidateHostname, candidate == hostname else { return }
+        goPublicAtLaunchHostname = hostname
+        appendLog(level: .warning, "Go Public at Launch is on: MacRemote makes \(hostname) public each time it opens, without asking.")
+    }
+
+    func turnOffGoPublicAtLaunch() {
+        cancelGoPublicAtLaunchAttempt()
+        guard goPublicAtLaunchHostname != nil else { return }
+        goPublicAtLaunchHostname = nil
+        appendLog(level: .info, "Go Public at Launch is off.")
+    }
+
+    /// Ends a Go Public at Launch attempt that is still waiting. Every owner
+    /// action that changes sharing calls this, so a launch that was waiting
+    /// for the server or the network never undoes what the owner did since:
+    /// Stop Sharing stays stopped, and a server started for local use stays
+    /// local.
+    private func cancelGoPublicAtLaunchAttempt() {
+        goPublicAtLaunchAttemptID = nil
+    }
+
+    /// Runs once per launch. With the setting on and its domain still the
+    /// deployed, chosen one, it starts the local server and then the saved
+    /// Your Domain link, with no Go Public confirmation: the owner gave it
+    /// when turning the setting on. Anything that stops it is reported in
+    /// Activity and a notification, and nothing goes public. An owner action
+    /// that changes sharing meanwhile ends it quietly
+    /// (`cancelGoPublicAtLaunchAttempt`).
+    func goPublicAtLaunchIfEnabled() async {
+        guard goPublicAtLaunchHostname != nil else { return }
+        let attempt = UUID()
+        goPublicAtLaunchAttemptID = attempt
+        defer {
+            if goPublicAtLaunchAttemptID == attempt { goPublicAtLaunchAttemptID = nil }
+        }
+        // Checked after every wait below.
+        let isCurrent = { [unowned self] in goPublicAtLaunchAttemptID == attempt }
+
+        // Read now, not later: the notice below must not be dropped because
+        // the app has not heard back from macOS yet.
+        await updateNotificationPermissionStatus()
+        guard isCurrent() else { return }
+
+        if case .blocked(let block) = goPublicAtLaunchCheck(server: .notStarted).decision {
+            reportGoPublicAtLaunchBlocked(block)
+            return
+        }
+
+        _ = await ensureLocalServerRunning()
+        guard isCurrent() else { return }
+        // Another start may already be under way, in which case the call
+        // above returns at once. Give that start time to finish rather than
+        // report it as a failure.
+        let serverDeadline = ContinuousClock.now + .seconds(30)
+        while serverStatus == .starting, ContinuousClock.now < serverDeadline {
+            try? await Task.sleep(for: .milliseconds(200))
+            guard isCurrent() else { return }
+        }
+        if case .blocked(let block) = goPublicAtLaunchCheck(server: launchServerOutcome).decision {
+            reportGoPublicAtLaunchBlocked(block)
+            return
+        }
+
+        // Right after login the network may not be up yet. Waiting here keeps
+        // the helper's few reconnect attempts for real drops.
+        if await !waitForNetworkAtLaunch(.seconds(120)) {
+            appendLog(level: .warning, "This Mac has no network yet. MacRemote is trying your public link anyway.")
+        }
+        guard isCurrent() else { return }
+
+        // The server or the address may have changed while MacRemote waited,
+        // so the whole check runs again.
+        guard !tunnelStatus.isRunning, !tunnelStatus.isRecovering else { return }
+        let hostname: String
+        switch goPublicAtLaunchCheck(server: launchServerOutcome).decision {
+        case .goPublic(let confirmed):
+            hostname = confirmed
+        case .blocked(let block):
+            reportGoPublicAtLaunchBlocked(block)
+            return
+        case .off, .startServer:
+            return
+        }
+        launchGoPublicHostname = hostname
+        appendLog(level: .info, "Go Public at Launch is on, so MacRemote is bringing \(hostname) back.")
+        startTunnelForOwnerOrLaunch()
+        switch tunnelStatus {
+        case .starting, .running, .reconnecting:
+            // The `started` event or a terminal failure reports the rest.
+            break
+        case .failed(let message):
+            launchGoPublicHostname = nil
+            reportGoPublicAtLaunchBlocked(.linkFailed(message))
+        case .stopped, .unavailable, .ready:
+            launchGoPublicHostname = nil
+            reportGoPublicAtLaunchBlocked(.linkFailed("It didn't start."))
+        }
+    }
+
+    private var launchServerOutcome: GoPublicAtLaunchCheck.Server {
+        switch serverStatus {
+        case .running(let url):
+            url.port.map { .running(port: $0) } ?? .failed("The local server has no port.")
+        case .failed(let message):
+            .failed(message)
+        case .starting:
+            .failed("It was still starting after 30 seconds.")
+        case .stopped:
+            .failed("The local server isn't running.")
+        }
+    }
+
+    private func goPublicAtLaunchCheck(server: GoPublicAtLaunchCheck.Server) -> GoPublicAtLaunchCheck {
+        let chosen = savedCloudflareDomain.flatMap { $0.isChosen(by: cloudflareDraft) ? $0 : nil }
+        // Same test as `resumableCustomDomain`, without its port condition,
+        // which the check makes on its own so it can say so.
+        let hasSavedKey = chosen.flatMap { saved in
+            cloudflareRunTokenStore.token(forTunnelID: saved.tunnelID).flatMap {
+                CloudflareCustomDomainDeployment(saved: saved, tunnelToken: $0)
+            }
+        } != nil
+        return GoPublicAtLaunchCheck(
+            confirmedHostname: goPublicAtLaunchHostname,
+            hasCompletedWelcome: hasCompletedWelcome,
+            prefersYourDomain: prefersCustomDomain,
+            chosenDeployedHostname: chosen?.hostname,
+            hasSavedKey: hasSavedKey,
+            deployedPort: chosen?.localPort,
+            sharedToolCount: exposedTools.count,
+            server: server
+        )
+    }
+
+    /// A headless Mac has nobody watching it, so a setting that could not
+    /// run says so where the owner will look: Activity and a notification.
+    private func reportGoPublicAtLaunchBlocked(_ block: GoPublicAtLaunchBlock) {
+        appendLog(level: .warning, "Go Public at Launch didn't run. \(block.reason)")
+        postStatusNotification(
+            title: "MacRemote didn't go public",
+            body: "\(block.reason) Open MacRemote to check."
+        )
     }
 
     // MARK: - Welcome & quit gate (spec §2.6)
@@ -3856,17 +4119,22 @@ final class AppModel {
             return
         }
         Task {
-            let settings = await UNUserNotificationCenter.current().notificationSettings()
-            switch settings.authorizationStatus {
-            case .notDetermined:
-                notificationPermissionStatus = .notDetermined
-            case .authorized, .provisional, .ephemeral:
-                notificationPermissionStatus = .authorized
-            case .denied:
-                notificationPermissionStatus = .denied
-            @unknown default:
-                notificationPermissionStatus = .unknown
-            }
+            await updateNotificationPermissionStatus()
+        }
+    }
+
+    private func updateNotificationPermissionStatus() async {
+        guard supportsUserNotifications else { return }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .notDetermined:
+            notificationPermissionStatus = .notDetermined
+        case .authorized, .provisional, .ephemeral:
+            notificationPermissionStatus = .authorized
+        case .denied:
+            notificationPermissionStatus = .denied
+        @unknown default:
+            notificationPermissionStatus = .unknown
         }
     }
 
@@ -4820,6 +5088,15 @@ final class AppModel {
             recordTunnelSupervision(publicURL: publicURL)
             tunnelWatchdog.notifyTunnelStarted()
             appendLog(level: .info, "Cloudflare Tunnel ready at \(publicURL.absoluteString).")
+            if let hostname = launchGoPublicHostname {
+                // D76: every automatic go-public is announced, once.
+                launchGoPublicHostname = nil
+                appendLog(level: .warning, "\(hostname) went public at launch, as set in Settings › General.")
+                postStatusNotification(
+                    title: "Your public link is live",
+                    body: "\(hostname) went public when MacRemote opened. New apps still need your approval to connect."
+                )
+            }
             if case .named(let deployment, let fromSavedToken) = activeTunnelMode {
                 let alreadyDeployed = cloudflareCustomDomainState == .deployed(deployment.hostname)
                 cloudflareCustomDomainState = .deployed(deployment.hostname)
@@ -4860,6 +5137,8 @@ final class AppModel {
             // Delete it and say what to do; the next Go Public opens the
             // Address card, where a deploy saves a new one.
             appendLog(level: .error, message)
+            // Read before the session ends, which clears it.
+            let wasLaunchAttempt = launchGoPublicHostname != nil
             deactivateTunnelWatchdog()
             clearTunnelSupervision()
             cloudflareRunTokenStore.delete()
@@ -4867,12 +5146,17 @@ final class AppModel {
             cloudflareCustomDomainState = .failed(.deploying(stage: .start, message: refusal))
             tunnelStatus = .failed(refusal)
             appendLog(level: .error, refusal)
+            if wasLaunchAttempt {
+                // Nobody may be at the Mac to see the Address card.
+                reportGoPublicAtLaunchBlocked(.savedKeyRefused(hostname: deployment.hostname))
+            }
         }
     }
 
     private func deactivateTunnelWatchdog() {
         tunnelWatchdog.deactivate()
         activeTunnelMode = .none
+        launchGoPublicHostname = nil
         // The session is over, so the next start may pick a newly installed
         // helper. While the session lives, every watchdog restart reuses the
         // executable the session began with.
@@ -4909,6 +5193,8 @@ final class AppModel {
         } else {
             namedTunnelWasActive = false
         }
+        // Read before the session ends, which clears it.
+        let wasLaunchAttempt = launchGoPublicHostname != nil
         deactivateTunnelWatchdog()
         clearTunnelSupervision()
         tunnelStatus = .failed(message)
@@ -4916,6 +5202,12 @@ final class AppModel {
             cloudflareCustomDomainState = .failed(.deploying(stage: .start, message: message))
         }
         appendLog(level: .error, message)
+        if wasLaunchAttempt {
+            // A launch whose link never came up did not go public, so it says
+            // that instead of "stopped". One notice either way.
+            reportGoPublicAtLaunchBlocked(.linkFailed(message))
+            return
+        }
         // The owner is usually away from the Mac when this happens, and apps
         // that rely on the link have just lost it.
         postStatusNotification(

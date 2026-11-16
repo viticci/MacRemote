@@ -749,7 +749,7 @@ struct ToolsView: View {
     }
 
     private var serverFamilies: [ServerFamily] {
-        let grouped = Dictionary(grouping: bridgeTools, by: Self.familyIdentity(of:))
+        let grouped = Dictionary(grouping: bridgeTools, by: ToolFamily.bridgeIdentity(of:))
         let candidatesByIdentity = appModel.localMCPScanState.candidates.reduce(
             into: [String: LocalMCPServerCandidate]()
         ) { result, candidate in
@@ -764,7 +764,7 @@ struct ToolsView: View {
                 let sorted = tools.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                 let header = ServerHeaderModel(
                     identity: identity,
-                    name: tools.first?.mcpBridgeServerName ?? "Local MCP Server",
+                    name: tools.first.map { ToolFamily($0).name } ?? ToolFamily.unnamedServerName,
                     totalCount: tools.count,
                     sharedCount: tools.count(where: { appModel.isToolExposed($0) }),
                     candidate: candidatesByIdentity[identity]
@@ -779,14 +779,10 @@ struct ToolsView: View {
             .sorted { $0.header.name.localizedCaseInsensitiveCompare($1.header.name) == .orderedAscending }
     }
 
-    private static func familyIdentity(of tool: ToolDefinition) -> String {
-        tool.mcpBridgeServerIdentity ?? tool.mcpBridgeIdentity ?? tool.id
-    }
-
     /// The imported families, for `onChange`. It runs on every render, so it
     /// skips the headers, candidates, and sorting that `serverFamilies` builds.
     private var familyIdentities: [String] {
-        Set(bridgeTools.map(Self.familyIdentity(of:))).sorted()
+        Set(bridgeTools.map(ToolFamily.bridgeIdentity(of:))).sorted()
     }
 
     private var importedIdentities: Set<String> {

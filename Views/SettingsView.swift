@@ -56,6 +56,9 @@ private struct GeneralSettingsPane: View {
                 ConnectorAdvancedSignIn()
             }
 
+            ResultCardsSettingsSection()
+            StartupSettingsSection()
+
             Section("App Behavior") {
                 Toggle("Show menu bar icon", isOn: $appModel.isMenuBarExtraEnabled)
                 Toggle("Warn before quitting while sharing", isOn: $appModel.warnBeforeQuitWhileSharing)
@@ -255,6 +258,126 @@ private struct ConnectorAdvancedSignIn: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+// MARK: - Startup (D76)
+
+/// For a Mac that stays on with nobody at it: MacRemote can open at login
+/// and bring a deployed Your Domain back by itself. Both start off.
+private struct StartupSettingsSection: View {
+    @Environment(AppModel.self) private var appModel
+    /// Read so the section redraws when the Address card switches between
+    /// Instant Link and Your Domain; AppModel reads the same key.
+    @AppStorage("MacRemote.addressMode") private var storedAddressMode = AddressMode.instantLink.rawValue
+    @State private var isConfirmingGoPublicAtLaunch = false
+
+    private var openAtLoginIsOn: Bool {
+        switch appModel.openAtLoginStatus {
+        case .enabled, .requiresApproval: true
+        default: false
+        }
+    }
+
+    /// The deployed Your Domain the setting can be turned on for, if any.
+    private var candidateHostname: String? {
+        _ = storedAddressMode
+        return appModel.goPublicAtLaunchCandidateHostname
+    }
+
+    var body: some View {
+        Section("Startup") {
+            VStack(alignment: .leading, spacing: Space.s1) {
+                Toggle("Open at login", isOn: Binding(
+                    get: { openAtLoginIsOn },
+                    set: { appModel.setOpenAtLogin($0) }
+                ))
+                caption(openAtLoginCaption)
+                if appModel.openAtLoginStatus == .requiresApproval {
+                    Button("Open Login Items Settings") {
+                        appModel.openLoginItemsSettings()
+                    }
+                }
+                if let error = appModel.openAtLoginError {
+                    caption("macOS refused the change: \(error)")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: Space.s1) {
+                Toggle("Go public at launch", isOn: Binding(
+                    get: { appModel.goPublicAtLaunchHostname != nil },
+                    set: { isOn in
+                        if isOn {
+                            // The Go Public confirmation, given once here
+                            // instead of at every launch.
+                            isConfirmingGoPublicAtLaunch = true
+                        } else {
+                            appModel.turnOffGoPublicAtLaunch()
+                        }
+                    }
+                ))
+                // Off with nothing to turn on for; on, it stays usable so
+                // the owner can always turn it off.
+                .disabled(appModel.goPublicAtLaunchHostname == nil && candidateHostname == nil)
+                caption(goPublicAtLaunchCaption)
+            }
+            .confirmationDialog(
+                "Go public at launch?",
+                isPresented: $isConfirmingGoPublicAtLaunch,
+                presenting: candidateHostname
+            ) { hostname in
+                // The hostname this dialog shows, so a candidate that changed
+                // while it was open is not saved.
+                Button("Go Public at Launch") {
+                    appModel.turnOnGoPublicAtLaunch(hostname: hostname)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { hostname in
+                Text("\(appModel.goPublicConfirmationMessage) MacRemote makes \(hostname) public each time it opens, without asking again.")
+            }
+        }
+        .task {
+            appModel.refreshOpenAtLoginStatus()
+        }
+        // The owner can change the login item in System Settings while this
+        // pane stays open.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appModel.refreshOpenAtLoginStatus()
+        }
+    }
+
+    private var openAtLoginCaption: String {
+        switch appModel.openAtLoginStatus {
+        case .requiresApproval:
+            "macOS is waiting for you to allow MacRemote in System Settings › General › Login Items."
+        case .notFound:
+            "macOS can't find this copy of MacRemote. Move it to Applications, open it from there, and try again."
+        default:
+            "MacRemote opens when you log in to this Mac. After a restart, that needs someone to log in, or automatic login."
+        }
+    }
+
+    private var goPublicAtLaunchCaption: String {
+        guard let saved = appModel.goPublicAtLaunchHostname else {
+            guard let candidateHostname else {
+                return "Available after you deploy Your Domain."
+            }
+            return "When MacRemote opens, it starts the local server and makes \(candidateHostname) public without asking. An Instant Link never does this."
+        }
+        if saved == candidateHostname {
+            return "When MacRemote opens, it starts the local server and makes \(saved) public. New apps still need your approval to connect."
+        }
+        if let candidateHostname {
+            return "Turned on for \(saved), which isn't your address now. Turn it off and on again to use \(candidateHostname)."
+        }
+        return "Turned on for \(saved), which isn't your deployed address now, so MacRemote won't go public at launch."
+    }
+
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
