@@ -144,6 +144,27 @@ Approval window, and onboarding alike.
   Cloudflare's helper.
 - Public link: `requestGoPublic()` and `startTunnel()` open the Address card
   instead of starting an Instant Link when Your Domain is the chosen address.
+  `goPublicConfirmationMessage` is the confirmation body Connection and
+  Settings share.
+- Startup (D76): `openAtLoginStatus` (the `SMAppService.Status` macOS reports;
+  `refreshOpenAtLoginStatus()` re-reads it), `setOpenAtLogin(_:)` (sets
+  `openAtLoginError` when macOS refuses), `openLoginItemsSettings()`.
+  `goPublicAtLaunchHostname` is the confirmed hostname
+  (`MacRemote.goPublicAtLaunch.hostname`; nil = off),
+  `goPublicAtLaunchCandidateHostname` is the deployed, chosen Your Domain it
+  can be turned on for (never an Instant Link), and
+  `turnOnGoPublicAtLaunch()` / `turnOffGoPublicAtLaunch()` change it; the
+  view calls turn-on only after its one-time confirmation.
+  `goPublicAtLaunchIfEnabled()` runs once per launch from `AppModel.init`
+  when the app passes `runsLaunchActions: true` (tests never do), so it needs
+  no window. The decision is the pure `GoPublicAtLaunchCheck`
+  (`Models/GoPublicAtLaunch.swift`), asked before and after
+  `ensureLocalServerRunning()`; a block is written to Activity and posted as a
+  status notification. Before the helper starts it waits up to 2 minutes for
+  a network (`Support/NetworkReadiness.swift`); the watchdog's reconnect
+  attempts cover the rest. The `started` event of that session posts "Your
+  public link is live" once; `deactivateTunnelWatchdog()` drops the pending
+  notice when the session ends first.
 - File Transfer folders (D67): `fileTransferFolders`,
   `addFileTransferFolder(_:)` (returns the reason a folder was refused), and
   `removeFileTransferFolder(_:)`. The list is saved under
