@@ -1,4 +1,4 @@
-# MacRemote 1.1 Club Beta
+# MacRemote 1.1.1 Club Beta
 
 MacRemote lets an MCP app use command-line tools on your Mac. You choose which
 tools to share. MacRemote asks before an app connects, and risky tools can ask
@@ -9,26 +9,26 @@ a Cloudflare account for the fastest setup.
 
 ## Download and open MacRemote
 
-Download `MacRemote-1.1.zip` from the MacStories Club post.
+Download `MacRemote-1.1.1.zip` from the MacStories Club post.
 
-1. Double-click `MacRemote-1.1.zip`. A folder named **MacRemote 1.1** appears
+1. Double-click `MacRemote-1.1.1.zip`. A folder named **MacRemote 1.1.1** appears
    next to it.
 2. Open that folder and drag **MacRemote** into your Applications folder.
 3. Open the Applications folder and double-click **MacRemote**.
 4. macOS asks whether you want to open an app downloaded from the internet.
    Choose **Open**.
 
-MacRemote 1.1 is signed with a Developer ID and notarized by Apple, so it opens
+MacRemote 1.1.1 is signed with a Developer ID and notarized by Apple, so it opens
 like any other app you download. You do not need **Open Anyway**.
 
 The folder also holds this guide, the [release
-notes](releases/1.1.md), and a **Source** folder with MacRemote's source code.
+notes](releases/1.1.1.md), and a **Source** folder with MacRemote's source code.
 You only need the app.
 
-If you use MacRemote 1.0 or an earlier beta, quit it first and replace the old
-copy in Applications. Your tools, connected apps, and settings carry over.
-[What's new in 1.1](releases/1.1.md#updating-from-10) lists what you will
-notice.
+If you use MacRemote 1.1, 1.0, or an earlier beta, quit it first and replace
+the old copy in Applications. Your tools, connected apps, and settings carry
+over. [What's new in 1.1.1](releases/1.1.1.md#updating-from-11-or-10) lists
+what you will notice.
 
 ### Optional: check the app
 

@@ -4,8 +4,8 @@ set -euo pipefail
 APP_NAME="MacRemote"
 BUNDLE_ID="com.macstories.MacRemote"
 MIN_SYSTEM_VERSION="26.0"
-VERSION="1.1"
-BUILD_NUMBER="10"
+VERSION="1.1.1"
+BUILD_NUMBER="11"
 SIGNING_IDENTITY="${MACREMOTE_CODESIGN_IDENTITY:-}"
 NOTARY_PROFILE="${MACREMOTE_NOTARY_PROFILE:-}"
 OUTPUT_DIR=""
@@ -24,8 +24,8 @@ mode is intentionally strict and requires a clean checkout, a Developer ID
 Application identity, and a notarytool keychain profile.
 
 Options:
-  --version <version>          App version (default: 1.1).
-  --build-number <number>      Numeric bundle build number (default: 10).
+  --version <version>          App version (default: 1.1.1).
+  --build-number <number>      Numeric bundle build number (default: 11).
   --identity <identity>        codesign identity (or MACREMOTE_CODESIGN_IDENTITY).
   --notary-profile <profile>   notarytool keychain profile (or MACREMOTE_NOTARY_PROFILE).
   --output-dir <directory>     Artifact directory (default: dist/release).
@@ -40,7 +40,7 @@ Options:
 
 Notarized distribution example:
   MACREMOTE_CODESIGN_IDENTITY='Developer ID Application: Name (TEAMID)' \
-  MACREMOTE_NOTARY_PROFILE='MacRemote' script/package_release.sh --version 1.1 --build-number 10
+  MACREMOTE_NOTARY_PROFILE='MacRemote' script/package_release.sh --version 1.1.1 --build-number 11
 
 Local validation example:
   script/package_release.sh --local-signing --allow-dirty --no-clean

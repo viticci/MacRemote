@@ -1,18 +1,18 @@
 # Install MacRemote
 
-Club members should start with the [MacRemote 1.1 Club Beta
+Club members should start with the [MacRemote 1.1.1 Club Beta
 guide](docs/CLUB_BETA.md). It covers the complete first run, including the
 choice between a temporary Instant Link and a stable Your Domain link.
 
 ## Install the Club package
 
-MacRemote 1.1 requires macOS 26 or later. Club members do not need Git, Swift,
+MacRemote 1.1.1 requires macOS 26 or later. Club members do not need Git, Swift,
 Xcode, Homebrew, Wrangler, or a Cloudflare account for the fastest setup.
 
-1. Download `MacRemote-1.1.zip` from the Club post.
-2. Double-click the ZIP, open the **MacRemote 1.1** folder it creates, and move
+1. Download `MacRemote-1.1.1.zip` from the Club post.
+2. Double-click the ZIP, open the **MacRemote 1.1.1** folder it creates, and move
    **MacRemote** into `/Applications`.
-3. In Applications, double-click MacRemote and confirm **Open**. MacRemote 1.1
+3. In Applications, double-click MacRemote and confirm **Open**. MacRemote 1.1.1
    is signed with a Developer ID and notarized, so macOS opens it normally.
    To check that yourself, run `spctl -a -vv /Applications/MacRemote.app`; the
    answer should say `source=Notarized Developer ID`.
