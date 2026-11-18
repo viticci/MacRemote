@@ -2249,6 +2249,85 @@ struct LocalMCPServerTests {
         #expect(!toolApprovals.approve(requestID: approval.id))
     }
 
+    /// Apps also give up by sending `notifications/cancelled` on a new request
+    /// while the call's own request stays open. Only the app that made the
+    /// call can withdraw it.
+    @Test func aCancelNoticeFromTheCallingAppWithdrawsTheWaitingApproval() async throws {
+        let coordinator = OAuthCoordinator()
+        let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 30)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test_write",
+                    name: "Write",
+                    summary: "Writes.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: [],
+                    parameters: [],
+                    capability: .write,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolCallApprovalCoordinator: toolApprovals,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let endpoint = base.appendingPathComponent("mcp/test-instance")
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+        let otherAppToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let callTask = Task {
+            _ = try await postJSON(
+                url: endpoint,
+                bearerToken: accessToken,
+                headers: ["MCP-Protocol-Version": "2025-11-25"],
+                body: [
+                    "jsonrpc": "2.0",
+                    "id": "call",
+                    "method": "tools/call",
+                    "params": ["name": "test_write", "arguments": [:]]
+                ]
+            )
+        }
+        defer { callTask.cancel() }
+        let approval = try await waitForPendingToolApproval(in: toolApprovals)
+
+        func sendCancelNotice(token: String) async throws -> Int {
+            try await postJSON(
+                url: endpoint,
+                bearerToken: token,
+                headers: ["MCP-Protocol-Version": "2025-11-25"],
+                body: [
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": ["requestId": "call", "reason": "user"]
+                ]
+            ).statusCode
+        }
+        func approvalState() -> ToolCallApprovalRequest.State? {
+            toolApprovals.approvalSnapshot().first { $0.id == approval.id }?.state
+        }
+
+        #expect(try await sendCancelNotice(token: otherAppToken) == 202)
+        #expect(approvalState() == .pending)
+
+        #expect(try await sendCancelNotice(token: accessToken) == 202)
+        var state = approvalState()
+        for _ in 0..<100 where state == .pending {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            state = approvalState()
+        }
+        #expect(state == .expired)
+        #expect(!toolApprovals.approve(requestID: approval.id))
+    }
+
     /// The owner must never be asked to approve a call that cannot run: the
     /// write below names a protected folder and is refused with no prompt.
     @Test func aCallThatCannotRunIsRefusedBeforeAnyApprovalPrompt() async throws {
