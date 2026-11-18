@@ -129,6 +129,20 @@ private struct ServerFamily: Identifiable {
     var id: String { header.identity }
 }
 
+/// What one render of the page reads about the selected source. Grouping the
+/// imported tools into server families sorts every bridged tool, and the
+/// column, header, chips, and list all need the result, so `content` builds
+/// this once and hands it down.
+private struct ToolsPageState {
+    let families: [ServerFamily]
+    /// The stored source, or All Tools when its server or candidate is gone.
+    let source: ToolsSource
+    /// Every tool on the selected source's page, before the filter and search.
+    let tools: [ToolDefinition]
+    /// `tools` after the filter and search.
+    let visibleTools: [ToolDefinition]
+}
+
 private struct ServerRefreshRequest: Identifiable {
     let candidateID: String
     let serverName: String
@@ -259,15 +273,30 @@ struct ToolsView: View {
     }
 
     /// The stored source, or All Tools when its server or candidate is gone.
+    /// A server is looked up by the key `serverFamilies` groups by, so this
+    /// stays cheap for the selection binding, which reads it live.
     private var effectiveSource: ToolsSource {
         switch source {
         case .all, .allMCP, .commandLine:
             return source
         case .server(let identity):
-            return serverFamilies.contains { $0.id == identity } ? source : .all
+            let imported = appModel.tools.contains { $0.isMCPBridge && ToolFamily.bridgeIdentity(of: $0) == identity }
+            return imported ? source : .all
         case .candidate(let id):
             return unimportedCandidates.contains { $0.id == id } ? source : .all
         }
+    }
+
+    private var pageState: ToolsPageState {
+        let families = serverFamilies
+        let selected = effectiveSource
+        let tools = toolsInSelection(selected, families: families)
+        return ToolsPageState(
+            families: families,
+            source: selected,
+            tools: tools,
+            visibleTools: tools.filter { matchesFilter($0) && matchesSearch($0) }
+        )
     }
 
     private var sourceBinding: Binding<ToolsSource> {
@@ -287,6 +316,7 @@ struct ToolsView: View {
         if showsPageEmptyState {
             pageEmptyState
         } else {
+            let page = pageState
             // A fixed-width column and a Divider, like the Library sheet. The
             // GeometryReader keeps this page's reported minimum size at zero:
             // when the column plus a page header made the detail column's
@@ -295,10 +325,10 @@ struct ToolsView: View {
             // app aborted (an `HSplitView` did the same).
             GeometryReader { proxy in
                 HStack(spacing: 0) {
-                    sourceColumn
+                    sourceColumn(page)
                         .frame(width: 232)
                     Divider()
-                    detail
+                    detail(page)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -306,12 +336,12 @@ struct ToolsView: View {
         }
     }
 
-    private var sourceColumn: some View {
+    private func sourceColumn(_ page: ToolsPageState) -> some View {
         ToolsSourceColumn(
-            allCount: countForColumn(toolsInSelection(.all)),
+            allCount: countForColumn(toolsInSelection(.all, families: page.families)),
             commandLineRows: commandLineRows,
-            mcpCount: countForColumn(toolsInSelection(.allMCP)),
-            serverRows: serverRows,
+            mcpCount: countForColumn(toolsInSelection(.allMCP, families: page.families)),
+            serverRows: serverRows(page.families),
             candidateRows: candidateRows,
             isScanning: appModel.localMCPScanState.isScanning,
             selection: sourceBinding,
@@ -319,15 +349,15 @@ struct ToolsView: View {
         )
     }
 
-    private var detail: some View {
+    private func detail(_ page: ToolsPageState) -> some View {
         VStack(spacing: 0) {
-            detailHeader
-            chipsBar
-            if isSearchResultEmpty {
+            detailHeader(page)
+            chipsBar(page)
+            if isSearchResultEmpty(page) {
                 EmptyState(searchText: searchText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                toolsList
+                toolsList(page)
             }
         }
     }
@@ -335,8 +365,8 @@ struct ToolsView: View {
     // MARK: Page headers
 
     @ViewBuilder
-    private var detailHeader: some View {
-        switch effectiveSource {
+    private func detailHeader(_ page: ToolsPageState) -> some View {
+        switch page.source {
         case .all:
             ToolsPageHeader(
                 systemImage: "square.grid.2x2",
@@ -392,7 +422,7 @@ struct ToolsView: View {
                 systemImage: "point.3.connected.trianglepath.dotted",
                 tint: .teal,
                 title: "MCP Servers",
-                subtitle: scanSummaryLine
+                subtitle: scanSummaryLine(importedCount: page.families.count)
             ) {
                 EmptyView()
             } detail: {
@@ -414,7 +444,7 @@ struct ToolsView: View {
             }
 
         case .server(let identity):
-            if let family = serverFamilies.first(where: { $0.id == identity }) {
+            if let family = page.families.first(where: { $0.id == identity }) {
                 ImportedServerHeader(
                     server: family.header,
                     status: status(for: family.header),
@@ -528,8 +558,8 @@ struct ToolsView: View {
         }
     }
 
-    private var serverRows: [ToolsSourceRow] {
-        serverFamilies.map { family in
+    private func serverRows(_ families: [ServerFamily]) -> [ToolsSourceRow] {
+        families.map { family in
             ToolsSourceRow(
                 source: .server(family.id),
                 title: family.header.name,
@@ -560,9 +590,9 @@ struct ToolsView: View {
         tools.count(where: { matchesFilter($0) && matchesSearch($0) })
     }
 
-    private var toolsList: some View {
+    private func toolsList(_ page: ToolsPageState) -> some View {
         List(selection: $selectedToolID) {
-            ForEach(sections) { section in
+            ForEach(sections(page)) { section in
                 if section.isFlat {
                     ForEach(section.tools) { tool in
                         toolRow(for: tool)
@@ -579,12 +609,12 @@ struct ToolsView: View {
                 }
             }
 
-            if case .candidate(let id) = effectiveSource,
+            if case .candidate(let id) = page.source,
                let candidate = unimportedCandidates.first(where: { $0.id == id }) {
                 CandidateToolRows(candidate: candidate, searchText: searchText)
             }
 
-            if case .allMCP = effectiveSource {
+            if case .allMCP = page.source {
                 scanStatusSection
             }
         }
@@ -604,14 +634,14 @@ struct ToolsView: View {
 
     // MARK: Chips row
 
-    private var chipsBar: some View {
+    private func chipsBar(_ page: ToolsPageState) -> some View {
         VStack(alignment: .leading, spacing: Space.s2) {
             // Wraps: beside an open inspector this column is too narrow for
             // five chips and a menu on one line.
             FlowLayout {
                 ForEach(ToolsFilter.chipCases) { chipFilter in
                     StatChip(
-                        count: count(for: chipFilter),
+                        count: page.tools.count(where: { matches($0, filter: chipFilter) }),
                         label: chipFilter.title,
                         isSelected: filter == chipFilter,
                         action: { filter = chipFilter }
@@ -814,30 +844,26 @@ struct ToolsView: View {
             }
     }
 
-    private func toolsInSelection(_ source: ToolsSource) -> [ToolDefinition] {
+    private func toolsInSelection(_ source: ToolsSource, families: [ServerFamily]) -> [ToolDefinition] {
         switch source {
         case .all: appModel.allTools
         case .commandLine(let group): commandLineTools(in: group)
         case .allMCP: bridgeTools
-        case .server(let identity): serverFamilies.first { $0.id == identity }?.tools ?? []
+        case .server(let identity): families.first { $0.id == identity }?.tools ?? []
         case .candidate: []
         }
     }
 
-    private var visibleTools: [ToolDefinition] {
-        toolsInSelection(effectiveSource).filter { matchesFilter($0) && matchesSearch($0) }
-    }
-
     // MARK: Section building
 
-    private var sections: [ToolsSection] {
-        let visible = visibleTools
-        switch effectiveSource {
+    private func sections(_ page: ToolsPageState) -> [ToolsSection] {
+        let visible = page.visibleTools
+        switch page.source {
         case .all:
             let process = visible.filter { !$0.isMCPBridge }
             switch groupBy {
-            case .category: return categorySections(process) + serverSections(visible)
-            case .source: return sourceSections(process) + serverSections(visible)
+            case .category: return categorySections(process) + serverSections(visible, families: page.families)
+            case .source: return sourceSections(process) + serverSections(visible, families: page.families)
             case .capability: return capabilitySections(visible)
             }
         case .commandLine(let group):
@@ -847,7 +873,7 @@ struct ToolsView: View {
             case .source: return [makeSection(id: "source.\(group.rawValue)", title: group.title, tools: visible)]
             }
         case .allMCP:
-            return serverSections(visible)
+            return serverSections(visible, families: page.families)
         case .server(let identity):
             if groupBy == .capability {
                 return capabilitySections(visible)
@@ -888,9 +914,9 @@ struct ToolsView: View {
         }
     }
 
-    private func serverSections(_ visible: [ToolDefinition]) -> [ToolsSection] {
+    private func serverSections(_ visible: [ToolDefinition], families: [ServerFamily]) -> [ToolsSection] {
         let visibleIDs = Set(visible.map(\.id))
-        return serverFamilies.compactMap { family in
+        return families.compactMap { family in
             let tools = family.tools.filter { visibleIDs.contains($0.id) }
             guard !tools.isEmpty || searchText.isEmpty else { return nil }
             return ToolsSection(
@@ -1204,7 +1230,7 @@ struct ToolsView: View {
     }
 
     /// LM-3 — the old overview pills survive as one status line.
-    private var scanSummaryLine: String {
+    private func scanSummaryLine(importedCount: Int) -> String {
         let candidates = appModel.localMCPScanState.candidates
         guard !candidates.isEmpty || !importedIdentities.isEmpty else {
             return "None found yet"
@@ -1216,7 +1242,7 @@ struct ToolsView: View {
             parts.append("\(newCount) new")
         }
         parts.append("\(readyCount) ready to import")
-        parts.append("\(serverFamilies.count) imported")
+        parts.append("\(importedCount) imported")
         return parts.joined(separator: " · ")
     }
 
@@ -1246,9 +1272,9 @@ struct ToolsView: View {
         }
     }
 
-    private var isSearchResultEmpty: Bool {
-        guard !searchText.isEmpty, visibleTools.isEmpty else { return false }
-        if case .candidate(let id) = effectiveSource,
+    private func isSearchResultEmpty(_ page: ToolsPageState) -> Bool {
+        guard !searchText.isEmpty, page.visibleTools.isEmpty else { return false }
+        if case .candidate(let id) = page.source,
            let candidate = unimportedCandidates.first(where: { $0.id == id }) {
             return !(candidate.probe?.tools ?? []).contains { CandidateToolRows.matches($0, searchText) }
         }
@@ -1259,10 +1285,6 @@ struct ToolsView: View {
 
     private var sharedCount: Int {
         appModel.allTools.count(where: { appModel.isToolExposed($0) })
-    }
-
-    private func count(for filter: ToolsFilter) -> Int {
-        toolsInSelection(effectiveSource).count(where: { matches($0, filter: filter) })
     }
 
     private func matchesFilter(_ tool: ToolDefinition) -> Bool {
