@@ -7,7 +7,8 @@ import Foundation
 /// integer id, `"true"` for a boolean). A typed upstream server with
 /// `additionalProperties: false` rejects those outright. This converts a
 /// string to the one scalar type the schema declares when the conversion is
-/// exact, and a number to a string when the schema wants a string. Anything
+/// exact, and a number to a string when the schema wants a string. An array
+/// gets the same treatment item by item, from its `items` type. Anything
 /// else passes through unchanged; this never invents or drops arguments.
 enum MCPBridgeArgumentCoercion {
     static func coerce(
@@ -20,9 +21,15 @@ enum MCPBridgeArgumentCoercion {
         }
         var coerced = arguments
         for (name, value) in arguments {
-            guard case .object(let property)? = properties[name],
-                  let type = declaredScalarType(property) else { continue }
-            coerced[name] = coerce(value, to: type)
+            guard case .object(let property)? = properties[name] else { continue }
+            if let type = declaredScalarType(property) {
+                coerced[name] = coerce(value, to: type)
+            } else if case .string("array")? = property["type"],
+                      case .object(let items)? = property["items"],
+                      let itemType = declaredScalarType(items),
+                      let array = value as? [Any] {
+                coerced[name] = array.map { coerce($0, to: itemType) }
+            }
         }
         return coerced
     }
