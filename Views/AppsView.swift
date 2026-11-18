@@ -133,9 +133,13 @@ private struct AppCard: View {
     @State private var toolFilter = ""
 
     var body: some View {
+        // Read once per render. Every count on the card comes from these two,
+        // so the badge, the bulk verbs, and the dialogs can never disagree.
+        let summary = appModel.toolPolicySummary(for: client.id)
+        let allowedToolIDs = appModel.alwaysAllowedToolIDs(for: client.id)
         Card {
             VStack(alignment: .leading, spacing: Space.s3) {
-                header
+                header(summary)
                 metaLine
 
                 DetailsDisclosure(id: "apps.details.\(client.id)", expandAll: expandAll) {
@@ -144,7 +148,7 @@ private struct AppCard: View {
                     }
                 }
 
-                verbRow
+                verbRow(summary, allowedToolIDs: allowedToolIDs)
 
                 if let actionSummary {
                     InlineSummaryRow(text: actionSummary) {
@@ -154,8 +158,8 @@ private struct AppCard: View {
 
                 Divider()
 
-                policyList
-                staleAllowancesFooter
+                policyList(allowedToolIDs)
+                staleAllowancesFooter(allowedToolIDs)
             }
         }
         .opacity(client.sessionState == .expired ? 0.85 : 1)
@@ -178,7 +182,7 @@ private struct AppCard: View {
         }
     }
 
-    private var header: some View {
+    private func header(_ summary: AppToolPolicySummary) -> some View {
         HStack(spacing: Space.s3) {
             ConnectedAppIconView(
                 clientName: client.name,
@@ -204,11 +208,11 @@ private struct AppCard: View {
             Spacer()
 
             StateChip(
-                policySummary.badgeText,
+                summary.badgeText,
                 systemImage: "checkmark.shield",
-                tint: policySummary.allowedSharedCount == 0 ? .secondary : .green
+                tint: summary.allowedSharedCount == 0 ? .secondary : .green
             )
-            .help(policySummary.badgeHelp(clientName: client.name))
+            .help(summary.badgeHelp(clientName: client.name))
         }
     }
 
@@ -269,17 +273,13 @@ private struct AppCard: View {
 
     // MARK: Bulk verbs
 
-    /// Every currently shared tool already has an Always Allow rule. The verb
-    /// would be a no-op, so state stands in its place — clicking "Allow All"
-    /// again because the grant was easy to forget is exactly what this avoids.
-    private var allCurrentToolsAllowed: Bool {
-        policySummary.allSharedToolsAllowed
-    }
-
-    private var verbRow: some View {
+    private func verbRow(_ summary: AppToolPolicySummary, allowedToolIDs: Set<String>) -> some View {
         HStack(spacing: Space.s2) {
-            if allCurrentToolsAllowed {
-                StateChip(policySummary.sharedCount == 1 ? "The 1 shared tool is already allowed" : "All \(policySummary.sharedCount) shared tools already allowed", systemImage: "checkmark.seal.fill", role: .ready)
+            // Every shared tool already runs without asking. The verb would be
+            // a no-op, so state stands in its place — clicking "Allow All"
+            // again because the grant was easy to forget is what this avoids.
+            if summary.allSharedToolsAllowed {
+                StateChip(summary.sharedCount == 1 ? "The 1 shared tool is already allowed" : "All \(summary.sharedCount) shared tools already allowed", systemImage: "checkmark.seal.fill", role: .ready)
                     .help("\(client.name) runs every currently shared tool without asking. Sharing a new tool brings the Allow All verb back.")
             } else {
                 Button("Allow All Current Tools", systemImage: "checkmark.shield") {
@@ -307,7 +307,7 @@ private struct AppCard: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(allowAllConsequence)
+            Text(allowAllConsequence(summary))
         }
         .confirmationDialog(
             "Sign out \u{201C}\(client.name)\u{201D}?",
@@ -325,8 +325,7 @@ private struct AppCard: View {
 
     /// The dialog quotes the two numbers that decide whether this is a routine
     /// grant or a loaded one, and never rounds the loaded ones away.
-    private var allowAllConsequence: String {
-        let summary = policySummary
+    private func allowAllConsequence(_ summary: AppToolPolicySummary) -> String {
         let gated = appModel.toolExposureSummary.gatedToolCount
         var text = "\(client.name) will run \(Self.everySharedTool(summary.sharedCount)) without asking — including \(gated) that normally \(gated == 1 ? "asks" : "ask") first"
         if summary.riskySharedCount > 0 {
@@ -342,7 +341,8 @@ private struct AppCard: View {
 
     private func allowAllCurrentTools() {
         appModel.allowAllCurrentTools(for: client.id)
-        actionSummary = "\(client.name) now runs \(Self.everySharedTool(policySummary.sharedCount)) without asking."
+        let sharedCount = appModel.toolPolicySummary(for: client.id).sharedCount
+        actionSummary = "\(client.name) now runs \(Self.everySharedTool(sharedCount)) without asking."
     }
 
     private func revokeAllAllowances() {
@@ -372,18 +372,8 @@ private struct AppCard: View {
         }
     }
 
-    private var allowedToolIDs: Set<String> {
-        appModel.alwaysAllowedToolIDs(for: client.id)
-    }
-
-    /// Every count this card shows comes from here, so the badge, the bulk
-    /// verb, and the confirmation copy can never disagree.
-    private var policySummary: AppToolPolicySummary {
-        appModel.toolPolicySummary(for: client.id)
-    }
-
     @ViewBuilder
-    private var policyList: some View {
+    private func policyList(_ allowedToolIDs: Set<String>) -> some View {
         let sortedTools = self.sortedTools
         if sortedTools.isEmpty {
             Text("No tools yet — anything you add in Tools shows up here.")
@@ -407,6 +397,7 @@ private struct AppCard: View {
                         category: category,
                         categoryTools: sortedTools.filter { $0.category == category },
                         visibleTools: filteredTools.filter { $0.category == category },
+                        allowedToolIDs: allowedToolIDs,
                         isExpanded: !toolFilter.isEmpty || expandedCategories.contains(category),
                         onToggle: { toggleCategory(category) },
                         onSummary: { actionSummary = $0 }
@@ -461,7 +452,7 @@ private struct AppCard: View {
     // MARK: Stale allowances (rules for tools that no longer exist)
 
     @ViewBuilder
-    private var staleAllowancesFooter: some View {
+    private func staleAllowancesFooter(_ allowedToolIDs: Set<String>) -> some View {
         let staleIDs = allowedToolIDs.subtracting(Set(appModel.allTools.map(\.id)))
         if !staleIDs.isEmpty {
             HStack(spacing: Space.s2) {
@@ -494,6 +485,8 @@ private struct CategoryPolicySection: View {
     /// narrows the visible rows.
     let categoryTools: [ToolDefinition]
     let visibleTools: [ToolDefinition]
+    /// The app's live grants, read once by the card.
+    let allowedToolIDs: Set<String>
     let isExpanded: Bool
     let onToggle: () -> Void
     let onSummary: (String) -> Void
@@ -556,7 +549,7 @@ private struct CategoryPolicySection: View {
             if isExpanded {
                 VStack(spacing: 0) {
                     ForEach(visibleTools) { tool in
-                        ToolPolicyRow(client: client, tool: tool)
+                        ToolPolicyRow(client: client, tool: tool, isAllowed: allowedToolIDs.contains(tool.id))
                         if tool.id != visibleTools.last?.id {
                             Divider()
                         }
@@ -569,13 +562,11 @@ private struct CategoryPolicySection: View {
     /// Tools in this category the app runs without asking: read-only ones
     /// never ask (D79), the others once granted.
     private var allowedCount: Int {
-        categoryTools.count {
-            !$0.asksBeforeRunning || appModel.isToolAlwaysAllowed(toolID: $0.id, clientID: client.id)
-        }
+        categoryTools.count { !$0.asksBeforeRunning || allowedToolIDs.contains($0.id) }
     }
 
     private var holdsGrantInCategory: Bool {
-        categoryTools.contains { appModel.isToolAlwaysAllowed(toolID: $0.id, clientID: client.id) }
+        categoryTools.contains { allowedToolIDs.contains($0.id) }
     }
 
     /// Tools in this category that ask every time by default. A bulk verb that
@@ -586,10 +577,12 @@ private struct CategoryPolicySection: View {
 
     private func setCategoryAllowed(_ isAllowed: Bool) {
         let risky = riskyCount
-        for tool in categoryTools
-        where appModel.isToolAlwaysAllowed(toolID: tool.id, clientID: client.id) != isAllowed {
-            appModel.setToolAlwaysAllowed(isAllowed, toolID: tool.id, clientID: client.id, clientTrustID: client.trustID)
-        }
+        appModel.setToolsAlwaysAllowed(
+            isAllowed,
+            toolIDs: categoryTools.filter { allowedToolIDs.contains($0.id) != isAllowed }.map(\.id),
+            clientID: client.id,
+            clientTrustID: client.trustID
+        )
         guard isAllowed else {
             onSummary("Removed every Always Allow rule in \(category.title) for \(client.name).")
             return
@@ -608,6 +601,7 @@ private struct ToolPolicyRow: View {
     @Environment(AppModel.self) private var appModel
     let client: ConnectedClient
     let tool: ToolDefinition
+    let isAllowed: Bool
 
     @State private var isConfirmingAlwaysAllow = false
     /// Holds the switch in its new position while the consent dialog is up, so
@@ -683,10 +677,6 @@ private struct ToolPolicyRow: View {
         } message: {
             Text(consequence ?? "")
         }
-    }
-
-    private var isAllowed: Bool {
-        appModel.isToolAlwaysAllowed(toolID: tool.id, clientID: client.id)
     }
 
     /// `nil` for ordinary tools — those grant straight from the switch.

@@ -14,7 +14,19 @@ final class AppModel {
         didSet {
             installationIndexCache = nil
             catalogUpdateCache = nil
+            securityFingerprintCache = nil
         }
+    }
+    /// Each tool's security fingerprint by ID, over `allTools`. A fingerprint
+    /// costs a JSON encode and a SHA-256, and every Always Allow change
+    /// refreshes the snapshot against every tool. Any change to `tools`
+    /// clears it, so a changed contract always gets a fresh fingerprint.
+    @ObservationIgnored private var securityFingerprintCache: [String: String]?
+    private var securityFingerprints: [String: String] {
+        if let securityFingerprintCache { return securityFingerprintCache }
+        let fingerprints = ClientToolPermissionStore.fingerprintsByToolID(allTools)
+        securityFingerprintCache = fingerprints
+        return fingerprints
     }
     /// Cached `DefaultToolPresetInstallationIndex` over `allTools`. Building it
     /// JSON-encodes every process invocation, and the Library asks for it once
@@ -452,7 +464,7 @@ final class AppModel {
                 return tool.withCapability(.write)
             }
         }
-        userDefaults.set(Self.fingerprintsByToolID(loadedTools), forKey: Self.knownToolFingerprintsKey)
+        userDefaults.set(ClientToolPermissionStore.fingerprintsByToolID(loadedTools), forKey: Self.knownToolFingerprintsKey)
 
         for tool in catalogTools where !seenBuiltInToolIDs.contains(tool.id) {
             disabledToolIDs.insert(tool.id)
@@ -950,7 +962,7 @@ final class AppModel {
         var removedRules = 0
         if let connectedClient {
             removedRules = clientToolPermissionStore.removeClientTrustID(connectedClient.trustID).removedRules
-            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
         }
         updateDockBadge()
         appendLog(
@@ -982,7 +994,7 @@ final class AppModel {
         toolCallApprovals = toolCallApprovalCoordinator?.approvalSnapshot() ?? toolCallApprovals
         notifiedToolCallRequestIDs.formIntersection(Set(toolCallApprovals.map(\.id)))
         setConnectedClients(authCoordinator.connectedClientSnapshot())
-        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
         updateDockBadge()
         appendLog(level: .warning, revocation.logLine)
         return .success(revocation)
@@ -1684,7 +1696,7 @@ final class AppModel {
             for removedGrantToolID in retiredIDs.union(adoptedGrantToolIDs) {
                 _ = clientToolPermissionStore.removeToolIDFromAllClients(removedGrantToolID)
             }
-            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
             syncRunningToolSurface()
             appendLog(
                 level: .info,
@@ -2440,7 +2452,7 @@ final class AppModel {
             for id in removedIDs {
                 _ = clientToolPermissionStore.removeToolIDFromAllClients(id)
             }
-            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
             syncRunningToolSurface()
             appendLog(
                 level: .warning,
@@ -2782,7 +2794,7 @@ final class AppModel {
             try persistUserDefinedTools()
             persistToolExposureState()
             _ = clientToolPermissionStore.removeToolIDFromAllClients(id)
-            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
             syncRunningToolSurface()
             appendLog(level: .warning, "Deleted tool \(tool.name).")
             return nil
@@ -2853,7 +2865,7 @@ final class AppModel {
 
             try persistUserDefinedTools()
             persistToolExposureState()
-            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
             syncRunningToolSurface()
             appendLog(level: .info, "Updated tool \(updated.name).")
             return nil
@@ -2995,32 +3007,42 @@ final class AppModel {
     }
 
     func setToolAlwaysAllowed(_ isAllowed: Bool, toolID: String, clientID: String, clientTrustID: String? = nil) {
+        setToolsAlwaysAllowed(isAllowed, toolIDs: [toolID], clientID: clientID, clientTrustID: clientTrustID)
+    }
+
+    /// Grants or revokes Always Allow for several tools of one app, such as a
+    /// category's Allow All or Revoke All. The grant store is saved and the
+    /// snapshot refreshed once, not once per tool.
+    func setToolsAlwaysAllowed(_ isAllowed: Bool, toolIDs: [String], clientID: String, clientTrustID: String? = nil) {
+        guard !toolIDs.isEmpty else { return }
+        let tools = toolIDs.compactMap { tool(id: $0) }
         guard let trustID = clientTrustID ?? self.clientTrustID(for: clientID),
-              let tool = tool(id: toolID) else {
+              tools.count == toolIDs.count else {
             appendLog(level: .warning, "Could not update Always Allow: app or tool is unavailable.")
             return
         }
         _ = clientToolPermissionStore.setAllowed(
             isAllowed,
             clientTrustID: trustID,
-            tool: tool
+            tools: tools
         )
-        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
-        let toolName = tool.name
+        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
         let clientName = connectedClients.first { $0.id == clientID }?.name ?? "client"
-        guard isAllowed else {
-            appendLog(level: .warning, "Removed always allow for \(toolName) for \(clientName).")
-            return
-        }
-        // Granting one of the marked tools is the security moment worth its own
-        // line in Activity, so the record says which kind of grant this was.
-        if tool.approvalPolicy == .everyCall {
-            appendLog(
-                level: .warning,
-                "Always allow \(toolName) for \(clientName) — this tool asks every time by default."
-            )
-        } else {
-            appendLog(level: .info, "Always allow \(toolName) for \(clientName).")
+        for tool in tools {
+            guard isAllowed else {
+                appendLog(level: .warning, "Removed always allow for \(tool.name) for \(clientName).")
+                continue
+            }
+            // Granting one of the marked tools is the security moment worth its own
+            // line in Activity, so the record says which kind of grant this was.
+            if tool.approvalPolicy == .everyCall {
+                appendLog(
+                    level: .warning,
+                    "Always allow \(tool.name) for \(clientName) — this tool asks every time by default."
+                )
+            } else {
+                appendLog(level: .info, "Always allow \(tool.name) for \(clientName).")
+            }
         }
     }
 
@@ -3074,7 +3096,7 @@ final class AppModel {
             allTools.filter(isToolExposed),
             clientTrustID: trustID
         )
-        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
         let clientName = connectedClients.first { $0.id == clientID }?.name ?? "client"
         appendLog(level: .warning, "Always allow all current tools for \(clientName).")
     }
@@ -3082,7 +3104,7 @@ final class AppModel {
     func clearToolAllowances(for clientID: String) {
         guard let trustID = clientTrustID(for: clientID) else { return }
         _ = clientToolPermissionStore.removeClientTrustID(trustID)
-        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
         let clientName = connectedClients.first { $0.id == clientID }?.name ?? "client"
         appendLog(level: .warning, "Cleared always-allow tools for \(clientName).")
     }
@@ -3093,7 +3115,7 @@ final class AppModel {
 
     private func setConnectedClients(_ clients: [ConnectedClient]) {
         connectedClients = clients
-        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
         // Signing an app out must take its picture with it. Pruning here rather
         // than in each sign-out path means every route that changes the app list
         // — single sign-out, sign out all, a revoked credential — is covered by
@@ -4560,7 +4582,7 @@ final class AppModel {
             for toolID in removedIDs {
                 _ = clientToolPermissionStore.removeToolIDFromAllClients(toolID)
             }
-            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: allTools)
+            clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
             syncRunningToolSurface()
             if !relaxedToolNames.isEmpty {
                 appendLog(
@@ -4620,15 +4642,11 @@ final class AppModel {
         )
         savedUserToolsByID = Self.toolsByID(tools)
         // What the app just saved is, by definition, what the owner has seen.
-        userDefaults.set(Self.fingerprintsByToolID(tools), forKey: Self.knownToolFingerprintsKey)
+        userDefaults.set(ClientToolPermissionStore.fingerprintsByToolID(tools), forKey: Self.knownToolFingerprintsKey)
     }
 
     private static func toolsByID(_ tools: [ToolDefinition]) -> [String: ToolDefinition] {
         Dictionary(tools.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    }
-
-    private static func fingerprintsByToolID(_ tools: [ToolDefinition]) -> [String: String] {
-        Dictionary(tools.map { ($0.id, $0.securityFingerprint) }, uniquingKeysWith: { first, _ in first })
     }
 
     private func persistToolExposureState() {

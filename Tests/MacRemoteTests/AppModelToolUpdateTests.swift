@@ -888,6 +888,34 @@ struct AppModelToolUpdateTests {
         #expect(redrawn.isSet)
     }
 
+    /// Revoke All in a category is one change: the grant store, which holds
+    /// every app's grants, is written once rather than once per tool.
+    @MainActor
+    @Test func categoryRevokeWritesTheGrantStoreOnce() throws {
+        let suiteName = "MacRemoteToolUpdateTests.\(UUID().uuidString)"
+        let defaults = try #require(GrantWriteCountingDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("tools.json")
+        defer { try? FileManager.default.removeItem(at: storeURL.deletingLastPathComponent()) }
+        let model = makeTestAppModel(userDefaults: defaults, toolStore: ToolRegistryStore(fileURL: storeURL))
+        connectTestClient(model)
+        var draft = makeDraft(name: "Ordinary")
+        draft.capability = .write
+        let tools = try (1...3).map { try draft.makeTool(id: "custom_ordinary_\($0)") }
+        model.tools = tools
+        for tool in tools {
+            model.setToolAlwaysAllowed(true, toolID: tool.id, clientID: "client-1")
+        }
+        defaults.grantWrites = 0
+
+        model.setToolsAlwaysAllowed(false, toolIDs: tools.map(\.id), clientID: "client-1")
+
+        #expect(defaults.grantWrites == 1)
+        #expect(model.alwaysAllowedToolIDs(for: "client-1").isEmpty)
+    }
+
     @MainActor
     @Test func allowAllCurrentToolsCoversEveryCallTools() throws {
         let context = try makeToolUpdateContext()
@@ -1202,6 +1230,18 @@ struct LocalMCPImportSpinnerTests {
         #expect(!model.isImportingLocalMCPServer(candidateID: nil))
         #expect(!model.isImportingLocalMCPServer(candidateID: "server-b"))
         #expect(model.isImportingLocalMCPServer(candidateID: "server-a"))
+    }
+}
+
+/// Counts writes of the Always Allow grant store's one preferences key.
+private final class GrantWriteCountingDefaults: UserDefaults, @unchecked Sendable {
+    var grantWrites = 0
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        if defaultName == "MacRemote.clientToolPermissions.v2" {
+            grantWrites += 1
+        }
+        super.set(value, forKey: defaultName)
     }
 }
 
