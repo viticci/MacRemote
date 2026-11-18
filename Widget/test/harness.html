@@ -1220,6 +1220,24 @@ for (const name of Object.keys(FIXTURES)) {
   FIXTURES[name] = withFallbackContent(FIXTURES[name]);
 }
 
+const SEMANTIC_CARD_META = {"net.viticci.macremote/ui": {version: 1, profile: "semanticResult"}};
+
+// The server attaches card metadata to every result whose card the owner
+// allows (SPEC D77). A fixture that brings none stands for that case with the
+// default semantic profile, except `cardoff`: the owner turned cards off while
+// the host still links the card from an older tool list.
+FIXTURES.cardoff = Object.assign({}, FIXTURES.remindertextfallback, {_meta: undefined});
+delete FIXTURES.cardoff._meta;
+for (const name of Object.keys(FIXTURES)) {
+  const fixture = FIXTURES[name];
+  if (name === "cardoff" || fixture._meta?.["net.viticci.macremote/ui"]) continue;
+  FIXTURES[name] = Object.assign({}, fixture, {
+    _meta: Object.assign({}, fixture._meta, {
+      ...SEMANTIC_CARD_META
+    })
+  });
+}
+
 const iframe = document.getElementById("widget");
 const zoomFactor = zoomPercent / 100;
 iframe.style.width = (frameWidth / zoomFactor) + "px";
@@ -1482,9 +1500,36 @@ function inspectWidget() {
   };
 }
 
+// cardoff: the result carries no card metadata, so the card draws nothing and
+// asks for no height. exercise=recover then delivers the same result with its
+// metadata, and the card comes back.
+function updateCardOffAssertions(output) {
+  const doc = iframe.contentDocument;
+  if (!doc || !window.__initialized) return;
+  const off = doc.documentElement.dataset.mrwCard === "off";
+  const lastSize = window.__sizeEvents[window.__sizeEvents.length - 1];
+  const checks = exercise === "recover"
+    ? {
+        cardBack: !off && !!doc.querySelector(".mrw-card") &&
+          doc.getElementById("mrw-root").textContent.includes("Dentifricio"),
+        sizeBack: !!lastSize && lastSize.height > 0
+      }
+    : {
+        cardOff: off,
+        nothingDrawn: doc.getElementById("mrw-root").childElementCount === 0 &&
+          getComputedStyle(doc.body).display === "none",
+        noHeight: !!lastSize && lastSize.height === 0 && lastSize.width > 0
+      };
+  checks.widgetErrors = window.__widgetErrors.length === 0;
+  const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  output.dataset.state = failures.length ? "fail" : "pass";
+  output.textContent = failures.length ? "FAIL · " + failures.join(", ") : "PASS · card off";
+}
+
 function updateAssertions() {
-  const report = inspectWidget();
   const output = document.getElementById("assertions");
+  if (fixtureName === "cardoff") { updateCardOffAssertions(output); return; }
+  const report = inspectWidget();
   if (!report.ready) return;
   const checks = {
     horizontal: report.noHorizontalOverflow,
@@ -2056,6 +2101,9 @@ window.addEventListener("message", (event) => {
     } else {
       send({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: FIXTURES[fixtureName] });
     }
+    if (fixtureName === "cardoff" && exercise === "recover") {
+      setTimeout(() => send({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: FIXTURES.remindertextfallback }), 200);
+    }
     scheduleExercise();
     scheduleInspection();
     return;
@@ -2208,7 +2256,8 @@ function scheduleExercise() {
             method: "ui/notifications/tool-result",
             params: {
               content: [{ type: "text", text: "content-fallback-must-not-win" }],
-              structuredContent: current.value
+              structuredContent: current.value,
+              _meta: SEMANTIC_CARD_META
             }
           }, "*");
           setTimeout(() => {
@@ -2229,7 +2278,8 @@ function scheduleExercise() {
           jsonrpc: "2.0",
           method: "ui/notifications/tool-result",
           params: {
-            content: [{ type: "text", text: "content-only-fallback" }]
+            content: [{ type: "text", text: "content-only-fallback" }],
+            _meta: SEMANTIC_CARD_META
           }
         }, "*");
         setTimeout(() => {
@@ -2274,6 +2324,7 @@ function scheduleExercise() {
         const result = new realm.Object();
         result.content = content;
         result.structuredContent = value;
+        result._meta = realm.JSON.parse(JSON.stringify(SEMANTIC_CARD_META));
         const message = new realm.Object();
         message.jsonrpc = "2.0";
         message.method = "ui/notifications/tool-result";

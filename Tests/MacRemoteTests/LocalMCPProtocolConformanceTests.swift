@@ -688,7 +688,7 @@ struct LocalMCPProtocolConformanceTests {
         // blocks the widget's one external origin. Both modern paths — with
         // and without the capability — carry the allowlist for the current
         // resource and every compatibility URI.
-        let widgetURI = "ui://macremote/output-v8.html"
+        let widgetURI = "ui://macremote/output-v9.html"
         for readableURI in MCPAppsMetadata.readableResourceURIs {
             for capabilities in [[:], uiCapabilities] as [[String: Any]] {
                 let read = try await protocolPost(

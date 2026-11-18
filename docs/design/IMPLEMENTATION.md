@@ -697,8 +697,8 @@ The server deliberately supports two protocol eras:
   `ui/resourceUri` and `openai/outputTemplate` mirrors, but never the standard
   nested `ui` object.
 
-The versioned resource is `ui://macremote/output-v8.html`; the prior
-`ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
+The versioned resource is `ui://macremote/output-v9.html`; the prior
+`ui://macremote/output-v8.html`, `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
 `ui://macremote/output-v2.html`, and old `ui://macremote/output` URIs remain
 readable but are not listed. Standard
 metadata defaults `ui.visibility` to `["model", "app"]`.

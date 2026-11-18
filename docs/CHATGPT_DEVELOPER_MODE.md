@@ -154,7 +154,7 @@ Apps:
 - confirm **Show result cards** is on in MacRemote's Settings › General, and
   the tool's family is on (cards are off by default);
 - refresh the draft app in ChatGPT;
-- confirm the tool descriptor points to `ui://macremote/output-v8.html`;
+- confirm the tool descriptor points to `ui://macremote/output-v9.html`;
 - confirm `resources/read` returns `text/html;profile=mcp-app`;
 - check the browser console for widget CSP or resource-loading errors.
 

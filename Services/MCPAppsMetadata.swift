@@ -9,12 +9,13 @@ import Foundation
 enum MCPAppsMetadata {
     static let extensionIdentifier = "io.modelcontextprotocol/ui"
     static let protocolVersion = "2026-01-26"
-    // v8: the widget's color scheme follows the app's theme and host colors
-    // are used only when they match it, so text stays readable on the
-    // backdrop the browser actually paints. Prior cache keys remain readable
-    // for existing conversations.
-    static let resourceURI = "ui://macremote/output-v8.html"
+    // v9: a result without MacRemote's card metadata draws nothing, so a
+    // host that still links the card from a cached tool list shows no card
+    // once the owner turns cards off. v8: the color scheme follows the app's
+    // theme. Prior cache keys remain readable for existing conversations.
+    static let resourceURI = "ui://macremote/output-v9.html"
     static let priorResourceURIs = [
+        "ui://macremote/output-v8.html",
         "ui://macremote/output-v7.html",
         "ui://macremote/output-v6.html",
         "ui://macremote/output-v5.html",

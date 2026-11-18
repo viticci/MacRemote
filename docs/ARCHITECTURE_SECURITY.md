@@ -438,8 +438,8 @@ stale-name recovery without replacing the authoritative tool schemas.
 ## MCP Apps Contract
 
 MacRemote exposes one versioned HTML app resource:
-`ui://macremote/output-v8.html`. The older
-`ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
+`ui://macremote/output-v9.html`. The older
+`ui://macremote/output-v8.html`, `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
 `ui://macremote/output-v2.html`, and `ui://macremote/output` URIs remain readable
 as cache-compatibility paths. Explicit typed `ToolWidgetPresentation` metadata
 is authoritative and preserves curated columns, documents, accents, and row

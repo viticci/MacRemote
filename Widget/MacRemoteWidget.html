@@ -36,6 +36,8 @@
 }
 html, body { box-sizing: border-box; width: 100%; margin: 0; }
 body { background: transparent; }
+/* The owner turned this result's card off (see renderResult). */
+:root[data-mrw-card="off"] body { display: none; }
 body {
   padding:
     var(--mrw-safe-top, 0px)
@@ -3114,9 +3116,11 @@ function reportSize() {
   if (!state.initialized || state.tornDown) return;
   const rect = documentRoot.getBoundingClientRect();
   const width = Math.ceil(rect.width);
-  const height = Math.ceil(rect.height);
+  // A card the owner turned off asks the host for no height at all.
+  const cardOff = documentRoot.dataset.mrwCard === "off";
+  const height = cardOff ? 0 : Math.ceil(rect.height);
   if (!Number.isFinite(width) || width <= 0 ||
-      !Number.isFinite(height) || height <= 0) return;
+      !Number.isFinite(height) || (height <= 0 && !cardOff)) return;
   const size = width + "x" + height;
   if (size === lastReportedSize) return;
   lastReportedSize = size;
@@ -3274,7 +3278,20 @@ function renderResult() {
   const compatMeta = isPlainObject(window.openai && window.openai.toolResponseMetadata)
     ? window.openai.toolResponseMetadata : {};
   const candidateMeta = resultMeta[UI_META_KEY] || compatMeta[UI_META_KEY];
-  const meta = isPlainObject(candidateMeta) ? candidateMeta : {};
+  // MacRemote attaches this metadata to every result whose card the owner
+  // allows (SPEC D77). A host can still show the card from a tool list it
+  // cached before the owner turned cards off; ChatGPT keeps one until the
+  // connector is refreshed. Such a result arrives without the metadata, so
+  // the card draws nothing and collapses. A later delivery that carries the
+  // metadata renders normally again.
+  if (!isPlainObject(candidateMeta)) {
+    documentRoot.dataset.mrwCard = "off";
+    rootEl.replaceChildren();
+    reportSize();
+    return;
+  }
+  delete documentRoot.dataset.mrwCard;
+  const meta = candidateMeta;
   const profile = ["reminderRows", "episodeRows", "habitRows", "noteRows"].includes(meta.profile)
     ? meta.profile : "semanticResult";
   const actions = canCallServerTools() && Array.isArray(meta.actions)

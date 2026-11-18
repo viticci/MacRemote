@@ -132,7 +132,7 @@ system Keychain.
   structured fallbacks, tool `securitySchemes`, and the normal approval path
   must keep working for Anthropic and generic clients. OpenAI `_meta` keys are
   additive aliases.
-- The current widget URI is `ui://macremote/output-v8.html`; v7, v6, v5, v4, v3, v2, and
+- The current widget URI is `ui://macremote/output-v9.html`; v8, v7, v6, v5, v4, v3, v2, and
   the unversioned URI stay readable. Result cards are off until the owner turns
   them on in Settings › General ▸ Result Cards, globally or per tool family
   (decision D77). When they are on and the client negotiates MCP Apps, every

@@ -157,12 +157,14 @@ public link stays unavailable until a manual reinstall.
   catalog allows a card (`widgetPresentation.automatic: false` suppresses it
   for intermediate lookups and diagnostics), and the owner's choice allows it.
   Linked tools use standard `_meta.ui.resourceUri` with the versioned
-  `ui://macremote/output-v8.html` cache key. A tool without a curated profile
+  `ui://macremote/output-v9.html` cache key. A tool without a curated profile
   uses the safe `semanticResult` profile; that is not the same as having no
-  widget. An unlinked tool and its results carry no UI metadata or aliases,
+  widget. A result without `net.viticci.macremote/ui` means the card is off: the
+  widget draws nothing and reports a height of 0, because a host can keep
+  linking the card from a tool list it cached earlier (D78). An unlinked tool and its results carry no UI metadata or aliases,
   while text `content` and `structuredContent` stay identical. The choice is
   presentation only: never put it in `tools.json`, a security fingerprint, a
-  permission epoch, or an approval decision. Keep `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`,
+  permission epoch, or an approval decision. Keep `ui://macremote/output-v8.html`, `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`,
   `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
   `ui://macremote/output-v2.html`, and `ui://macremote/output` readable for
   existing clients. The pretty UI and its clipboard action must not expose raw
@@ -236,7 +238,7 @@ public link stays unavailable until a manual reinstall.
   Claude Extension `manifest.json` files, not general Codex or Claude plugin
   registries.
 - `Services/MCPAppsMetadata.swift` owns the standard MCP Apps extension,
-  tool/resource metadata, the versioned `ui://macremote/output-v8.html` URI, the
+  tool/resource metadata, the versioned `ui://macremote/output-v9.html` URI, the
   catalog eligibility/default `semanticResult` policy, and additive legacy/OpenAI
   aliases. Do not duplicate those constants in the server, scanners, or views.
 

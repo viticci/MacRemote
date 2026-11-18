@@ -63,6 +63,13 @@ class MCPAppsWidgetBrowserTests(unittest.TestCase):
                 with self.subTest(fixture=fixture, theme=theme):
                     self.render_harness(fixture=fixture, width=390, theme=theme)
 
+    def test_result_without_card_metadata_draws_nothing_until_metadata_arrives(self):
+        # The owner turned cards off but the host still links the card from a
+        # tool list it cached earlier (SPEC D77).
+        for exercise in ("", "recover"):
+            with self.subTest(exercise=exercise):
+                self.render_harness(fixture="cardoff", exercise=exercise, width=390)
+
     def test_chatgpt_compatibility_data_and_metadata_keep_the_receipt(self):
         for exercise in ("compatibility", "compatmetadata"):
             with self.subTest(exercise=exercise):

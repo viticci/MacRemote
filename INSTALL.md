@@ -264,7 +264,7 @@ tool list, calling one harmless read-only tool, checking the pretty result, and
 confirming that a reversible write produces the expected independent ChatGPT
 and MacRemote approval steps.
 
-The current MCP Apps resource is `ui://macremote/output-v8.html`; v7, v6, v5, v4, v3,
+The current MCP Apps resource is `ui://macremote/output-v9.html`; v8, v7, v6, v5, v4, v3,
 v2, and the unversioned URI remain readable. Result cards are off until you turn
 on **Show result cards** in Settings › General. Then, when the target host
 negotiates MCP Apps, shared tools link the widget unless you switched their

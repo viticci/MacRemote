@@ -223,7 +223,7 @@ public issues with secrets, tunnel URLs, OAuth tokens, or local command output.
   widget keys are additive aliases. When Apps was negotiated and the owner
   turned result cards on (off by default, decision D77), each eligible tool
   and early execution error links the shared
-  `ui://macremote/output-v8.html` resource. The v7, v6, v5, v4, v3, v2, and unversioned
+  `ui://macremote/output-v9.html` resource. The v8, v7, v6, v5, v4, v3, v2, and unversioned
   URIs remain readable for cached clients. Catalog presentations may add richer
   rows, documents, accents, and authenticated actions; every other tool uses the
   schema-free `semanticResult` presentation. A catalog presentation may set

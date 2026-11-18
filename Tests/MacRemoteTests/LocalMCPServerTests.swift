@@ -3893,11 +3893,11 @@ struct MCPUISupportTests {
             let mirroredSecurity = try #require(meta["securitySchemes"] as? [[String: Any]])
             #expect(mirroredSecurity.first?["type"] as? String == "oauth2")
             let ui = try #require(meta["ui"] as? [String: Any])
-            #expect(ui["resourceUri"] as? String == "ui://macremote/output-v8.html")
+            #expect(ui["resourceUri"] as? String == "ui://macremote/output-v9.html")
             #expect(ui["visibility"] as? [String] == ["model", "app"])
             // Deprecated flat form rides along for hosts that still read it.
-            #expect(meta["ui/resourceUri"] as? String == "ui://macremote/output-v8.html")
-            #expect(meta["openai/outputTemplate"] as? String == "ui://macremote/output-v8.html")
+            #expect(meta["ui/resourceUri"] as? String == "ui://macremote/output-v9.html")
+            #expect(meta["openai/outputTemplate"] as? String == "ui://macremote/output-v9.html")
             #expect(meta["openai/widgetAccessible"] as? Bool == true)
         }
     }
@@ -4012,11 +4012,11 @@ struct MCPUISupportTests {
         #expect(legacyEligibleMeta["ui"] == nil)
         #expect(
             legacyEligibleMeta["ui/resourceUri"] as? String ==
-                "ui://macremote/output-v8.html"
+                "ui://macremote/output-v9.html"
         )
         #expect(
             legacyEligibleMeta["openai/outputTemplate"] as? String ==
-                "ui://macremote/output-v8.html"
+                "ui://macremote/output-v9.html"
         )
         #expect(legacyEligibleMeta["openai/widgetAccessible"] as? Bool == true)
 
@@ -4031,7 +4031,7 @@ struct MCPUISupportTests {
             url: mcp, bearerToken: token,
             body: [
                 "jsonrpc": "2.0", "id": "legacy-no-cap", "method": "resources/read",
-                "params": ["uri": "ui://macremote/output-v8.html"]
+                "params": ["uri": "ui://macremote/output-v9.html"]
             ]
         )
         let legacyNoCapabilityContents = try #require(
@@ -4100,7 +4100,7 @@ struct MCPUISupportTests {
         )
         #expect(catalogDescriptor["mimeType"] as? String == "application/json")
         let widgetDescriptor = try #require(
-            resources.first { $0["uri"] as? String == "ui://macremote/output-v8.html" }
+            resources.first { $0["uri"] as? String == "ui://macremote/output-v9.html" }
         )
         #expect(widgetDescriptor["mimeType"] as? String == "text/html;profile=mcp-app")
         let widgetDescription = try #require(widgetDescriptor["description"] as? String)
@@ -4158,12 +4158,12 @@ struct MCPUISupportTests {
             url: mcp, bearerToken: token,
             body: [
                 "jsonrpc": "2.0", "id": 2, "method": "resources/read",
-                "params": ["uri": "ui://macremote/output-v8.html"]
+                "params": ["uri": "ui://macremote/output-v9.html"]
             ]
         )
         let contents = try #require((read.json["result"] as? [String: Any])?["contents"] as? [[String: Any]])
         let item = try #require(contents.first)
-        #expect(item["uri"] as? String == "ui://macremote/output-v8.html")
+        #expect(item["uri"] as? String == "ui://macremote/output-v9.html")
         #expect(item["mimeType"] as? String == "text/html;profile=mcp-app")
         let html = try #require(item["text"] as? String)
         #expect(html.contains("<!DOCTYPE html>"))
@@ -4257,7 +4257,7 @@ struct MCPUISupportTests {
             url: mcp, bearerToken: token,
             body: [
                 "jsonrpc": "2.0", "id": "spaced-read", "method": "resources/read",
-                "params": ["uri": "ui://macremote/output-v8.html"]
+                "params": ["uri": "ui://macremote/output-v9.html"]
             ]
         )
         let contents = try #require(
@@ -4278,7 +4278,7 @@ struct MCPUISupportTests {
         let podcasts = try #require(listed.first { $0["name"] as? String == "test_podcasts" })
         let toolMeta = try #require(podcasts["_meta"] as? [String: Any])
         let toolUI = try #require(toolMeta["ui"] as? [String: Any])
-        #expect(toolUI["resourceUri"] as? String == "ui://macremote/output-v8.html")
+        #expect(toolUI["resourceUri"] as? String == "ui://macremote/output-v9.html")
     }
 
     @Test func podcastToolResultCuratesGroupSectionsAndChangeConfirmation() async throws {

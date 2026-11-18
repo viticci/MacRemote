@@ -96,11 +96,11 @@ Decision log for this feature lives here.
 
 ## Server surface (Services/LocalMCPServer.swift)
 
-- **Resource**: `ui://macremote/output-v8.html`, MIME
+- **Resource**: `ui://macremote/output-v9.html`, MIME
   `text/html;profile=mcp-app`, served via standard `resources/list` /
   `resources/read`. The versioned URI is a host cache key: change the version
   when the widget artifact changes materially. `resources/read` still accepts
-  `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
+  `ui://macremote/output-v8.html`, `ui://macremote/output-v7.html`, `ui://macremote/output-v6.html`, `ui://macremote/output-v5.html`, `ui://macremote/output-v4.html`, `ui://macremote/output-v3.html`,
   `ui://macremote/output-v2.html`, and the
   legacy `ui://macremote/output` URI for existing hosts, but Apps-negotiated
   requests advertise v8 alongside
@@ -125,7 +125,7 @@ Decision log for this feature lives here.
   relaunch: it rendered the widget with the artwork column silently empty.
 - **Tool linkage**: tool descriptors are linkage-eligible unless catalog presentation explicitly sets `automatic: false`, and an eligible tool links only while the owner's result-card choice allows it (D77, above). When standard
   Apps linkage is allowed, its `tools/list` entry carries
-  `"_meta": {"ui": {"resourceUri": "ui://macremote/output-v8.html",
+  `"_meta": {"ui": {"resourceUri": "ui://macremote/output-v9.html",
   "visibility": ["model", "app"]}}` (SEP-1865 nested form). The deprecated
   flat `ui/resourceUri` and ChatGPT's `openai/outputTemplate` are additive
   aliases pointing at the same resource; `openai/widgetAccessible: true`
