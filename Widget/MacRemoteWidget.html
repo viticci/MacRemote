@@ -1728,7 +1728,7 @@ const MacRemoteWidget = (() => {
               btn.dataset.state = 'failed'; setRowState(row, act.id, '');
               btn.title = actionFailureTitle(err, act.title || 'Mark complete');
               setTimeout(() => { if (btn.dataset.state === 'failed') { btn.dataset.state = ''; } }, 3000);
-            });
+            }).finally(() => repaintIfReplaced(tr));
           });
           tr.append(el('td', 'mrw-td-check', btn));
           }
@@ -1744,7 +1744,10 @@ const MacRemoteWidget = (() => {
           td.append(renderActionGroup(applicable, (act) => ({
               initialState: rowSt[act.id] || '',
               run: (values) => invoke(act.id, row, values),
-              onState: (s) => setRowState(row, act.id, s),
+              onState: (s) => {
+                setRowState(row, act.id, s);
+                if (s !== 'pending') repaintIfReplaced(tr);
+              },
               requestInputs: (fire) => toggleInputForm(tr, act, row, fire)
             }), visibleLimit));
           tr.append(td);
@@ -1764,6 +1767,11 @@ const MacRemoteWidget = (() => {
       const index = rowIndex.get(row);
       const cur = actionState.get(index) || {};
       cur[actionId] = s; actionState.set(index, cur);
+    }
+    // Sorting and "Show more" rebuild every row from actionState. A call that
+    // settles afterwards updated a row that is gone, so paint the new rows.
+    function repaintIfReplaced(tr) {
+      if (!tr.isConnected && tbody.isConnected) paintRows();
     }
     function invoke(actionId, row, inputValues) {
       const clean = { ...row };

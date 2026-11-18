@@ -1989,6 +1989,17 @@ function updateAssertions() {
       JSON.stringify(report.toolCalls[0]?.arguments?.args) ===
         JSON.stringify(["done", "23901", "--json"]);
   }
+  if (exercise === "actionrepaint") {
+    // Both calls settled after the rebuild; the rows on screen show it.
+    const doc = iframe.contentDocument;
+    const rowFor = (title) => Array.from(doc.querySelectorAll("tr.mrw-data-row"))
+      .find(row => row.textContent.includes(title));
+    checks.actionCalls = report.toolCalls.length === 2;
+    checks.noStalePending = !doc.querySelector("tr.mrw-data-row [data-state='pending']");
+    checks.checkOffDone = !!rowFor("Publish MacRemote article")?.classList.contains("mrw-row-done");
+    checks.rowButtonDone = rowFor("Record podcast segment")
+      ?.querySelector("[data-mrw-action-id='delete']")?.dataset.state === "done";
+  }
   if (exercise === "jsonvalues") checks.jsonValues = report.jsonValuesSafe;
   if (exercise === "sort") checks.sortRows = report.sortRowsSafe;
   if (exercise === "jsoninvalid") checks.jsonInvalid = report.invalidResultsIgnored;
@@ -2219,6 +2230,26 @@ function scheduleExercise() {
         "tr.mrw-data-row:not(.mrw-row-done) [data-mrw-action-id='complete']"
       );
       if (action) action.click();
+    } else if (exercise === "actionrepaint") {
+      // Start a check-off and a row button, then rebuild the rows (a header
+      // sort when wide, the sort menu when narrow) before either call settles.
+      // "Show more" rebuilds them the same way, but it grows the frame, and
+      // headless Chrome can end before the widget reports the new height.
+      const rowFor = (title) => Array.from(doc.querySelectorAll("tr.mrw-data-row"))
+        .find(row => row.textContent.includes(title));
+      rowFor("Publish MacRemote article")?.querySelector("[data-mrw-action-id='complete']")?.click();
+      const overflow = rowFor("Record podcast segment")?.querySelector("details.mrw-action-overflow");
+      if (overflow) overflow.open = true;
+      const remove = overflow?.querySelector("[data-mrw-action-id='delete']");
+      remove?.click();
+      remove?.click();
+      const select = doc.querySelector(".mrw-sort-select");
+      if (frameWidth === 390 && select) {
+        select.value = "title";
+        select.dispatchEvent(new iframe.contentWindow.Event("change"));
+      } else {
+        doc.querySelectorAll(".mrw-th-btn[type='button']")[1]?.click();
+      }
     } else if (exercise === "sort") {
       // Natural numeric order, stable ties, and nulls last in both directions.
       // Switching columns and restoring default order must use the source rows.

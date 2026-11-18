@@ -203,6 +203,11 @@ class MCPAppsWidgetBrowserTests(unittest.TestCase):
             exercise="action",
         )
 
+    def test_row_actions_settle_after_the_rows_are_rebuilt(self):
+        for width in (390, 760):
+            with self.subTest(width=width):
+                self.render_harness(fixture="table", width=width, exercise="actionrepaint")
+
     def test_every_json_structured_content_type_and_text_fallback_render_safely(self):
         self.render_harness(
             fixture="table",
