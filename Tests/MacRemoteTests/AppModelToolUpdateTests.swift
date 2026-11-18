@@ -451,6 +451,34 @@ struct AppModelToolUpdateTests {
         #expect(try Data(contentsOf: storeURL) == originalData)
     }
 
+    /// Uninstalling one CLI while MacRemote runs must not block saving the
+    /// others. A save checks only the rows it adds or edits.
+    @MainActor
+    @Test func toolWhoseProgramDisappearsDoesNotBlockUnrelatedSaves() throws {
+        let context = try makeToolUpdateContext()
+        defer { context.tearDown() }
+        let model = context.model
+        let directory = context.storeURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let program = directory.appendingPathComponent("soon-gone")
+        try Data("#!/bin/echo\n".utf8).write(to: program)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program.path)
+        var goneDraft = makeDraft(name: "Soon Gone")
+        goneDraft.executablePath = program.path
+        #expect(model.addUserTool(from: goneDraft) == nil)
+        let gone = try #require(model.tools.first)
+        try FileManager.default.removeItem(at: program)
+
+        #expect(model.addUserTool(from: makeDraft(name: "Unrelated")) == nil)
+
+        let saved = try ToolRegistryStore(fileURL: context.storeURL).loadUserDefinedToolsReport().tools
+        #expect(saved.map(\.name) == ["Soon Gone", "Unrelated"])
+        // Editing the tool whose program is gone is still checked.
+        var renamed = ToolDefinitionDraft(tool: gone)
+        renamed.name = "Renamed"
+        #expect(model.updateUserTool(id: gone.id, draft: renamed) != nil)
+    }
+
     @MainActor
     @Test func bridgeReplacementValidatesInputAndDefersAllowanceRemovalUntilSave() throws {
         let defaults = try makeIsolatedToolUpdateDefaults()

@@ -259,6 +259,10 @@ final class AppModel {
     /// Saved tools that failed validation at startup remain visible and are
     /// preserved across unrelated edits until repaired or explicitly deleted.
     private(set) var invalidSavedToolIDs: Set<String> = []
+    /// The user tools as last loaded or saved. A save validates only the rows
+    /// that differ from these, so a program uninstalled while MacRemote runs
+    /// does not block every later add, edit, or delete.
+    @ObservationIgnored private var savedUserToolsByID: [String: ToolDefinition] = [:]
     /// When any row cannot be decoded (or the registry itself cannot be read),
     /// preserve the original bytes by rejecting every catalog write.
     private var toolRegistryWriteBlockReason: String?
@@ -462,6 +466,7 @@ final class AppModel {
         self.tools = loadedTools
         self.disabledToolIDs = disabledToolIDs
         self.invalidSavedToolIDs = invalidToolIDs
+        self.savedUserToolsByID = Self.toolsByID(loadedTools)
         self.toolRegistryWriteBlockReason = toolRegistryWriteBlockReason
         // Left behind by Background Tasks, which was removed after 1.0.1.
         // Nothing reads them any more.
@@ -4608,12 +4613,18 @@ final class AppModel {
         if let toolRegistryWriteBlockReason {
             throw ToolRegistryStoreError.writesBlocked(toolRegistryWriteBlockReason)
         }
+        let unchangedToolIDs = Set(tools.filter { savedUserToolsByID[$0.id] == $0 }.map(\.id))
         try toolStore.saveUserDefinedTools(
             tools,
-            preservingInvalidToolIDs: invalidSavedToolIDs
+            preservingInvalidToolIDs: invalidSavedToolIDs.union(unchangedToolIDs)
         )
+        savedUserToolsByID = Self.toolsByID(tools)
         // What the app just saved is, by definition, what the owner has seen.
         userDefaults.set(Self.fingerprintsByToolID(tools), forKey: Self.knownToolFingerprintsKey)
+    }
+
+    private static func toolsByID(_ tools: [ToolDefinition]) -> [String: ToolDefinition] {
+        Dictionary(tools.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private static func fingerprintsByToolID(_ tools: [ToolDefinition]) -> [String: String] {
