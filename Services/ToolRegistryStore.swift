@@ -191,8 +191,9 @@ struct ToolRegistryStore: Sendable {
             do {
                 try ToolArgumentResolver.validate(tool)
             } catch let error as ToolValidationError {
-                // Only rows already found invalid at startup may bypass
-                // validation. New and edited tools still use the strict path,
+                // Only rows the caller names may bypass validation: those
+                // found invalid at startup and those this save leaves
+                // unchanged. New and edited tools still use the strict path,
                 // while an unrelated save cannot erase an unavailable tool.
                 guard preservingInvalidToolIDs.contains(tool.id) else {
                     throw error

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import MacRemote
 
@@ -450,6 +451,34 @@ struct AppModelToolUpdateTests {
         #expect(try Data(contentsOf: storeURL) == originalData)
     }
 
+    /// Uninstalling one CLI while MacRemote runs must not block saving the
+    /// others. A save checks only the rows it adds or edits.
+    @MainActor
+    @Test func toolWhoseProgramDisappearsDoesNotBlockUnrelatedSaves() throws {
+        let context = try makeToolUpdateContext()
+        defer { context.tearDown() }
+        let model = context.model
+        let directory = context.storeURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let program = directory.appendingPathComponent("soon-gone")
+        try Data("#!/bin/echo\n".utf8).write(to: program)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program.path)
+        var goneDraft = makeDraft(name: "Soon Gone")
+        goneDraft.executablePath = program.path
+        #expect(model.addUserTool(from: goneDraft) == nil)
+        let gone = try #require(model.tools.first)
+        try FileManager.default.removeItem(at: program)
+
+        #expect(model.addUserTool(from: makeDraft(name: "Unrelated")) == nil)
+
+        let saved = try ToolRegistryStore(fileURL: context.storeURL).loadUserDefinedToolsReport().tools
+        #expect(saved.map(\.name) == ["Soon Gone", "Unrelated"])
+        // Editing the tool whose program is gone is still checked.
+        var renamed = ToolDefinitionDraft(tool: gone)
+        renamed.name = "Renamed"
+        #expect(model.updateUserTool(id: gone.id, draft: renamed) != nil)
+    }
+
     @MainActor
     @Test func bridgeReplacementValidatesInputAndDefersAllowanceRemovalUntilSave() throws {
         let defaults = try makeIsolatedToolUpdateDefaults()
@@ -835,6 +864,58 @@ struct AppModelToolUpdateTests {
         #expect(!model.alwaysAllowedToolIDs(for: "client-1").contains(tool.id))
     }
 
+    /// The Apps counts redraw only when what they read is observed. Flipping a
+    /// switch must invalidate them at once, not on the next 30-second refresh.
+    @MainActor
+    @Test func alwaysAllowReadsRedrawWhenAGrantChanges() throws {
+        let context = try makeToolUpdateContext()
+        defer { context.tearDown() }
+        let model = context.model
+        var draft = makeDraft(name: "Ordinary")
+        draft.capability = .write
+        let tool = try draft.makeTool(id: "custom_ordinary")
+        model.tools = [tool]
+
+        let redrawn = ObservationFlag()
+        withObservationTracking {
+            _ = model.isToolAlwaysAllowed(toolID: tool.id, clientID: "client-1")
+            _ = model.alwaysAllowedToolIDs(for: "client-1")
+        } onChange: {
+            redrawn.isSet = true
+        }
+        model.setToolAlwaysAllowed(true, toolID: tool.id, clientID: "client-1")
+
+        #expect(redrawn.isSet)
+    }
+
+    /// Revoke All in a category is one change: the grant store, which holds
+    /// every app's grants, is written once rather than once per tool.
+    @MainActor
+    @Test func categoryRevokeWritesTheGrantStoreOnce() throws {
+        let suiteName = "MacRemoteToolUpdateTests.\(UUID().uuidString)"
+        let defaults = try #require(GrantWriteCountingDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("tools.json")
+        defer { try? FileManager.default.removeItem(at: storeURL.deletingLastPathComponent()) }
+        let model = makeTestAppModel(userDefaults: defaults, toolStore: ToolRegistryStore(fileURL: storeURL))
+        connectTestClient(model)
+        var draft = makeDraft(name: "Ordinary")
+        draft.capability = .write
+        let tools = try (1...3).map { try draft.makeTool(id: "custom_ordinary_\($0)") }
+        model.tools = tools
+        for tool in tools {
+            model.setToolAlwaysAllowed(true, toolID: tool.id, clientID: "client-1")
+        }
+        defaults.grantWrites = 0
+
+        model.setToolsAlwaysAllowed(false, toolIDs: tools.map(\.id), clientID: "client-1")
+
+        #expect(defaults.grantWrites == 1)
+        #expect(model.alwaysAllowedToolIDs(for: "client-1").isEmpty)
+    }
+
     @MainActor
     @Test func allowAllCurrentToolsCoversEveryCallTools() throws {
         let context = try makeToolUpdateContext()
@@ -1150,6 +1231,23 @@ struct LocalMCPImportSpinnerTests {
         #expect(!model.isImportingLocalMCPServer(candidateID: "server-b"))
         #expect(model.isImportingLocalMCPServer(candidateID: "server-a"))
     }
+}
+
+/// Counts writes of the Always Allow grant store's one preferences key.
+private final class GrantWriteCountingDefaults: UserDefaults, @unchecked Sendable {
+    var grantWrites = 0
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        if defaultName == "MacRemote.clientToolPermissions.v2" {
+            grantWrites += 1
+        }
+        super.set(value, forKey: defaultName)
+    }
+}
+
+/// Set from an observation `onChange`, which may run off the main actor.
+private final class ObservationFlag: @unchecked Sendable {
+    var isSet = false
 }
 
 private struct ToolUpdateContext {

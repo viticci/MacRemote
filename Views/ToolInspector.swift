@@ -537,6 +537,9 @@ private struct ToolOverviewTab: View {
     }
 
     private var allowanceText: String {
+        guard tool.asksBeforeRunning else {
+            return "Runs without asking for every app. Read-only tools never ask."
+        }
         let names = appModel.connectedClients
             .filter { appModel.isToolAlwaysAllowed(toolID: tool.id, clientID: $0.id) }
             .map(\.name)
@@ -1062,26 +1065,33 @@ private struct ToolPermissionsTab: View {
                 .font(TypeRamp.rowDetail)
                 .foregroundStyle(.secondary)
 
-            TextField("Filter apps", text: $filterText)
-                .textFieldStyle(.roundedBorder)
-
-            if filteredRows.isEmpty {
-                VStack(alignment: .leading, spacing: Space.s1) {
-                    Text(filterText.isEmpty ? "No app can run this tool without asking." : "No apps match “\(filterText)”.")
-                        .font(TypeRamp.rowDetail)
-                        .foregroundStyle(.secondary)
-                    if filterText.isEmpty {
-                        Text("Approve a request with Always Allow to change that.")
-                            .font(TypeRamp.truthNote)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if !tool.asksBeforeRunning {
+                // D79: a read-only tool never asks, so there is no switch to offer.
+                Text("Every app. Read-only tools never ask, so there is nothing to allow.")
+                    .font(TypeRamp.rowDetail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Space.s3) {
-                        ForEach(filteredRows) { row in
-                            appRow(row)
+                TextField("Filter apps", text: $filterText)
+                    .textFieldStyle(.roundedBorder)
+
+                if filteredRows.isEmpty {
+                    VStack(alignment: .leading, spacing: Space.s1) {
+                        Text(filterText.isEmpty ? "No app can run this tool without asking." : "No apps match “\(filterText)”.")
+                            .font(TypeRamp.rowDetail)
+                            .foregroundStyle(.secondary)
+                        if filterText.isEmpty {
+                            Text("Approve a request with Always Allow to change that.")
+                                .font(TypeRamp.truthNote)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: Space.s3) {
+                            ForEach(filteredRows) { row in
+                                appRow(row)
+                            }
                         }
                     }
                 }

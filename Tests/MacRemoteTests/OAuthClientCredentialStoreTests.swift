@@ -57,6 +57,32 @@ struct OAuthClientCredentialStoreTests {
         #expect(reloadedStore.load() == nil)
     }
 
+    /// A secret the Keychain will not hand over right now (after a rebuild,
+    /// until the owner unlocks it) is still the owner's. Generating, replacing,
+    /// or deleting another credential must leave it listed.
+    @Test func changingOtherCredentialsKeepsALockedOneListed() throws {
+        let suiteName = "MacRemoteTests.OAuthClientCredentialStore.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainSecretStore()
+        let store = OAuthClientCredentialStore(
+            userDefaults: defaults,
+            service: "com.macstories.MacRemote.tests.oauthClientCredentials.\(UUID().uuidString)",
+            keychain: keychain
+        )
+        let locked = try store.generate(label: "Claude")
+        let other = try store.generate(label: "Raycast")
+        keychain.setLocked(true, account: locked.clientID)
+
+        let added = try store.generate(label: "Cursor")
+        let replaced = try #require(try store.rotate(clientID: other.clientID))
+        try store.delete(clientID: added.clientID)
+
+        #expect(store.loadAllDetailed(interactive: false).lockedClientIDs == [locked.clientID])
+        keychain.setLocked(false, account: locked.clientID)
+        #expect(store.loadAll() == [locked, replaced])
+    }
+
     @Test func inMemoryKeychainPersistsAndDeletesByAccount() throws {
         let keychain = InMemoryKeychainSecretStore()
 

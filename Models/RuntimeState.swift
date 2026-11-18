@@ -632,9 +632,11 @@ struct ToolExposureSummary: Equatable, Sendable {
 /// somebody typed into a string.
 struct AppToolPolicySummary: Equatable, Sendable {
     let sharedCount: Int
+    /// Shared tools this app runs without asking: every tool that never asks
+    /// (D79), plus each one that asks first and holds a grant.
     let allowedSharedCount: Int
-    /// Shared tools the catalog marks every-call — the risky set, counted
-    /// whether or not the owner has since granted them.
+    /// Shared tools that ask first and that the catalog marks every-call — the
+    /// risky set, counted whether or not the owner has since granted them.
     let riskySharedCount: Int
     /// Shared tools that really do stop for approval on every run: marked
     /// every-call and holding no grant.
@@ -642,14 +644,26 @@ struct AppToolPolicySummary: Equatable, Sendable {
 
     init(sharedTools: [ToolDefinition], allowedToolIDs: Set<String>) {
         sharedCount = sharedTools.count
-        allowedSharedCount = sharedTools.count { allowedToolIDs.contains($0.id) }
-        let risky = sharedTools.filter { $0.approvalPolicy == .everyCall }
+        allowedSharedCount = sharedTools.count { !$0.asksBeforeRunning || allowedToolIDs.contains($0.id) }
+        let risky = sharedTools.filter { $0.asksBeforeRunning && $0.approvalPolicy == .everyCall }
         riskySharedCount = risky.count
         asksEveryTimeCount = risky.count { !allowedToolIDs.contains($0.id) }
     }
 
-    /// Every shared tool already carries a grant, so the bulk verb has nothing
-    /// left to do and state takes its place. Reachable for any mix of policies —
+    /// The badge's tooltip. It says nothing runs without asking only when no
+    /// shared tool does, read-only ones included.
+    func badgeHelp(clientName: String) -> String {
+        guard asksEveryTimeCount > 0 else {
+            return allowedSharedCount == 0
+                ? "Nothing runs without asking yet. Turn Always Allow on for a tool to change that."
+                : "\(clientName) runs \(allowedSharedCount) of \(counted(sharedCount, "shared tool")) without asking."
+        }
+        let asking = asksEveryTimeCount
+        return "\(counted(asking, "shared tool")) \(asking == 1 ? "asks" : "ask") every time by default. Turning Always Allow on for \(asking == 1 ? "it" : "one of them") stops the asking."
+    }
+
+    /// Every shared tool already runs without asking, so the bulk verb has
+    /// nothing left to do and state takes its place. Reachable for any mix of policies —
     /// an every-call tool holding an explicit grant counts like any other.
     var allSharedToolsAllowed: Bool {
         sharedCount > 0 && allowedSharedCount == sharedCount

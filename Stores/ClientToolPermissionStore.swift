@@ -38,15 +38,27 @@ final class ClientToolPermissionStore: @unchecked Sendable {
         clientTrustID: String,
         tool: ToolDefinition
     ) -> [String: Set<String>] {
-        lock.withLock {
-            let grant = Grant(toolID: tool.id, fingerprint: tool.securityFingerprint)
-            var grants = grantsByClientTrustID[clientTrustID] ?? []
+        setAllowed(isAllowed, clientTrustID: clientTrustID, tools: [tool])
+    }
 
+    /// Grants or revokes several tools for one app and saves once. Every save
+    /// writes every app's grants, so a per-tool loop multiplies that cost.
+    @discardableResult
+    func setAllowed(
+        _ isAllowed: Bool,
+        clientTrustID: String,
+        tools: [ToolDefinition]
+    ) -> [String: Set<String>] {
+        let toolIDs = Set(tools.map(\.id))
+        let newGrants = isAllowed
+            ? tools.map { Grant(toolID: $0.id, fingerprint: $0.securityFingerprint) }
+            : []
+        return lock.withLock {
             // Revoking a semantic tool clears stale generations as well.
-            grants = Set(grants.filter { $0.toolID != tool.id })
-            if isAllowed {
-                grants.insert(grant)
-            }
+            var grants = Set((grantsByClientTrustID[clientTrustID] ?? []).filter {
+                !toolIDs.contains($0.toolID)
+            })
+            grants.formUnion(newGrants)
 
             if grants.isEmpty {
                 grantsByClientTrustID.removeValue(forKey: clientTrustID)
@@ -140,20 +152,26 @@ final class ClientToolPermissionStore: @unchecked Sendable {
     }
 
     func snapshot(matching tools: [ToolDefinition]) -> [String: Set<String>] {
+        snapshot(matching: Self.fingerprintsByToolID(tools))
+    }
+
+    /// The grants that still match each tool's current fingerprint. Callers
+    /// that refresh often pass fingerprints they computed once per tool list.
+    func snapshot(matching fingerprintsByToolID: [String: String]) -> [String: Set<String>] {
         lock.withLock {
-            var result = [String: Set<String>]()
-            for (trustID, grants) in grantsByClientTrustID {
-                let matchingIDs = Set(tools.compactMap { tool in
-                    grants.contains(Grant(toolID: tool.id, fingerprint: tool.securityFingerprint))
-                        ? tool.id
-                        : nil
+            grantsByClientTrustID.compactMapValues { grants in
+                let matchingIDs = Set(grants.compactMap { grant in
+                    fingerprintsByToolID[grant.toolID] == grant.fingerprint ? grant.toolID : nil
                 })
-                if !matchingIDs.isEmpty {
-                    result[trustID] = matchingIDs
-                }
+                return matchingIDs.isEmpty ? nil : matchingIDs
             }
-            return result
         }
+    }
+
+    /// One fingerprint per tool ID. On a duplicate ID the first tool wins, as
+    /// it does when the server looks a tool up.
+    static func fingerprintsByToolID(_ tools: [ToolDefinition]) -> [String: String] {
+        Dictionary(tools.map { ($0.id, $0.securityFingerprint) }, uniquingKeysWith: { first, _ in first })
     }
 
     // MARK: - Persistence
