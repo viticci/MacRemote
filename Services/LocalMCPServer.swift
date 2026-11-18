@@ -179,6 +179,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private let eventHandler: EventHandler?
     private let publicRateLimiter = PublicRequestRateLimiter()
     private let toolExecutionLimiter: ToolExecutionLimiter
+    private let catalogSnapshotCache = CatalogSnapshotCache()
 
     init(
         instanceID: String,
@@ -3315,25 +3316,51 @@ final class LocalMCPServer: @unchecked Sendable {
         // client sends is stale/unsolicited and is ignored (spec: cursors are
         // opaque tokens the server hands out — we hand out none).
         let snapshot = catalogSnapshot()
+        // The tool array was serialized once with the snapshot. A placeholder
+        // holds its place while the small envelope is serialized, then the
+        // bytes go in: the body is identical to serializing it whole.
         let result: [String: Any] = [
-            "tools": snapshot.descriptors,
+            "tools": Self.toolsPlaceholder,
             "_meta": [
                 MCPCatalogMetadata.revisionMetaKey: snapshot.revision
             ]
         ]
-        return jsonRPCResult(id: id, result: result)
+        return jsonRPCResult(
+            id: id,
+            result: result,
+            splicing: (placeholder: Self.toolsPlaceholder, json: snapshot.serializedDescriptors)
+        )
     }
+
+    /// Unguessable, so no client-supplied value (such as a request id) can
+    /// match it.
+    private static let toolsPlaceholder = "macremote-tools-" + UUID().uuidString
 
     private func catalogSnapshot(
         for suppliedTools: [ToolDefinition]? = nil
-    ) -> (tools: [ToolDefinition], descriptors: [[String: Any]], revision: String) {
+    ) -> CatalogSnapshot {
         let supplied = suppliedTools ?? toolProvider()
-        let tools = Self.activeProtocolContext?.isModern == true
-            ? supplied.sorted { $0.id < $1.id }
-            : supplied
+        let isModern = Self.activeProtocolContext?.isModern == true
         let cards = resultCardPreferences()
-        let descriptors = tools.map { toolJSON($0, cards: cards) }
-        return (tools, descriptors, MCPCatalogMetadata.revision(for: descriptors))
+        let key = CatalogSnapshotCache.Key(
+            tools: supplied,
+            cards: cards,
+            isModern: isModern,
+            supportsStandardUI: requestSupportsStandardUI
+        )
+        return catalogSnapshotCache.snapshot(for: key) {
+            let tools = isModern ? supplied.sorted { $0.id < $1.id } : supplied
+            let descriptors = tools.map { toolJSON($0, cards: cards) }
+            return CatalogSnapshot(
+                tools: tools,
+                descriptors: descriptors,
+                revision: MCPCatalogMetadata.revision(for: descriptors),
+                serializedDescriptors: (try? JSONSerialization.checkedData(
+                    withJSONObject: descriptors,
+                    options: [.sortedKeys, .withoutEscapingSlashes]
+                )) ?? Data("[]".utf8)
+            )
+        }
     }
 
     /// Whether `tool` links the result card: the catalog allows one and the
@@ -3638,7 +3665,12 @@ final class LocalMCPServer: @unchecked Sendable {
         return annotations
     }
 
-    private func jsonRPCResult(id: Any?, result: [String: Any], status: HTTPResponse.Status = .ok) -> Data {
+    private func jsonRPCResult(
+        id: Any?,
+        result: [String: Any],
+        status: HTTPResponse.Status = .ok,
+        splicing splice: (placeholder: String, json: Data)? = nil
+    ) -> Data {
         var result = result
         if let context = Self.activeProtocolContext, context.isModern {
             if result["resultType"] == nil {
@@ -3656,7 +3688,7 @@ final class LocalMCPServer: @unchecked Sendable {
             "jsonrpc": "2.0",
             "id": jsonID(id),
             "result": result
-        ], status: status, headers: mcpResponseHeaders())
+        ], status: status, headers: mcpResponseHeaders(), splicing: splice)
     }
 
     private func jsonRPCError(
@@ -3738,15 +3770,21 @@ final class LocalMCPServer: @unchecked Sendable {
         ], status: status, headers: headers)
     }
 
+    /// `splice` replaces the JSON string `placeholder` in the serialized
+    /// body with already-serialized JSON.
     private func jsonResponse(
         _ object: [String: Any],
         status: HTTPResponse.Status = .ok,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        splicing splice: (placeholder: String, json: Data)? = nil
     ) -> Data {
-        let data = (try? JSONSerialization.checkedData(
+        var data = (try? JSONSerialization.checkedData(
             withJSONObject: object,
             options: [.sortedKeys, .withoutEscapingSlashes]
         )) ?? Data()
+        if let splice, let range = data.range(of: Data("\"\(splice.placeholder)\"".utf8)) {
+            data.replaceSubrange(range, with: splice.json)
+        }
         var responseHeaders = headers
         responseHeaders["Content-Type"] = "application/json; charset=utf-8"
         return HTTPResponse(
@@ -3996,6 +4034,51 @@ enum LocalMCPServerError: LocalizedError {
 /// One-shot rendezvous between NWListener's state queue and the thread
 /// waiting in `start()`: first resolution wins, later state changes are
 /// ignored (a listener can go `.ready` and later `.cancelled`).
+/// The published tool list and its revision for one catalog.
+struct CatalogSnapshot: @unchecked Sendable {
+    let tools: [ToolDefinition]
+    let descriptors: [[String: Any]]
+    let revision: String
+    /// `descriptors` as the JSON array tools/list sends.
+    let serializedDescriptors: Data
+}
+
+/// Builds each tools/list catalog once. A descriptor depends only on the
+/// tools, the owner's card choice, and the client's protocol era and MCP Apps
+/// support, so those four values are the key; a change to any of them builds
+/// a fresh snapshot on the very next request. Comparing the tool arrays is
+/// cheap: the provider hands back the same stored array until it changes.
+private final class CatalogSnapshotCache: @unchecked Sendable {
+    struct Key: Equatable {
+        let tools: [ToolDefinition]
+        let cards: ResultCardPreferences
+        let isModern: Bool
+        let supportsStandardUI: Bool
+    }
+
+    /// One entry per client shape seen recently (legacy, modern, with or
+    /// without MCP Apps).
+    private static let capacity = 4
+    private let lock = NSLock()
+    private var entries: [(key: Key, snapshot: CatalogSnapshot)] = []
+
+    func snapshot(for key: Key, build: () -> CatalogSnapshot) -> CatalogSnapshot {
+        lock.lock()
+        if let hit = entries.first(where: { $0.key == key }) {
+            lock.unlock()
+            return hit.snapshot
+        }
+        lock.unlock()
+        let snapshot = build()
+        lock.lock()
+        entries.removeAll { $0.key.isModern == key.isModern && $0.key.supportsStandardUI == key.supportsStandardUI }
+        entries.append((key, snapshot))
+        if entries.count > Self.capacity { entries.removeFirst() }
+        lock.unlock()
+        return snapshot
+    }
+}
+
 private final class ListenerReadyGate: @unchecked Sendable {
     enum Outcome {
         case ready
