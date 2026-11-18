@@ -208,19 +208,8 @@ private struct AppCard: View {
                 systemImage: "checkmark.shield",
                 tint: policySummary.allowedSharedCount == 0 ? .secondary : .green
             )
-            .help(badgeHelp)
+            .help(policySummary.badgeHelp(clientName: client.name))
         }
-    }
-
-    private var badgeHelp: String {
-        let summary = policySummary
-        guard summary.asksEveryTimeCount > 0 else {
-            return summary.allowedSharedCount == 0
-                ? "Nothing runs without asking yet. Turn Always Allow on for a tool to change that."
-                : "\(client.name) runs \(summary.allowedSharedCount) of \(counted(summary.sharedCount, "shared tool")) without asking."
-        }
-        let asking = summary.asksEveryTimeCount
-        return "\(counted(asking, "shared tool")) \(asking == 1 ? "asks" : "ask") every time by default. Turning Always Allow on for \(asking == 1 ? "it" : "one of them") stops the asking."
     }
 
     private var firstConnected: String {
@@ -546,7 +535,7 @@ private struct CategoryPolicySection: View {
                     Button("Revoke All in \(category.title)") {
                         setCategoryAllowed(false)
                     }
-                    .disabled(allowedCount == 0)
+                    .disabled(!holdsGrantInCategory)
                 }
                 .fixedSize()
                 .controlSize(.small)
@@ -577,14 +566,22 @@ private struct CategoryPolicySection: View {
         }
     }
 
+    /// Tools in this category the app runs without asking: read-only ones
+    /// never ask (D79), the others once granted.
     private var allowedCount: Int {
-        categoryTools.count { appModel.isToolAlwaysAllowed(toolID: $0.id, clientID: client.id) }
+        categoryTools.count {
+            !$0.asksBeforeRunning || appModel.isToolAlwaysAllowed(toolID: $0.id, clientID: client.id)
+        }
+    }
+
+    private var holdsGrantInCategory: Bool {
+        categoryTools.contains { appModel.isToolAlwaysAllowed(toolID: $0.id, clientID: client.id) }
     }
 
     /// Tools in this category that ask every time by default. A bulk verb that
     /// would sweep one of them up says so before it runs.
     private var riskyCount: Int {
-        categoryTools.count { $0.approvalPolicy == .everyCall }
+        categoryTools.count { $0.asksBeforeRunning && $0.approvalPolicy == .everyCall }
     }
 
     private func setCategoryAllowed(_ isAllowed: Bool) {
@@ -626,7 +623,7 @@ private struct ToolPolicyRow: View {
                     StateChip(capability: tool.capability)
                     // The chip states what happens now, not what the catalog
                     // once decided: granting this tool retires it.
-                    if tool.approvalPolicy == .everyCall, !isAllowed {
+                    if tool.asksBeforeRunning, tool.approvalPolicy == .everyCall, !isAllowed {
                         StateChip("Asks Every Time", systemImage: "hand.raised.fill", role: .attention)
                     }
                     if !appModel.isToolExposed(tool) {
@@ -641,26 +638,34 @@ private struct ToolPolicyRow: View {
 
             Spacer()
 
-            Toggle(
-                "Always Allow",
-                isOn: Binding(
-                    get: { isGrantPending || isAllowed },
-                    set: { shouldAllow in
-                        guard shouldAllow else {
-                            setAllowed(false)
-                            return
+            if tool.asksBeforeRunning {
+                Toggle(
+                    "Always Allow",
+                    isOn: Binding(
+                        get: { isGrantPending || isAllowed },
+                        set: { shouldAllow in
+                            guard shouldAllow else {
+                                setAllowed(false)
+                                return
+                            }
+                            guard consequence != nil else {
+                                setAllowed(true)
+                                return
+                            }
+                            isGrantPending = true
+                            isConfirmingAlwaysAllow = true
                         }
-                        guard consequence != nil else {
-                            setAllowed(true)
-                            return
-                        }
-                        isGrantPending = true
-                        isConfirmingAlwaysAllow = true
-                    }
+                    )
                 )
-            )
-            .toggleStyle(.switch)
-            .help(consequence ?? "Turn this on and \(client.name) runs \(tool.name) without asking.")
+                .toggleStyle(.switch)
+                .help(consequence ?? "Turn this on and \(client.name) runs \(tool.name) without asking.")
+            } else {
+                // D79: a read-only tool never asks, so a switch would change nothing.
+                Text("Runs without asking")
+                    .font(TypeRamp.rowDetail)
+                    .foregroundStyle(.secondary)
+                    .help("Read-only tools never ask, so \(client.name) runs \(tool.name) without asking.")
+            }
         }
         .padding(.vertical, Space.s2)
         .confirmationDialog(

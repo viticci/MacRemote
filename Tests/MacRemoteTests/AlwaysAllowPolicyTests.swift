@@ -70,6 +70,20 @@ struct AlwaysAllowPolicyTests {
         #expect(summary.badgeText == "1/1 Always Allowed")
     }
 
+    /// D79 — a read-only tool never asks, grant or not, so it has no switch and
+    /// counts as running without asking. The tooltip must not claim nothing does.
+    @Test func toolsThatNeverAskCountAsRunningWithoutAsking() {
+        let tools = [
+            policyTool(id: "read", approvalPolicy: .standard, capability: .readOnly),
+            policyTool(id: "write", approvalPolicy: .standard)
+        ]
+        let summary = AppToolPolicySummary(sharedTools: tools, allowedToolIDs: [])
+
+        #expect(summary.allowedSharedCount == 1)
+        #expect(summary.badgeText == "1/2 Always Allowed")
+        #expect(summary.badgeHelp(clientName: "Claude") == "Claude runs 1 of 2 shared tools without asking.")
+    }
+
     // MARK: - AlwaysAllowConsequence
 
     @Test func standardToolKeepsTheOrdinaryCaption() {
@@ -308,7 +322,8 @@ private func policyTool(
     name: String = "Tool",
     executablePath: String = "/bin/echo",
     argumentPattern: [String] = ["run"],
-    approvalPolicy: ToolApprovalPolicy
+    approvalPolicy: ToolApprovalPolicy,
+    capability: ToolCapability = .destructive
 ) -> ToolDefinition {
     ToolDefinition(
         id: id,
@@ -320,7 +335,7 @@ private func policyTool(
         parameters: argumentPattern == ["{args}"]
             ? [ToolParameter(name: "args", title: "Arguments", kind: .stringArray, required: false)]
             : [],
-        capability: .destructive,
+        capability: capability,
         timeoutSeconds: 10,
         outputByteLimit: 1_024,
         origin: .userDefined,
