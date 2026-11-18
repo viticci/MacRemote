@@ -88,7 +88,10 @@ private final class MCPClientSuppliedIconStore: @unchecked Sendable {
 
 /// `tools/call` requests still running, by the calling app's client ID and the
 /// request's JSON-RPC id, so the app's `notifications/cancelled` can stop its
-/// own call. A notice from any other app finds nothing.
+/// own call. A notice from any other app finds nothing. One client ID can
+/// serve several conversations at once (Claude.ai does), and the server has
+/// no sessions to tell them apart, so a notice that matches more than one
+/// running call cancels none of them.
 private final class InFlightToolCallStore: @unchecked Sendable {
     private struct Key: Hashable {
         let clientID: String
@@ -96,17 +99,18 @@ private final class InFlightToolCallStore: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var calls = [Key: (token: UUID, task: Task<Data, Never>)]()
+    private var calls = [Key: [(token: UUID, task: Task<Data, Never>)]]()
 
     /// Waits for `task`, which can be cancelled by its id while it runs.
     func track(_ task: Task<Data, Never>, clientID: String, requestID: Any?) async -> Data {
         guard let requestID = Self.requestKey(requestID) else { return await task.value }
         let key = Key(clientID: clientID, requestID: requestID)
         let token = UUID()
-        lock.withLock { calls[key] = (token, task) }
+        lock.withLock { calls[key, default: []].append((token, task)) }
         defer {
             lock.withLock {
-                if calls[key]?.token == token { calls[key] = nil }
+                calls[key]?.removeAll { $0.token == token }
+                if calls[key]?.isEmpty == true { calls[key] = nil }
             }
         }
         return await task.value
@@ -114,8 +118,9 @@ private final class InFlightToolCallStore: @unchecked Sendable {
 
     func cancel(clientID: String, requestID: Any?) {
         guard let requestID = Self.requestKey(requestID) else { return }
-        let task = lock.withLock { calls[Key(clientID: clientID, requestID: requestID)]?.task }
-        task?.cancel()
+        let matches = lock.withLock { calls[Key(clientID: clientID, requestID: requestID)] ?? [] }
+        guard matches.count == 1 else { return }
+        matches[0].task.cancel()
     }
 
     /// A JSON-RPC id is a string or a number, and `"1"` is not `1`.

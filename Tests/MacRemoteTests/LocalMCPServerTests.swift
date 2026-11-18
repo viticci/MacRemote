@@ -2328,6 +2328,67 @@ struct LocalMCPServerTests {
         #expect(!toolApprovals.approve(requestID: approval.id))
     }
 
+    /// Two conversations of one app can send the same request id at once.
+    /// The notice cannot say which call it means, so neither is cancelled.
+    @Test func aCancelNoticeThatMatchesTwoCallsCancelsNeither() async throws {
+        let coordinator = OAuthCoordinator()
+        let toolApprovals = ToolCallApprovalCoordinator(timeoutSeconds: 30)
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [
+                ToolDefinition(
+                    id: "test_write",
+                    name: "Write",
+                    summary: "Writes.",
+                    executablePath: "/bin/echo",
+                    argumentPattern: [],
+                    parameters: [],
+                    capability: .write,
+                    timeoutSeconds: 2,
+                    outputByteLimit: 1024
+                )
+            ],
+            authCoordinator: coordinator,
+            toolCallApprovalCoordinator: toolApprovals,
+            toolExecutor: FakeToolExecutor()
+        )
+        let port = try server.start()
+        defer { server.stop() }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let endpoint = base.appendingPathComponent("mcp/test-instance")
+        try await waitForServerReady(base: base)
+        let accessToken = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+        @Sendable func post(_ method: String) async throws -> Int {
+            var body: [String: Any] = ["jsonrpc": "2.0", "method": method]
+            if method == "tools/call" {
+                body["id"] = 7
+                body["params"] = ["name": "test_write", "arguments": [String: Any]()]
+            } else {
+                body["params"] = ["requestId": 7, "reason": "user"]
+            }
+            return try await postJSON(
+                url: endpoint,
+                bearerToken: accessToken,
+                headers: ["MCP-Protocol-Version": "2025-11-25"],
+                body: body
+            ).statusCode
+        }
+        let first = Task { _ = try await post("tools/call") }
+        let second = Task { _ = try await post("tools/call") }
+        defer { first.cancel(); second.cancel() }
+        var pending = 0
+        for _ in 0..<250 where pending < 2 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            pending = toolApprovals.approvalSnapshot().filter { $0.state == .pending }.count
+        }
+        #expect(pending == 2)
+
+        #expect(try await post("notifications/cancelled") == 202)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(toolApprovals.approvalSnapshot().filter { $0.state == .pending }.count == 2)
+    }
+
     /// The owner must never be asked to approve a call that cannot run: the
     /// write below names a protected folder and is refused with no prompt.
     @Test func aCallThatCannotRunIsRefusedBeforeAnyApprovalPrompt() async throws {
