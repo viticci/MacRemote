@@ -115,7 +115,7 @@ enum CLIScanState: Equatable, Sendable {
 | Homebrew catalog index | mtime of `formula.jws.json` (rebuild the derived index only then) |
 | npm | mtime of `/opt/homebrew/lib/node_modules` |
 | Python | mtime of `~/.local/share/uv/tools`, pipx venvs dir, each `~/Library/Python/*/bin` |
-| Loose dirs | mtime + count of `~/bin`, `~/.local/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/go/bin` |
+| Loose dirs | mtime + count of `~/bin`, `~/.local/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/go/bin`, plus the Homebrew bin folders, because this source also reads the app links and loose files Homebrew's folders hold |
 
 Every source fingerprint includes a scanner-policy revision. Changing eligibility, trust, or filtering rules bumps that revision so the next user-initiated scan re-evaluates cached candidates once instead of reusing rows produced by older policy.
 

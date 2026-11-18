@@ -292,7 +292,9 @@ struct LocalCLIScanner: Sendable {
         case .go:
             sourceFingerprint = directoryStamp(goBinDirectory)
         case .pathFolders:
-            sourceFingerprint = pathFolderDirectories
+            // Homebrew's folders count too: this source reads the tools
+            // Homebrew links in from outside its own folders.
+            sourceFingerprint = (brewBinDirectories + pathFolderDirectories)
                 .map { directory in
                     ((directory as NSString).lastPathComponent) + "=" + directoryStamp(directory)
                 }
@@ -456,7 +458,6 @@ struct LocalCLIScanner: Sendable {
         let previousNewnessScopes: Set<String>
         let now: @Sendable () -> Date
         var mintedIDs = Set<String>()
-        var deferredPathEntries = [String]()
 
         func checkInterrupt() throws {
             if isCancelled() || Task.isCancelled {
@@ -852,7 +853,7 @@ struct LocalCLIScanner: Sendable {
                 case .nodeModules:
                     continue   // the npm source reads the package manifests
                 case .uvTool, .pipxVenv, .appBundle, .file:
-                    context.deferredPathEntries.append(route.stablePath)
+                    continue   // not Homebrew's: the PATH source reads these
                 }
             }
         }
@@ -1400,8 +1401,24 @@ struct LocalCLIScanner: Sendable {
     // MARK: PATH folders + app-vended symlinks (spec §2.5, DL-17)
 
     private func scanPathFolders(context: inout ScanContext) throws -> [DiscoveredCLICandidate] {
-        var stablePaths = context.deferredPathEntries
-        context.deferredPathEntries = []
+        // Homebrew's folders also hold links to app bundles and loose files
+        // that Homebrew did not install. They are PATH tools, read here on
+        // every PATH scan, so they never depend on a Homebrew rescan.
+        var stablePaths = [String]()
+        for directory in brewBinDirectories {
+            guard fileReader.fileExists(atPath: directory), fileReader.isLocalVolume(atPath: directory) else {
+                continue
+            }
+            for entry in cappedEntries(of: directory) {
+                try context.checkInterrupt()
+                switch route(directory + "/" + entry)?.kind {
+                case .appBundle?, .file?:
+                    stablePaths.append(directory + "/" + entry)
+                default:
+                    continue
+                }
+            }
+        }
         for directory in pathFolderDirectories {
             guard fileReader.fileExists(atPath: directory), fileReader.isLocalVolume(atPath: directory) else {
                 continue
