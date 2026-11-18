@@ -95,7 +95,7 @@ private final class MCPClientSuppliedIconStore: @unchecked Sendable {
 private final class InFlightToolCallStore: @unchecked Sendable {
     private struct Key: Hashable {
         let clientID: String
-        let requestID: String
+        let requestID: [UInt8]
     }
 
     private let lock = NSLock()
@@ -123,13 +123,15 @@ private final class InFlightToolCallStore: @unchecked Sendable {
         matches[0].task.cancel()
     }
 
-    /// A JSON-RPC id is a string or a number, and `"1"` is not `1`.
-    private static func requestKey(_ id: Any?) -> String? {
+    /// A JSON-RPC id is a string or a number, and `"1"` is not `1`. Strings
+    /// compare by their bytes: Swift calls `"cafe\u{301}"` and `"café"` equal,
+    /// but they are different ids.
+    private static func requestKey(_ id: Any?) -> [UInt8]? {
         switch id {
         case let string as String:
-            return "s:" + string
+            return Array("s:".utf8) + Array(string.utf8)
         case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
-            return "n:" + number.stringValue
+            return Array("n:".utf8) + Array(number.stringValue.utf8)
         default:
             return nil
         }

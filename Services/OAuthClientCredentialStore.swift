@@ -238,6 +238,29 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         }
     }
 
+    /// For a store that holds one credential at a time (the Single Header
+    /// token): saves a new credential, then removes every other one, readable
+    /// or locked. If the new secret cannot be saved, nothing changes, so the
+    /// old credential stays listed and recoverable.
+    func replaceAll(label: String) throws -> OAuthClientCredentials {
+        let previous = loadMetadata() ?? []
+        let credential = OAuthClientCredentials(
+            label: Self.normalizedLabel(label, existingLabels: []),
+            clientID: "macremote-oauth-\(try Self.randomToken(byteCount: 18))",
+            clientSecret: try Self.randomToken(byteCount: 36),
+            createdAt: Date()
+        )
+        try writeSecret(credential.clientSecret, account: credential.clientID)
+        for item in previous where item.clientID != credential.clientID {
+            deleteSecret(account: item.clientID)
+        }
+        deleteSecret(account: legacyAccount)
+        userDefaults.removeObject(forKey: legacyClientIDDefaultsKey)
+        userDefaults.removeObject(forKey: legacyCreatedAtDefaultsKey)
+        saveListed([Metadata(credential)])
+        return credential
+    }
+
     func clear() {
         for item in loadMetadata() ?? [] {
             deleteSecret(account: item.clientID)

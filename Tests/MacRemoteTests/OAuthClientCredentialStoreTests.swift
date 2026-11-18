@@ -98,3 +98,44 @@ struct OAuthClientCredentialStoreTests {
         #expect(try keychain.read(account: "two", interactive: false) == "second")
     }
 }
+
+/// Writes fail while `unavailable` is set, the way a locked Keychain refuses.
+private final class RefusingKeychain: KeychainSecretStoring, @unchecked Sendable {
+    let inner = InMemoryKeychainSecretStore()
+    var unavailable = false
+
+    func read(account: String, interactive: Bool) throws -> String {
+        try inner.read(account: account, interactive: interactive)
+    }
+
+    func write(_ secret: String, account: String) throws {
+        if unavailable { throw KeychainSecretStoreError.keychain(errSecInteractionNotAllowed) }
+        try inner.write(secret, account: account)
+    }
+
+    func delete(account: String) {
+        inner.delete(account: account)
+    }
+}
+
+extension OAuthClientCredentialStoreTests {
+    /// The Single Header token is replaced, never listed beside the old one,
+    /// and a replacement the Keychain refuses leaves the old token in place.
+    @Test func replaceAllKeepsTheOldCredentialUntilTheNewOneIsSaved() throws {
+        let suiteName = "MacRemoteTests.OAuthClientCredentialStore.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = RefusingKeychain()
+        let store = OAuthClientCredentialStore(userDefaults: defaults, service: suiteName, keychain: keychain)
+        let old = try store.generate(label: "Connector Header Token")
+
+        keychain.unavailable = true
+        #expect(throws: (any Error).self) { try store.replaceAll(label: "Connector Header Token") }
+        #expect(store.loadAll() == [old])
+
+        keychain.unavailable = false
+        let new = try store.replaceAll(label: "Connector Header Token")
+        #expect(store.loadAll() == [new])
+        #expect((try? keychain.read(account: old.clientID, interactive: false)) == nil)
+    }
+}

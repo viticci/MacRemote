@@ -1198,9 +1198,9 @@ final class AppModel {
     private func generateConnectorHeaderToken() {
         do {
             // One token at a time: a new token replaces one the Keychain will
-            // not hand over, instead of being listed beside it.
-            connectorHeaderTokenStore.clear()
-            connectorHeaderToken = try connectorHeaderTokenStore.generate(label: "Connector Header Token")
+            // not hand over, instead of being listed beside it. The old one is
+            // removed only after the new one is saved.
+            connectorHeaderToken = try connectorHeaderTokenStore.replaceAll(label: "Connector Header Token")
             appendLog(level: .info, "Generated the Single Header sign-in token.")
         } catch {
             appendLog(level: .error, "Could not generate the Single Header token: \(error.localizedDescription)")
@@ -1208,8 +1208,6 @@ final class AppModel {
     }
 
     func rotateConnectorHeaderToken() {
-        connectorHeaderTokenStore.clear()
-        connectorHeaderToken = nil
         generateConnectorHeaderToken()
         syncConnectorHeaderToken()
         appendLog(level: .warning, "Rotated the Single Header token — update any app that still sends the old one.")
