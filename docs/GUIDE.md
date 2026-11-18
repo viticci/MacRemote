@@ -327,7 +327,9 @@ switch: each MCP server (such as RemCTL), each of my command-line apps (such as
 PocketCTL), File Transfer, and other command-line tools grouped by program.
 With a card off, the app gets the same result as plain text; sharing and
 approvals don't change. A tool's inspector shows its **Result Card** state.
-Apps pick up a change the next time they reload MacRemote's tools.
+Apps pick up a change the next time they reload MacRemote's tools; in ChatGPT,
+choose **Refresh** on MacRemote's page in its settings. A card an app still
+links from an older tool list draws nothing once you turn it off.
 
 ### Approvals
 
