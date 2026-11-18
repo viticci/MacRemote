@@ -1105,6 +1105,33 @@ struct LocalCLIScannerTests {
         #expect(third.candidates.first { $0.binaryName == "actually-new" }?.isNewSinceLastScan == true)
     }
 
+    /// Homebrew links some tools in from outside its own folders (app
+    /// bundles, loose files). Those are PATH tools, and a rescan where only
+    /// one of the two sources changed must neither drop them nor miss new ones.
+    @Test func homebrewLinkedPATHToolsSurviveARescanOfEitherSource() async throws {
+        let mac = try FakeMac()
+        defer { mac.destroy() }
+        try mac.writeExecutable(mac.brewPrefix + "/bin/linked-tool")
+        try mac.writeExecutable(mac.home + "/bin/oldie")
+
+        let scanner = mac.scanner()
+        let first = await scanner.scan()
+        #expect(first.candidates.contains { $0.binaryName == "linked-tool" })
+
+        // Only a PATH folder changed.
+        try mac.writeExecutable(mac.home + "/bin/newbie")
+        let second = await scanner.scan(previousCache: CLIScanCache(result: first))
+        let kept = second.candidates.first { $0.binaryName == "linked-tool" }
+        #expect(kept != nil)
+        #expect(kept?.isNewSinceLastScan == false)
+
+        // Only Homebrew's folder changed.
+        try mac.writeExecutable(mac.brewPrefix + "/bin/newly-linked")
+        let third = await scanner.scan(previousCache: CLIScanCache(result: second))
+        #expect(third.candidates.contains { $0.binaryName == "newly-linked" })
+        #expect(third.candidates.contains { $0.binaryName == "linked-tool" })
+    }
+
     @Test func unchangedFingerprintsReuseCachedCandidates() async throws {
         let mac = try FakeMac()
         defer { mac.destroy() }

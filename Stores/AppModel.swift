@@ -5455,26 +5455,74 @@ protocol ToolProvenanceInspecting: Sendable {
 /// A stat, a streaming hash, and the scanner's static signature reader —
 /// `SecStaticCode*` parses `LC_CODE_SIGNATURE` on disk and never runs the
 /// binary (spec §2.1/R16).
+///
+/// This runs before every call, and hashing a large binary takes 40–230 ms,
+/// so the result is kept per path while the file's device, inode, size,
+/// modification time, and status-change time stay the same. Writing or
+/// replacing the file changes at least one of them, and the status-change
+/// time cannot be set back, so a changed binary is always read again.
 struct SecStaticCodeProvenanceInspector: ToolProvenanceInspecting {
     private let signatureReader: any SignatureReading
+    private let cache = IdentityCache()
 
     init(signatureReader: any SignatureReading = CodeSignatureReader()) {
         self.signatureReader = signatureReader
     }
 
     func currentIdentity(forExecutableAt path: String) -> ToolBinaryIdentity? {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
-              !isDirectory.boolValue,
-              let contentSHA256 = sha256Hex(ofFileAt: path) else {
+        // Taken before the hash, so a change during the hash shows up as a
+        // different stamp on the next call.
+        var status = stat()
+        guard stat(path, &status) == 0, (status.st_mode & S_IFMT) != S_IFDIR else {
             return nil
         }
-        return ToolBinaryIdentity(
+        let stamp = FileStamp(status)
+        if let cached = cache.identity(forPath: path, stamp: stamp) {
+            return cached
+        }
+        guard let contentSHA256 = sha256Hex(ofFileAt: path) else {
+            return nil
+        }
+        let identity = ToolBinaryIdentity(
             signingIdentity: ToolProvenance.signingIdentityDescription(
                 for: signatureReader.signatureTrust(atPath: path)
             ),
             contentSHA256: contentSHA256
         )
+        cache.store(identity, forPath: path, stamp: stamp)
+        return identity
+    }
+
+    private struct FileStamp: Equatable {
+        let device: dev_t
+        let inode: ino_t
+        let size: off_t
+        let modified: [Int]
+        let statusChanged: [Int]
+
+        init(_ status: stat) {
+            device = status.st_dev
+            inode = status.st_ino
+            size = status.st_size
+            modified = [status.st_mtimespec.tv_sec, status.st_mtimespec.tv_nsec]
+            statusChanged = [status.st_ctimespec.tv_sec, status.st_ctimespec.tv_nsec]
+        }
+    }
+
+    private final class IdentityCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: (stamp: FileStamp, identity: ToolBinaryIdentity)] = [:]
+
+        func identity(forPath path: String, stamp: FileStamp) -> ToolBinaryIdentity? {
+            lock.withLock {
+                guard let entry = entries[path], entry.stamp == stamp else { return nil }
+                return entry.identity
+            }
+        }
+
+        func store(_ identity: ToolBinaryIdentity, forPath path: String, stamp: FileStamp) {
+            lock.withLock { entries[path] = (stamp, identity) }
+        }
     }
 
     private func sha256Hex(ofFileAt path: String) -> String? {

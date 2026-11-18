@@ -14,6 +14,8 @@ struct ToolExecutionOutcome: Sendable, Equatable {
     let stdoutBytesAreValidUTF8: Bool
     let stdoutPreservationError: String?
     let upstreamMCPResult: MCPBridgeUpstreamResultContext?
+    /// Set when a signal killed the tool; see `CommandRunResult`.
+    let terminationSignal: Int32?
 
     init(
         toolID: String,
@@ -28,7 +30,8 @@ struct ToolExecutionOutcome: Sendable, Equatable {
         stdoutSpool: ProcessOutputSpool? = nil,
         stdoutBytesAreValidUTF8: Bool = true,
         stdoutPreservationError: String? = nil,
-        upstreamMCPResult: MCPBridgeUpstreamResultContext? = nil
+        upstreamMCPResult: MCPBridgeUpstreamResultContext? = nil,
+        terminationSignal: Int32? = nil
     ) {
         self.toolID = toolID
         self.toolName = toolName
@@ -43,6 +46,7 @@ struct ToolExecutionOutcome: Sendable, Equatable {
         self.stdoutBytesAreValidUTF8 = stdoutBytesAreValidUTF8
         self.stdoutPreservationError = stdoutPreservationError
         self.upstreamMCPResult = upstreamMCPResult
+        self.terminationSignal = terminationSignal
     }
 
     var succeeded: Bool {
@@ -209,7 +213,8 @@ struct ConfiguredToolExecutor: ToolExecuting {
                         truncatedStderr: preflight.truncatedStderr,
                         stdoutSpool: preflight.stdoutSpool,
                         stdoutBytesAreValidUTF8: preflight.stdoutBytesAreValidUTF8,
-                        stdoutPreservationError: preflight.stdoutPreservationError
+                        stdoutPreservationError: preflight.stdoutPreservationError,
+                        terminationSignal: preflight.terminationSignal
                     )
                 }
             }
@@ -234,7 +239,8 @@ struct ConfiguredToolExecutor: ToolExecuting {
                 truncatedStderr: result.truncatedStderr,
                 stdoutSpool: result.stdoutSpool,
                 stdoutBytesAreValidUTF8: result.stdoutBytesAreValidUTF8,
-                stdoutPreservationError: result.stdoutPreservationError
+                stdoutPreservationError: result.stdoutPreservationError,
+                terminationSignal: result.terminationSignal
             )
         } catch ProcessRunnerError.executableUnavailable {
             // Preserve the path internally for registry recovery while the MCP

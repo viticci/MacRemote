@@ -40,6 +40,27 @@ struct MCPBridgeArgumentCoercionTests {
         #expect(MCPBridgeArgumentCoercion.coerce(["a": "1"], toSchema: nil)["a"] as? String == "1")
     }
 
+    /// RemCTL's `set_completion` takes `{"reminder_ids":[12,34]}`. The server
+    /// parses array items to strings, so the items must go back to integers.
+    @Test("Array items become the scalar the schema's items declare")
+    func arrayItemsToScalars() throws {
+        let schema: JSONValue = .object([
+            "type": .string("object"),
+            "properties": .object([
+                "reminder_ids": .object([
+                    "type": .string("array"),
+                    "items": .object(["type": .string("integer")])
+                ])
+            ])
+        ])
+        let parsed = try #require(ToolArgumentValue.fromJSONObject([12, 34]))
+        let coerced = MCPBridgeArgumentCoercion.coerce(
+            ["reminder_ids": parsed.jsonValue.anyValue],
+            toSchema: schema
+        )
+        #expect(coerced["reminder_ids"] as? [Int64] == [12, 34])
+    }
+
     @Test("Already typed values are never rewritten")
     func typedValuesStay() {
         let coerced = MCPBridgeArgumentCoercion.coerce(

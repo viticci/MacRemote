@@ -86,6 +86,51 @@ private final class MCPClientSuppliedIconStore: @unchecked Sendable {
     }
 }
 
+/// `tools/call` requests still running, by the calling app's client ID and the
+/// request's JSON-RPC id, so the app's `notifications/cancelled` can stop its
+/// own call. A notice from any other app finds nothing.
+private final class InFlightToolCallStore: @unchecked Sendable {
+    private struct Key: Hashable {
+        let clientID: String
+        let requestID: String
+    }
+
+    private let lock = NSLock()
+    private var calls = [Key: (token: UUID, task: Task<Data, Never>)]()
+
+    /// Waits for `task`, which can be cancelled by its id while it runs.
+    func track(_ task: Task<Data, Never>, clientID: String, requestID: Any?) async -> Data {
+        guard let requestID = Self.requestKey(requestID) else { return await task.value }
+        let key = Key(clientID: clientID, requestID: requestID)
+        let token = UUID()
+        lock.withLock { calls[key] = (token, task) }
+        defer {
+            lock.withLock {
+                if calls[key]?.token == token { calls[key] = nil }
+            }
+        }
+        return await task.value
+    }
+
+    func cancel(clientID: String, requestID: Any?) {
+        guard let requestID = Self.requestKey(requestID) else { return }
+        let task = lock.withLock { calls[Key(clientID: clientID, requestID: requestID)]?.task }
+        task?.cancel()
+    }
+
+    /// A JSON-RPC id is a string or a number, and `"1"` is not `1`.
+    private static func requestKey(_ id: Any?) -> String? {
+        switch id {
+        case let string as String:
+            return "s:" + string
+        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
+            return "n:" + number.stringValue
+        default:
+            return nil
+        }
+    }
+}
+
 enum LocalMCPServerEvent: Sendable {
     case log(AppLogEntry.Level, String)
     case approvalsChanged([ApprovalRequest])
@@ -171,6 +216,7 @@ final class LocalMCPServer: @unchecked Sendable {
     private let authCoordinator: OAuthCoordinator
     private let legacyClientCapabilityStore = LegacyMCPClientCapabilityStore()
     private let clientSuppliedIconStore = MCPClientSuppliedIconStore()
+    private let inFlightToolCalls = InFlightToolCallStore()
     private let toolCallApprovalCoordinator: ToolCallApprovalCoordinator?
     private let toolExecutor: any ToolExecuting
     private let clientToolPermissionStore: ClientToolPermissionStore?
@@ -1218,7 +1264,11 @@ final class LocalMCPServer: @unchecked Sendable {
             return toolsList(id: id, message: message)
         case "tools/call":
             return await callTool(id: id, message: message, client: client, base: base)
-        case "notifications/initialized", "notifications/cancelled":
+        case "notifications/cancelled":
+            let params = message["params"] as? [String: Any]
+            inFlightToolCalls.cancel(clientID: client.clientID, requestID: params?["requestId"])
+            return HTTPResponse(status: .accepted, headers: mcpResponseHeaders(), body: "").data
+        case "notifications/initialized":
             return HTTPResponse(status: .accepted, headers: mcpResponseHeaders(), body: "").data
         default:
             if method.hasPrefix("notifications/") {
@@ -1806,7 +1856,34 @@ final class LocalMCPServer: @unchecked Sendable {
         case jsonRPCError(code: Int, message: String, data: [String: Any]?)
     }
 
+    /// A parsed JSON-RPC request. Nothing changes it after parsing, so it can
+    /// be handed to the task that runs the call.
+    private struct ParsedRequest: @unchecked Sendable {
+        let id: Any?
+        let message: [String: Any]
+    }
+
+    /// Runs the call in its own task, so the app's `notifications/cancelled`
+    /// stops it the same way a closed connection does: a waiting approval
+    /// expires and a running tool is stopped.
     private func callTool(
+        id: Any?,
+        message: [String: Any],
+        client: AuthenticatedClientContext,
+        base: String
+    ) async -> Data {
+        let request = ParsedRequest(id: id, message: message)
+        let call = Task {
+            await self.runToolCall(id: request.id, message: request.message, client: client, base: base)
+        }
+        return await withTaskCancellationHandler {
+            await inFlightToolCalls.track(call, clientID: client.clientID, requestID: request.id)
+        } onCancel: {
+            call.cancel()
+        }
+    }
+
+    private func runToolCall(
         id: Any?,
         message: [String: Any],
         client: AuthenticatedClientContext,
@@ -2186,6 +2263,9 @@ final class LocalMCPServer: @unchecked Sendable {
     ) -> String {
         if outcome.timedOut {
             return "timeout"
+        }
+        if outcome.terminationSignal != nil {
+            return "killed"
         }
         if stdoutPreservationFailed {
             return "internal_error"

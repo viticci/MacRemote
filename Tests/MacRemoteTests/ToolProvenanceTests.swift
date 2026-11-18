@@ -495,9 +495,50 @@ struct ToolProvenanceTests {
         #expect(candidates.isEmpty)
         #expect(model.logs.contains { $0.message.contains("Scanned this Mac: 0 command-line tools found.") })
     }
+
+    // MARK: - Inspector cache
+
+    /// Every call re-checks the binary. Hashing a large one on each call costs
+    /// 40–230 ms, so an unchanged file is read once; any change reads it again.
+    @Test func inspectorReadsAnUnchangedBinaryOnceAndAChangedOneAgain() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacRemote-InspectorCache-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let binary = directory.appendingPathComponent("tool")
+        try Data("version-1".utf8).write(to: binary)
+
+        let reader = CountingSignatureReader()
+        let inspector = SecStaticCodeProvenanceInspector(signatureReader: reader)
+
+        let first = try #require(inspector.currentIdentity(forExecutableAt: binary.path))
+        let second = inspector.currentIdentity(forExecutableAt: binary.path)
+        #expect(second == first)
+        #expect(reader.callCount == 1)
+
+        // Same size, so only the file's identity and times give it away.
+        try Data("version-2".utf8).write(to: binary)
+        let changed = try #require(inspector.currentIdentity(forExecutableAt: binary.path))
+        #expect(reader.callCount == 2)
+        #expect(changed.contentSHA256 != first.contentSHA256)
+    }
 }
 
 // MARK: - Fixtures
+
+/// Reading the signature is the expensive step, so counting reads shows
+/// whether the inspector checked the binary again.
+private final class CountingSignatureReader: SignatureReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+
+    var callCount: Int { lock.withLock { calls } }
+
+    func signatureTrust(atPath path: String) -> DiscoveredCLICandidate.SignatureTrust {
+        lock.withLock { calls += 1 }
+        return .unsigned
+    }
+}
 
 private let baselineIdentity = ToolBinaryIdentity(
     signingIdentity: "Developer ID: TEAM1234",
