@@ -45,6 +45,12 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         var label: String
         var clientID: String
         var createdAt: Date
+
+        init(_ credential: OAuthClientCredentials) {
+            label = credential.label
+            clientID = credential.clientID
+            createdAt = credential.createdAt
+        }
     }
 
     private let userDefaults: UserDefaults
@@ -151,15 +157,16 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     }
 
     func generate(label: String = "OAuth Client") throws -> OAuthClientCredentials {
-        var allCredentials = loadAll()
+        var listed = try listedMetadata()
         let credential = OAuthClientCredentials(
-            label: Self.normalizedLabel(label, existingLabels: Set(allCredentials.map(\.label))),
+            label: Self.normalizedLabel(label, existingLabels: Set(listed.map(\.label))),
             clientID: "macremote-oauth-\(try Self.randomToken(byteCount: 18))",
             clientSecret: try Self.randomToken(byteCount: 36),
             createdAt: Date()
         )
-        allCredentials.append(credential)
-        try saveAll(allCredentials)
+        try writeSecret(credential.clientSecret, account: credential.clientID)
+        listed.append(Metadata(credential))
+        saveListed(listed)
         return credential
     }
 
@@ -168,26 +175,25 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     }
 
     func rotate(clientID: String) throws -> OAuthClientCredentials? {
-        var credentials = loadAll()
-        guard let index = credentials.firstIndex(where: { $0.clientID == clientID }) else {
+        var listed = try listedMetadata()
+        guard let index = listed.firstIndex(where: { $0.clientID == clientID }) else {
             return nil
         }
-        let existing = credentials[index]
         let replacement = OAuthClientCredentials(
-            label: existing.label,
+            label: listed[index].label,
             clientID: "macremote-oauth-\(try Self.randomToken(byteCount: 18))",
             clientSecret: try Self.randomToken(byteCount: 36),
             createdAt: Date()
         )
-        credentials[index] = replacement
-        try saveAll(credentials)
+        try writeSecret(replacement.clientSecret, account: replacement.clientID)
+        listed[index] = Metadata(replacement)
+        saveListed(listed)
         deleteSecret(account: clientID)
         return replacement
     }
 
     func delete(clientID: String) throws {
-        let credentials = loadAll().filter { $0.clientID != clientID }
-        try saveAll(credentials)
+        saveListed(try listedMetadata().filter { $0.clientID != clientID })
         deleteSecret(account: clientID)
         if userDefaults.string(forKey: legacyClientIDDefaultsKey) == clientID {
             userDefaults.removeObject(forKey: legacyClientIDDefaultsKey)
@@ -200,13 +206,30 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
         for credential in credentials {
             try writeSecret(credential.clientSecret, account: credential.clientID)
         }
-        saveMetadata(
-            credentials.map {
-                Metadata(label: $0.label, clientID: $0.clientID, createdAt: $0.createdAt)
-            }
-        )
+        saveListed(credentials.map(Metadata.init))
+    }
 
-        if let first = credentials.first {
+    /// Every credential the store lists, including one whose secret the
+    /// Keychain will not hand over right now (after a rebuild, until the owner
+    /// unlocks it). A change builds its new list from this, never from
+    /// `loadAll()`, which leaves such a credential out and would erase it.
+    private func listedMetadata() throws -> [Metadata] {
+        if let metadata = loadMetadata() {
+            return metadata.filter { !$0.clientID.isEmpty }
+        }
+        // A store from before the list holds one credential outside it. Its
+        // secret moves under its own account when the list is first written.
+        let legacy = loadAll()
+        for credential in legacy {
+            try writeSecret(credential.clientSecret, account: credential.clientID)
+        }
+        return legacy.map(Metadata.init)
+    }
+
+    private func saveListed(_ metadata: [Metadata]) {
+        saveMetadata(metadata)
+
+        if let first = metadata.first {
             userDefaults.set(first.clientID, forKey: legacyClientIDDefaultsKey)
             userDefaults.set(first.createdAt.timeIntervalSince1970, forKey: legacyCreatedAtDefaultsKey)
         } else {
@@ -216,8 +239,8 @@ struct OAuthClientCredentialStore: @unchecked Sendable {
     }
 
     func clear() {
-        for credential in loadAll() {
-            deleteSecret(account: credential.clientID)
+        for item in loadMetadata() ?? [] {
+            deleteSecret(account: item.clientID)
         }
         deleteSecret(account: legacyAccount)
         userDefaults.removeObject(forKey: legacyClientIDDefaultsKey)

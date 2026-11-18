@@ -8,15 +8,31 @@ import Security
 final class InMemoryKeychainSecretStore: KeychainSecretStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var secrets: [String: String] = [:]
+    private var lockedAccounts: Set<String> = []
     private let writeError: KeychainSecretStoreError?
 
     init(writeError: KeychainSecretStoreError? = nil) {
         self.writeError = writeError
     }
 
+    /// Makes reads of one account fail the way a real item does after a
+    /// rebuild, when its access list no longer matches the app.
+    func setLocked(_ isLocked: Bool, account: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        if isLocked {
+            lockedAccounts.insert(account)
+        } else {
+            lockedAccounts.remove(account)
+        }
+    }
+
     func read(account: String, interactive: Bool) throws -> String {
         lock.lock()
         defer { lock.unlock() }
+        if lockedAccounts.contains(account) {
+            throw KeychainSecretStoreError.keychain(errSecInteractionNotAllowed)
+        }
         guard let secret = secrets[account] else {
             throw KeychainSecretStoreError.keychain(errSecItemNotFound)
         }

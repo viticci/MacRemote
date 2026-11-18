@@ -1180,6 +1180,9 @@ final class AppModel {
 
     private func generateConnectorHeaderToken() {
         do {
+            // One token at a time: a new token replaces one the Keychain will
+            // not hand over, instead of being listed beside it.
+            connectorHeaderTokenStore.clear()
             connectorHeaderToken = try connectorHeaderTokenStore.generate(label: "Connector Header Token")
             appendLog(level: .info, "Generated the Single Header sign-in token.")
         } catch {
