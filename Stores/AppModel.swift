@@ -2954,15 +2954,15 @@ final class AppModel {
     /// One question, one answer: does this app hold a live grant for this tool's
     /// current security contract? Approval policy is not consulted — a granted
     /// every-call tool runs without asking, which is what the grant means.
+    /// Reads the observed snapshot, which holds only grants that match each
+    /// tool's current fingerprint, so a view redraws the moment a grant changes.
     func isToolAlwaysAllowed(toolID: String, clientID: String) -> Bool {
-        guard let trustID = clientTrustID(for: clientID),
-              let tool = tool(id: toolID) else { return false }
-        return clientToolPermissionStore.isAllowed(clientTrustID: trustID, tool: tool)
+        alwaysAllowedToolIDs(for: clientID).contains(toolID)
     }
 
     func alwaysAllowedToolIDs(for clientID: String) -> Set<String> {
         guard let trustID = clientTrustID(for: clientID) else { return [] }
-        return clientToolPermissionStore.allowedToolIDs(for: trustID, matching: allTools)
+        return clientToolPermissionSnapshot[trustID] ?? []
     }
 
     /// The counts an app card shows, computed over the tools that app can

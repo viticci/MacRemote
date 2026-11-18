@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import MacRemote
 
@@ -835,6 +836,30 @@ struct AppModelToolUpdateTests {
         #expect(!model.alwaysAllowedToolIDs(for: "client-1").contains(tool.id))
     }
 
+    /// The Apps counts redraw only when what they read is observed. Flipping a
+    /// switch must invalidate them at once, not on the next 30-second refresh.
+    @MainActor
+    @Test func alwaysAllowReadsRedrawWhenAGrantChanges() throws {
+        let context = try makeToolUpdateContext()
+        defer { context.tearDown() }
+        let model = context.model
+        var draft = makeDraft(name: "Ordinary")
+        draft.capability = .write
+        let tool = try draft.makeTool(id: "custom_ordinary")
+        model.tools = [tool]
+
+        let redrawn = ObservationFlag()
+        withObservationTracking {
+            _ = model.isToolAlwaysAllowed(toolID: tool.id, clientID: "client-1")
+            _ = model.alwaysAllowedToolIDs(for: "client-1")
+        } onChange: {
+            redrawn.isSet = true
+        }
+        model.setToolAlwaysAllowed(true, toolID: tool.id, clientID: "client-1")
+
+        #expect(redrawn.isSet)
+    }
+
     @MainActor
     @Test func allowAllCurrentToolsCoversEveryCallTools() throws {
         let context = try makeToolUpdateContext()
@@ -1150,6 +1175,11 @@ struct LocalMCPImportSpinnerTests {
         #expect(!model.isImportingLocalMCPServer(candidateID: "server-b"))
         #expect(model.isImportingLocalMCPServer(candidateID: "server-a"))
     }
+}
+
+/// Set from an observation `onChange`, which may run off the main actor.
+private final class ObservationFlag: @unchecked Sendable {
+    var isSet = false
 }
 
 private struct ToolUpdateContext {
