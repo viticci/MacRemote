@@ -166,19 +166,26 @@ enum MCPConfigLocator {
         return "\(path)|1|\(mtime)|\(size)"
     }
 
+    /// Stats the `manifest.json` in each extension's own folder, and nothing
+    /// deeper: an extension can hold a whole `node_modules` tree, and the
+    /// Tools page reads this snapshot on every redraw.
     private static func manifestStatLines(under root: URL, limit: Int) -> [String] {
-        guard let enumerator = FileManager.default.enumerator(
+        guard let extensionFolders = try? FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) else {
             return ["\(root.path)|0|0|0"]
         }
 
         var manifests = [(path: String, mtime: Int)]()
-        for case let fileURL as URL in enumerator where fileURL.lastPathComponent == "manifest.json" {
-            let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
-            let mtime = Int(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)
+        for folder in extensionFolders {
+            let fileURL = folder.appendingPathComponent("manifest.json")
+            // Throws when the folder has no manifest (or is not a folder).
+            guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]) else {
+                continue
+            }
+            let mtime = Int(values.contentModificationDate?.timeIntervalSince1970 ?? 0)
             manifests.append((fileURL.path, mtime))
         }
 

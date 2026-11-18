@@ -146,6 +146,35 @@ struct AutomaticDiscoveryTests {
         #expect(first != second)
     }
 
+    /// The Tools page reads this snapshot on every redraw, so it must not walk
+    /// an extension's dependency tree.
+    @Test func extensionSnapshotWatchesOnlyEachExtensionsOwnManifest() throws {
+        let home = try makeTemporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let manager = FileManager.default
+        let extensionFolder = home.appendingPathComponent(
+            "Library/Application Support/Claude/Claude Extensions/local.example",
+            isDirectory: true
+        )
+        let manifest = extensionFolder.appendingPathComponent("manifest.json")
+        let dependencyManifest = extensionFolder.appendingPathComponent("node_modules/pkg/dist/manifest.json")
+        try manager.createDirectory(at: dependencyManifest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: manifest)
+        try Data("{}".utf8).write(to: dependencyManifest)
+        func touch(_ url: URL, _ seconds: TimeInterval) throws {
+            try manager.setAttributes([.modificationDate: Date(timeIntervalSince1970: seconds)], ofItemAtPath: url.path)
+        }
+        try touch(manifest, 1_700_000_000)
+        try touch(dependencyManifest, 1_700_000_000)
+        let first = MCPConfigLocator.configSnapshot(homeDirectory: home)
+
+        try touch(dependencyManifest, 1_800_000_000)
+        #expect(MCPConfigLocator.configSnapshot(homeDirectory: home) == first)
+
+        try touch(manifest, 1_800_000_000)
+        #expect(MCPConfigLocator.configSnapshot(homeDirectory: home) != first)
+    }
+
     @MainActor
     @Test func freshnessFlipsToStaleWhenConfigsChange() async throws {
         let context = try makeMCPDiscoveryContext(processRunner: CountingProcessRunner())

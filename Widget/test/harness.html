@@ -1989,6 +1989,17 @@ function updateAssertions() {
       JSON.stringify(report.toolCalls[0]?.arguments?.args) ===
         JSON.stringify(["done", "23901", "--json"]);
   }
+  if (exercise === "actionrepaint") {
+    // Both calls settled after the rebuild; the rows on screen show it.
+    const doc = iframe.contentDocument;
+    const rowFor = (title) => Array.from(doc.querySelectorAll("tr.mrw-data-row"))
+      .find(row => row.textContent.includes(title));
+    checks.actionCalls = report.toolCalls.length === 2;
+    checks.noStalePending = !doc.querySelector("tr.mrw-data-row [data-state='pending']");
+    checks.checkOffDone = !!rowFor("Publish MacRemote article")?.classList.contains("mrw-row-done");
+    checks.rowButtonDone = rowFor("Record podcast segment")
+      ?.querySelector("[data-mrw-action-id='delete']")?.dataset.state === "done";
+  }
   if (exercise === "jsonvalues") checks.jsonValues = report.jsonValuesSafe;
   if (exercise === "sort") checks.sortRows = report.sortRowsSafe;
   if (exercise === "jsoninvalid") checks.jsonInvalid = report.invalidResultsIgnored;
@@ -2014,6 +2025,18 @@ function updateAssertions() {
         report.copiedText.includes("Protected link") &&
         !report.copiedText.includes("RESOURCE_SECRET_DO_NOT_RENDER") &&
         !report.copiedText.includes("https://example.com/file");
+    } else if (fixtureName === "table") {
+      // The copy is read from the laid-out card: rows on separate lines (one
+      // line each in the wide table), with no closed menu or control labels.
+      const lines = (report.copiedText || "").split("\n");
+      const shown = REMINDERS.filter(reminder => report.renderedText.includes(reminder.title));
+      checks.copyRowsOnSeparateLines = shown.length > 1 && shown.every(reminder =>
+        lines.some(line => line.includes(reminder.title) &&
+          (frameWidth === 390 || line.includes(reminder.list)) &&
+          shown.every(other => other === reminder || !line.includes(other.title))));
+      checks.copyLeavesControlsOut = !!report.copiedText &&
+        ["Delete", "Reschedule", "Default order", "Sort", "▲", "more"]
+          .every(label => !report.copiedText.includes(label));
     } else {
       checks.copyVisibleResultOnly = !!report.copiedText &&
         report.copiedText.includes("A Nested Episode") &&
@@ -2207,6 +2230,26 @@ function scheduleExercise() {
         "tr.mrw-data-row:not(.mrw-row-done) [data-mrw-action-id='complete']"
       );
       if (action) action.click();
+    } else if (exercise === "actionrepaint") {
+      // Start a check-off and a row button, then rebuild the rows (a header
+      // sort when wide, the sort menu when narrow) before either call settles.
+      // "Show more" rebuilds them the same way, but it grows the frame, and
+      // headless Chrome can end before the widget reports the new height.
+      const rowFor = (title) => Array.from(doc.querySelectorAll("tr.mrw-data-row"))
+        .find(row => row.textContent.includes(title));
+      rowFor("Publish MacRemote article")?.querySelector("[data-mrw-action-id='complete']")?.click();
+      const overflow = rowFor("Record podcast segment")?.querySelector("details.mrw-action-overflow");
+      if (overflow) overflow.open = true;
+      const remove = overflow?.querySelector("[data-mrw-action-id='delete']");
+      remove?.click();
+      remove?.click();
+      const select = doc.querySelector(".mrw-sort-select");
+      if (frameWidth === 390 && select) {
+        select.value = "title";
+        select.dispatchEvent(new iframe.contentWindow.Event("change"));
+      } else {
+        doc.querySelectorAll(".mrw-th-btn[type='button']")[1]?.click();
+      }
     } else if (exercise === "sort") {
       // Natural numeric order, stable ties, and nulls last in both directions.
       // Switching columns and restoring default order must use the source rows.

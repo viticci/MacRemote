@@ -367,7 +367,9 @@ values. The empty check runs after all of them, so an empty result is only ever
 "nothing came back", never a hidden populated value.
 
 Footer: Copy Result, plus Run Again when the host advertises `serverTools`.
-Copy Result copies only the text visible in the pretty UI. Run Again replays the exact
+Copy Result copies only the text visible in the pretty UI, read from the laid-out
+card so each table row is its own line; sort and row-action controls stay out of
+it. Run Again replays the exact
 `ui/notifications/tool-input` arguments. The widget does not embed MacRemote
 brand chrome; the host owns the surrounding card.
 

@@ -203,6 +203,11 @@ class MCPAppsWidgetBrowserTests(unittest.TestCase):
             exercise="action",
         )
 
+    def test_row_actions_settle_after_the_rows_are_rebuilt(self):
+        for width in (390, 760):
+            with self.subTest(width=width):
+                self.render_harness(fixture="table", width=width, exercise="actionrepaint")
+
     def test_every_json_structured_content_type_and_text_fallback_render_safely(self):
         self.render_harness(
             fixture="table",
@@ -372,6 +377,11 @@ class MCPAppsWidgetBrowserTests(unittest.TestCase):
                     openLinks="1",
                     exercise="copy",
                 )
+
+    def test_copy_result_keeps_table_rows_on_their_own_lines(self):
+        for width in (390, 760):
+            with self.subTest(width=width):
+                self.render_harness(fixture="table", width=width, exercise="copy")
 
     def test_nested_write_preview_and_unverified_warning_are_truthful(self):
         for fixture in ("overdry", "overunverified"):
