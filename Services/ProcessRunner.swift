@@ -252,6 +252,9 @@ struct CommandRunResult: Sendable, Equatable {
     let stdoutSpool: ProcessOutputSpool?
     let stdoutBytesAreValidUTF8: Bool
     let stdoutPreservationError: String?
+    /// The signal that killed the tool, when it was not MacRemote's own
+    /// timeout. `exitCode` then holds the signal number.
+    let terminationSignal: Int32?
 
     init(
         executablePath: String,
@@ -265,7 +268,8 @@ struct CommandRunResult: Sendable, Equatable {
         truncatedStderr: Bool,
         stdoutSpool: ProcessOutputSpool? = nil,
         stdoutBytesAreValidUTF8: Bool = true,
-        stdoutPreservationError: String? = nil
+        stdoutPreservationError: String? = nil,
+        terminationSignal: Int32? = nil
     ) {
         self.executablePath = executablePath
         self.arguments = arguments
@@ -279,6 +283,7 @@ struct CommandRunResult: Sendable, Equatable {
         self.stdoutSpool = stdoutSpool
         self.stdoutBytesAreValidUTF8 = stdoutBytesAreValidUTF8
         self.stdoutPreservationError = stdoutPreservationError
+        self.terminationSignal = terminationSignal
     }
 
     var succeeded: Bool {
@@ -468,20 +473,32 @@ struct ProcessRunner: Sendable {
                 from: stderrCollected.data,
                 truncated: stderrCollected.truncated
             )
+            // A timeout's own stop is reported as the timeout.
+            let terminationSignal: Int32? = process.terminationReason == .uncaughtSignal && !timeoutState.timedOut
+                ? process.terminationStatus
+                : nil
+            var stderrText = stderr.value
+            if let terminationSignal {
+                if !stderrText.isEmpty, !stderrText.hasSuffix("\n") {
+                    stderrText += "\n"
+                }
+                stderrText += "The tool was killed by a signal (\(String(cString: strsignal(terminationSignal))))."
+            }
 
             return CommandRunResult(
                 executablePath: executablePath,
                 arguments: arguments,
                 exitCode: process.terminationStatus,
                 stdout: stdout.value,
-                stderr: stderr.value,
+                stderr: stderrText,
                 duration: Date().timeIntervalSince(started),
                 timedOut: timeoutState.timedOut,
                 truncatedStdout: stdout.truncated,
                 truncatedStderr: stderr.truncated,
                 stdoutSpool: stdoutCollected.spool,
                 stdoutBytesAreValidUTF8: stdoutCollected.bytesAreValidUTF8,
-                stdoutPreservationError: stdoutCollected.preservationError?.localizedDescription
+                stdoutPreservationError: stdoutCollected.preservationError?.localizedDescription,
+                terminationSignal: terminationSignal
             )
         } onCancel: {
             terminationController.requestTermination()

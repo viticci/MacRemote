@@ -2263,6 +2263,9 @@ final class LocalMCPServer: @unchecked Sendable {
         if outcome.timedOut {
             return "timeout"
         }
+        if outcome.terminationSignal != nil {
+            return "killed"
+        }
         if stdoutPreservationFailed {
             return "internal_error"
         }

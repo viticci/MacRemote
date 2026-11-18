@@ -6508,6 +6508,44 @@ struct StdoutArtifactTests {
 
     }
 
+    /// A tool that dies from a signal was killed; it did not exit with the
+    /// signal's number. SIGKILL, so the test leaves no crash report behind.
+    @Test func aToolKilledBySignalReportsKilled() async throws {
+        let tool = Self.makeOutputTool(
+            id: "test_killed",
+            name: "Killed",
+            script: "import os, signal; os.kill(os.getpid(), signal.SIGKILL)",
+            outputByteLimit: 1024
+        )
+        let coordinator = OAuthCoordinator()
+        let server = LocalMCPServer(
+            instanceID: "test-instance",
+            tools: [tool],
+            authCoordinator: coordinator,
+            toolExecutor: ConfiguredToolExecutor(tools: [tool], environment: [:])
+        )
+        let port = try server.start()
+        defer { server.stop() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitForServerReady(base: base)
+        let token = try await authorizedAccessToken(base: base, coordinator: coordinator, server: server)
+
+        let call = try await postJSON(
+            url: base.appendingPathComponent("mcp/test-instance"),
+            bearerToken: token,
+            body: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": tool.id, "arguments": [:]]
+            ]
+        )
+
+        let result = try #require(call.json["result"] as? [String: Any])
+        #expect(result["isError"] as? Bool == true)
+        let structured = try #require(result["structuredContent"] as? [String: Any])
+        #expect(structured["reason"] as? String == "killed")
+        #expect((structured["stderr"] as? String)?.contains("Killed: 9") == true)
+    }
+
     private static func makeOutputTool(
         id: String,
         name: String,
