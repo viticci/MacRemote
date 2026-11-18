@@ -2014,6 +2014,18 @@ function updateAssertions() {
         report.copiedText.includes("Protected link") &&
         !report.copiedText.includes("RESOURCE_SECRET_DO_NOT_RENDER") &&
         !report.copiedText.includes("https://example.com/file");
+    } else if (fixtureName === "table") {
+      // The copy is read from the laid-out card: rows on separate lines (one
+      // line each in the wide table), with no closed menu or control labels.
+      const lines = (report.copiedText || "").split("\n");
+      const shown = REMINDERS.filter(reminder => report.renderedText.includes(reminder.title));
+      checks.copyRowsOnSeparateLines = shown.length > 1 && shown.every(reminder =>
+        lines.some(line => line.includes(reminder.title) &&
+          (frameWidth === 390 || line.includes(reminder.list)) &&
+          shown.every(other => other === reminder || !line.includes(other.title))));
+      checks.copyLeavesControlsOut = !!report.copiedText &&
+        ["Delete", "Reschedule", "Default order", "Sort", "▲", "more"]
+          .every(label => !report.copiedText.includes(label));
     } else {
       checks.copyVisibleResultOnly = !!report.copiedText &&
         report.copiedText.includes("A Nested Episode") &&

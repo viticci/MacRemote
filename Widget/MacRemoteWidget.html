@@ -470,6 +470,10 @@ tr.mrw-row-marked .mrw-td-pos { color: var(--accent); font-weight: 600; }
 .mrw-action-menu .mrw-rowbtn[data-state="failed"] { color: var(--bad); background: var(--bad-tint); }
 
 .mrw-mobile-sort { display: none; }
+/* mount() reads the copied text with this class on the card, so sort and
+   action controls stay out of the clipboard. */
+.mrw-copy-read :is(.mrw-mobile-sort, .mrw-sort-glyph, .mrw-action-group, .mrw-more) { display: none !important; }
+.mrw-copy-read .mrw-th-btn { display: inline; }
 .mrw-more {
   display: flex; justify-content: center; padding: 9px 12px 10px;
   border-top: 1px solid var(--line2);
@@ -2669,14 +2673,19 @@ const MacRemoteWidget = (() => {
     const rich = renderRichContent(p);
     if (rich) card.append(rich);
 
-    // Copy exactly what the person can see. The raw envelope, stderr, and
-    // hidden content never enter the clipboard through this pretty UI.
-    const visibleResult = safeDisplayText(card.innerText, { maximum: 32_000 });
-    card.append(renderFooter(p, visibleResult || null));
-
     root.append(card);
     container.textContent = '';
     container.append(root);
+
+    // Copy exactly what the person can see. The raw envelope, stderr, and
+    // hidden content never enter the clipboard through this pretty UI.
+    // innerText follows the layout only once the card is in the document;
+    // on a detached card it returns raw textContent, with no line breaks and
+    // with closed menus included.
+    card.classList.add('mrw-copy-read');
+    const visibleResult = safeDisplayText(card.innerText, { maximum: 32_000 });
+    card.classList.remove('mrw-copy-read');
+    card.append(renderFooter(p, visibleResult || null));
     return { state };
   }
 
