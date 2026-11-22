@@ -88,6 +88,10 @@ General ▸ Startup** has two settings. Both start off.
   minutes for the network after a restart. If you stop sharing, or start or
   stop the server yourself while it waits, it leaves the link to you.
 
+When the Mac restarts, shuts down, or logs out, MacRemote quits without asking
+**Stop sharing and quit?**, so a scheduled update or a remote restart never
+waits for someone to click. Pressing Command-Q while sharing still asks.
+
 Each time MacRemote goes public by itself, Activity and a notification say so.
 When it can't (you changed the domain, the saved key is gone or Cloudflare
 refuses it, the port is taken, no tools are shared, or the link never

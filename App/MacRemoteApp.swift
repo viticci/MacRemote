@@ -90,6 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Warm upstream MCP processes never outlive the app.
         MCPStdioSessionPool.shared.drain()
         guard let appModel, appModel.shouldConfirmQuit else { return .terminateNow }
+        // A logout, restart, or shutdown never waits on the dialog (D80): on
+        // a Mac nobody is watching, it would hold the restart until someone
+        // answered. `applicationWillTerminate` still stops sharing.
+        if QuitReason.isSessionEnding(NSAppleEventManager.shared().currentAppleEvent) {
+            return .terminateNow
+        }
 
         let alert = NSAlert()
         alert.messageText = "Stop sharing and quit?"
