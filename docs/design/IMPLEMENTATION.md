@@ -40,7 +40,7 @@ themselves. Adding a file under `Resources/` that must **not** reach
 
 Window IDs are centralized in `MacRemoteWindowID` (`Models/NavigationSection.swift`).
 
-`AppDelegate` owns the `AppModel` and does the app-level launch work (notification status, automatic discovery, Go Public at Launch through the model) and the quit gate. None of it waits for a window: at login, macOS can relaunch MacRemote with no windows open.
+`AppDelegate` owns the `AppModel` and does the app-level launch work (automatic discovery, plus what the model's init starts: notifications and Go Public at Launch) and the quit gate. None of it waits for a window: at login, macOS can relaunch MacRemote with no windows open. It never calls `NSApp.activate` at launch: after a windowless launch the pending activation would make the first Approval window key (D4).
 
 | Scene | ID | Notes |
 |---|---|---|

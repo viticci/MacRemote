@@ -85,10 +85,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
 
+    /// No `NSApp.activate` here. Opening the app from Finder or the Dock
+    /// already brings it forward; a login launch must not. After a launch with
+    /// no window, a pending activation would fire on the first window
+    /// MacRemote opens, the Approval window, and make it key (breaking D4).
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        appModel.refreshNotificationPermissionStatus()
         appModel.startAutomaticDiscovery()
     }
 
