@@ -40,13 +40,15 @@ themselves. Adding a file under `Resources/` that must **not** reach
 
 Window IDs are centralized in `MacRemoteWindowID` (`Models/NavigationSection.swift`).
 
+`AppDelegate` owns the `AppModel` and does the app-level launch work (notification status, automatic discovery, Go Public at Launch through the model) and the quit gate. None of it waits for a window: at login, macOS can relaunch MacRemote with no windows open.
+
 | Scene | ID | Notes |
 |---|---|---|
-| Main window | `MacRemoteWindowID.main` | `NavigationSplitView`; system glass sidebar + detail. Min 1040×680. Installs `AppSkeletonInstaller` (wires `appModel.windowOpener`, the AppDelegate quit bridge, and first-run Welcome). |
+| Main window | `MacRemoteWindowID.main` | `NavigationSplitView`; system glass sidebar + detail. Min 1040×680. Installs `AppSkeletonInstaller` (wires `appModel.windowOpener` and first-run Welcome). |
 | Approval window | `MacRemoteWindowID.approval` | Floating, `.windowLevel(.floating)`, hidden title bar, `.contentSize`. **Non-activating** — presented via `AppModel.presentApprovalWindow()` (decision D4). `ApprovalWindowConfigurator` (NSViewRepresentable) adds all-Spaces + full-screen-auxiliary collection behavior and `hidesOnDeactivate = false`. |
 | Welcome window | `MacRemoteWindowID.welcome` | Fixed 760×560, first run only (gated on `hasCompletedWelcome`), reopenable from Help. |
 | Settings | `Settings` scene (⌘,) | The **only** settings surface (no sidebar Settings section). Toolbar-tab `TabView`: General / Notifications / Security. Notifications holds only the macOS notifications status (D65). Security also hosts the File Transfer Folders list (D67) and the D24 token-lifetime pickers (access / refresh). |
-| MenuBarExtra | — | `.menuBarExtraStyle(.menu)`, toggled by `appModel.isMenuBarExtraEnabled`. Status line + Copy URL + server verbs + "N requests waiting…" (opens the Approval window, never resolves inline — D3). Glyph rendered by `MenuBarIconRenderer` as a template `NSImage` so the badge dot survives menu-bar tinting. |
+| MenuBarExtra | — | `.menuBarExtraStyle(.menu)`, toggled by `appModel.isMenuBarExtraEnabled`. Status line + Copy URL + server verbs + "N requests waiting…" (opens the Approval window, never resolves inline — D3). Glyph rendered by `MenuBarIconRenderer` as a template `NSImage` so the badge dot survives menu-bar tinting. Its label also installs `appModel.windowOpener`, because after a windowless launch it is the only view. |
 
 Menu commands live in `MacRemoteCommands` (same file): Server
 (⌘R/⌘./⇧⌘R/⇧⌘./⇧⌘C), File (⌘N/⇧⌘N/⇧⌘L), Edit ▸ Find (⌘F), View ▸ sections

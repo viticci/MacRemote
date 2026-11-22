@@ -14,27 +14,15 @@ enum MacRemoteMain {
 
 struct MacRemoteApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    // `runsLaunchActions` starts Go Public at Launch (D76) from the model
-    // itself, so it runs even when no window opens at login.
-    @State private var appModel = AppModel(
-        helperTetherExecutableURL: Bundle.main.executableURL,
-        runsLaunchActions: true
-    )
-
-    init() {
-        // Downloads staged by a launch that crashed can never be fetched:
-        // their tokens were only in memory. Remove them before staging more.
-        ArtifactStore.emptyStagingRoot()
-    }
 
     var body: some Scene {
-        @Bindable var appModel = appModel
+        @Bindable var appModel = appDelegate.appModel
 
         WindowGroup("MacRemote", id: MacRemoteWindowID.main) {
             ContentView()
                 .environment(appModel)
                 .frame(minWidth: 1040, minHeight: 680)
-                .modifier(AppSkeletonInstaller(appModel: appModel, appDelegate: appDelegate))
+                .modifier(AppSkeletonInstaller(appModel: appModel))
         }
         .commands {
             MacRemoteCommands(appModel: appModel)
@@ -73,23 +61,41 @@ struct MacRemoteApp: App {
                 .environment(appModel)
         } label: {
             MenuBarExtraLabel(appModel: appModel)
+                .modifier(WindowOpenerInstaller(appModel: appModel))
         }
         .menuBarExtraStyle(.menu)
     }
 }
 
+/// Owns the app model and the app-level launch and quit work. None of it
+/// may depend on a window: at login, macOS can relaunch MacRemote with no
+/// windows at all, and Go Public at Launch (D76) still runs then.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var appModel: AppModel?
+    let appModel: AppModel
+
+    override init() {
+        // Downloads staged by a launch that crashed can never be fetched:
+        // their tokens were only in memory. Remove them before staging more.
+        ArtifactStore.emptyStagingRoot()
+        appModel = AppModel(
+            helperTetherExecutableURL: Bundle.main.executableURL,
+            runsLaunchActions: true
+        )
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        appModel.refreshNotificationPermissionStatus()
+        appModel.startAutomaticDiscovery()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Warm upstream MCP processes never outlive the app.
         MCPStdioSessionPool.shared.drain()
-        guard let appModel, appModel.shouldConfirmQuit else { return .terminateNow }
+        guard appModel.shouldConfirmQuit else { return .terminateNow }
         // A logout, restart, or shutdown never waits on the dialog (D80): on
         // a Mac nobody is watching, it would hold the restart until someone
         // answered. `applicationWillTerminate` still stops sharing.
@@ -111,31 +117,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it would keep the public address connected to a port nothing owns.
     /// A death that never reaches this method is covered by `HelperTether`.
     func applicationWillTerminate(_ notification: Notification) {
-        appModel?.prepareForConfirmedQuit()
+        appModel.prepareForConfirmedQuit()
     }
 }
 
-/// Installs the app-level plumbing that needs a live view context: the window
-/// opener used for programmatic scene presentation, the quit-gate bridge to the
-/// AppDelegate, and the first-run Welcome window.
+/// Main-window plumbing: the window opener and the first-run Welcome window.
+/// A first run always opens the main window, so Welcome can wait for it.
 private struct AppSkeletonInstaller: ViewModifier {
     @Environment(\.openWindow) private var openWindow
     let appModel: AppModel
-    let appDelegate: AppDelegate
 
     func body(content: Content) -> some View {
         content
-            .onAppear {
-                appDelegate.appModel = appModel
-                appModel.windowOpener = { openWindow(id: $0) }
-            }
+            .modifier(WindowOpenerInstaller(appModel: appModel))
             .task {
-                appModel.refreshNotificationPermissionStatus()
-                appModel.startAutomaticDiscovery()
                 if !appModel.hasCompletedWelcome {
                     openWindow(id: MacRemoteWindowID.welcome)
                 }
             }
+    }
+}
+
+/// Gives the model SwiftUI's `openWindow`, which only a view can supply, so
+/// it can present the Approval window. The menu bar icon installs it too:
+/// after a windowless launch the icon is the only view that exists.
+private struct WindowOpenerInstaller: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+    let appModel: AppModel
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            appModel.windowOpener = { openWindow(id: $0) }
+        }
     }
 }
 

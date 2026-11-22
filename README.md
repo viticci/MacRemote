@@ -4,13 +4,13 @@
 
 <p align="center">
   <b>Private beta for MacStories Club members</b><br>
-  macOS 26 or later · Apple silicon and Intel · Version 1.1.2
+  macOS 26 or later · Apple silicon and Intel · Version 1.1.3
 </p>
 
 <p align="center">
   <a href="docs/CLUB_BETA.md">Club Beta Guide</a> ·
   <a href="docs/GUIDE.md">Guide</a> ·
-  <a href="docs/releases/1.1.2.md">What's New</a> ·
+  <a href="docs/releases/1.1.3.md">What's New</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
 
@@ -87,9 +87,9 @@ ChatGPT or Claude), and at least one tool to share. You don't need Xcode,
 Homebrew, or a Cloudflare account. MacRemote installs and verifies the one
 helper it needs by itself.
 
-1. **Download it.** Club members download `MacRemote-1.1.2.zip` from the Club
+1. **Download it.** Club members download `MacRemote-1.1.3.zip` from the Club
    post.
-2. **Install it.** Unzip it, open the **MacRemote 1.1.2** folder, move
+2. **Install it.** Unzip it, open the **MacRemote 1.1.3** folder, move
    **MacRemote** to Applications, and open it. It's signed and notarized by
    Apple, so it opens like any other app.
 3. **Pick a tool.** For your first test, select **Current Date** in the
@@ -116,7 +116,7 @@ ChatGPT users should also read the
 | [Guide](docs/GUIDE.md) | Everything else: sign-in methods, Cloudflare, approvals, File Transfer, permissions, and troubleshooting |
 | [ChatGPT developer mode](docs/CHATGPT_DEVELOPER_MODE.md) | Connecting ChatGPT |
 | [Federico Viticci tools](docs/FEDERICO_CLI_TOOLS.md) | What MacRemote shares from my command-line apps |
-| [What's new in 1.1.2](docs/releases/1.1.2.md) · [1.1.1](docs/releases/1.1.1.md) · [1.1](docs/releases/1.1.md) · [1.0](docs/releases/1.0.md) | The release notes, and what changed if you tried an earlier version |
+| [What's new in 1.1.3](docs/releases/1.1.3.md) · [1.1.2](docs/releases/1.1.2.md) · [1.1.1](docs/releases/1.1.1.md) · [1.1](docs/releases/1.1.md) · [1.0](docs/releases/1.0.md) | The release notes, and what changed if you tried an earlier version |
 | [Security](SECURITY.md) | The rules, and how to report a problem |
 | [Architecture and Security](docs/ARCHITECTURE_SECURITY.md) · [Threat Model](docs/THREAT_MODEL.md) | How it all works, and why |
 

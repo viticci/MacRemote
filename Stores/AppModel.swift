@@ -1899,8 +1899,7 @@ final class AppModel {
     }
 
     func startAutomaticDiscovery() {
-        // Called from the main window's task, which runs again for every new
-        // window. One observer is enough.
+        // Called once at launch by AppDelegate. One observer is enough.
         guard mcpActivationObserver == nil else { return }
         refreshLocalMCPDiscovery(trigger: .launch)
         mcpActivationObserver = NotificationCenter.default.addObserver(
