@@ -139,9 +139,11 @@ Approval window, and onboarding alike.
   these. `handleNotificationResponse(action:requestID:kind:)` can deny and can
   open the request; it never approves (D68).
 - Quit gate (D2.6): `shouldConfirmQuit` drives the confirmation in
-  `AppDelegate.applicationShouldTerminate`. `prepareForConfirmedQuit()` stops
-  the public link from `applicationWillTerminate`, so every quit path stops
-  Cloudflare's helper.
+  `AppDelegate.applicationShouldTerminate`, except for a quit that
+  `QuitReason.isSessionEnding` (`Models/QuitReason.swift`) identifies as a
+  logout, restart, or shutdown from the quit Apple event's `kAEQuitReason`
+  (D80). `prepareForConfirmedQuit()` stops the public link from
+  `applicationWillTerminate`, so every quit path stops Cloudflare's helper.
 - Public link: `requestGoPublic()` and `startTunnel()` open the Address card
   instead of starting an Instant Link when Your Domain is the chosen address.
   `goPublicConfirmationMessage` is the confirmation body Connection and
