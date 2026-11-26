@@ -16,17 +16,13 @@
 
 ---
 
-## Why I Made This
+## What Is MacRemote and Why I Made It
 
-I use ChatGPT and Claude every day, on every device I own. But a lot of the
-stuff I care about lives on my Mac: my reminders and notes, my files, my
-podcast queue, and a pile of command-line tools I've built over the years. I
-wanted my AI apps to use those things, from my iPhone or anywhere else, without
-handing them a terminal and hoping for the best.
+I use AI agents every day, on every device I own. Most of them run in isolated cloud sandboxes that have no access to my Mac's tools and local MCP servers. MacRemote is designed to close that gap in a secure, permission-based way.
 
-So I made MacRemote. It's a native Mac app that shares the tools you pick with
-ChatGPT, Claude, and other AI apps over MCP. MCP, the Model Context Protocol,
-is the standard those apps use to call tools that live outside of them.
+A lot of the stuff I care about lives on my Mac: my reminders and notes, my files, assets for articles I'm researching, and a pile of command-line tools I've built over the years. I wanted my AI apps to use those things, from my iPhone or anywhere else, without jumping through the hoops of serving a Cloudflare Tunnel myself and dealing with a terminal.
+
+So I made MacRemote. It's a native Mac app that shares the tools you pick with ChatGPT, Claude, Muse, Grok Bot, and other AI apps over MCP.
 
 The idea is simple: your Mac, your rules. You choose every tool an app can
 see. You approve every new app on the Mac. Anything that can change something
