@@ -1,0 +1,2437 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MacRemote Widget Test Harness</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: #ececf0; color: #1d1d1f; font-family: -apple-system, sans-serif; }
+  body.dark { background: #131316; color: #f5f5f7; }
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px;
+    max-width: 920px; margin: 0 auto 16px; padding: 12px;
+    border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 10px;
+    background: color-mix(in srgb, Canvas 88%, transparent);
+  }
+  .controls label { display: grid; gap: 4px; font-size: 11px; font-weight: 600; }
+  .controls select {
+    min-height: 32px; padding: 4px 28px 4px 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    border-radius: 7px; background: Canvas; color: CanvasText; font: inherit; font-size: 12px;
+  }
+  /* `Canvas` follows the OS appearance, not the theme this harness is
+     simulating, so ?theme=dark used to draw light chrome under light text. */
+  body.dark .controls { background: #1e1e22; }
+  body.dark .controls select { background: #2a2a30; color: #f5f5f7; }
+  #assertions { margin-left: auto; align-self: center; font: 600 11px ui-monospace, monospace; }
+  #assertions[data-state="pass"] { color: light-dark(#16712e, #4fd675); }
+  #assertions[data-state="fail"] { color: light-dark(#c50f1f, #ff6961); }
+  .stage { width: 100%; overflow: visible; }
+  iframe { border: none; display: block; margin: 0 auto; height: 200px; background: transparent; transform-origin: top center; }
+</style>
+</head>
+<body>
+<form class="controls" id="controls">
+  <label>Fixture
+    <select id="fixture-control">
+      <option value="table">Reminders</option>
+      <option value="sortrows">Sorting</option>
+      <option value="dense">Dense + overflow</option>
+      <option value="podcasts">Podcasts</option>
+      <option value="nowcard">Now playing</option>
+      <option value="triage">Triage (grouped)</option>
+      <option value="emptygroups">Triage (all groups empty)</option>
+      <option value="artworkblocked">Triage (artwork blocked)</option>
+      <option value="changeupnext">Queue change</option>
+      <option value="changeupnextdry">Queue change (preview)</option>
+      <option value="changeupnextlegacy">Queue change (legacy shape)</option>
+      <option value="changedefaultnoun">Queue change (default noun)</option>
+      <option value="episodestar">Episode starred</option>
+      <option value="episodearchive">Episode archived</option>
+      <option value="episodetitledupe">Episode unstarred (record + title)</option>
+      <option value="searchgroups">Search (podcasts + episodes)</option>
+      <option value="habits">Habits</option>
+      <option value="habitshow">Habit definition (card)</option>
+      <option value="habitcheck">Habit checked off</option>
+      <option value="reminderinfo">Reminder + subtasks (card)</option>
+      <option value="reminderrecurrence">Reminder recurrence + flag state</option>
+      <option value="remindertextfallback">Reminder receipt (text delivery)</option>
+      <option value="reminderpartial">Reminder partially saved</option>
+      <option value="reminderbatch">Reminder batch with uncertainty</option>
+      <option value="reminderdeletedrow">Deleted reminder (no actions)</option>
+      <option value="remindercreated">Reminder created</option>
+      <option value="remindercreatedwarning">Reminder created with warning</option>
+      <option value="reminderupdated">Reminder updated</option>
+      <option value="reminderdeleted">Reminder deleted</option>
+      <option value="reminderunchanged">Reminder unchanged (no-op)</option>
+      <option value="reminderflagged">Reminder flagged</option>
+      <option value="reminderunflagged">Reminder unflagged</option>
+      <option value="reminderflagerror">Reminder flag failed</option>
+      <option value="emptyreminders">Empty result (bare array)</option>
+      <option value="emptywrapped">Empty result (wrapped array)</option>
+      <option value="emptyhabits">Empty result (habits)</option>
+      <option value="overrows">Nested episode rows</option>
+      <option value="overdry">Nested write preview</option>
+      <option value="overunverified">Nested unverified write</option>
+      <option value="notesdocument">Safe note document</option>
+      <option value="notestranscripts">Stored note transcripts</option>
+      <option value="notesrows">Note search rows</option>
+      <option value="notespreview">Note write preview</option>
+      <option value="notesapplied">Note write applied</option>
+      <option value="visibilityfallback">Audience-safe fallback</option>
+      <option value="safefallback">Sanitized Flexible Command fallback</option>
+      <option value="semanticcounts">Safe generic result counts</option>
+      <option value="hostileautokeys">Hostile auto-table keys</option>
+      <option value="hostilesummarykeys">Hostile summary keys</option>
+      <option value="curatedsafety">Curated final safety gate</option>
+      <option value="credentiallink">Credential-bearing URL</option>
+      <option value="protectedartifact">Protected resource link</option>
+      <option value="artifact">Downloadable artifact</option>
+      <option value="task">Background task</option>
+      <option value="multimodal">Multimodal content</option>
+      <option value="tree">Tree</option>
+      <option value="terminal">Terminal</option>
+      <option value="error">Error</option>
+      <option value="actionfail">Action failure</option>
+      <option value="empty">Empty</option>
+      <option value="truncated">Truncated (text)</option>
+      <option value="truncatedjson">Truncated (clipped JSON)</option>
+    </select>
+  </label>
+  <label>Theme
+    <select id="theme-control"><option value="light">Light</option><option value="dark">Dark</option></select>
+  </label>
+  <label>Widget width
+    <select id="width-control"><option value="760">760 px</option><option value="390">390 px</option></select>
+  </label>
+  <label>Zoom
+    <select id="zoom-control"><option value="100">100%</option><option value="200">200%</option></select>
+  </label>
+  <output id="assertions" aria-live="polite">Waiting for widget…</output>
+</form>
+<div class="stage">
+<iframe id="widget" src="../MacRemoteWidget.html"></iframe>
+</div>
+<script>
+"use strict";
+/* Plays the MCP Apps HOST role for the widget under test (SEP-1865):
+   answers ui/initialize, streams tool-input + tool-result fixtures, proxies
+   tools/call and ui/open-link, and exercises host-context changes, malformed
+   messages, teardown, capability gates, and finite positive width/height size
+   notifications. It records the relevant calls, links, sizes, and outcomes.
+   Select behavior via query:
+   harness.html?fixture=table&theme=dark&width=390&zoom=200&serverTools=1&openLinks=1 */
+
+const params = new URLSearchParams(location.search);
+const fixtureName = params.get("fixture") || "table";
+const theme = params.get("theme") || "light";
+const frameWidth = Number(params.get("width")) === 390 ? 390 : 760;
+const zoomPercent = Number(params.get("zoom")) === 200 ? 200 : 100;
+const supportsServerTools = params.get("serverTools") !== "0";
+const supportsOpenLinks = params.get("openLinks") !== "0";
+const exercise = params.get("exercise") || "";
+// host=mismatch declares `theme` but sends the other theme's colors;
+// host=themeless sends `theme`'s colors without declaring a theme;
+// host=lowsecondary sends `theme`'s colors with a secondary text color under
+// 4.5:1 on the host background; host=unmeasurable sends a secondary text
+// color too transparent to measure. Each of the last two must be set aside.
+const hostVariant = params.get("host") || "";
+if (theme === "dark") { document.body.classList.add("dark"); }
+
+const controls = {
+  fixture: document.getElementById("fixture-control"),
+  theme: document.getElementById("theme-control"),
+  width: document.getElementById("width-control"),
+  zoom: document.getElementById("zoom-control")
+};
+controls.fixture.value = fixtureName;
+controls.theme.value = theme;
+controls.width.value = String(frameWidth);
+controls.zoom.value = String(zoomPercent);
+for (const [key, control] of Object.entries(controls)) {
+  control.addEventListener("change", () => {
+    const next = new URLSearchParams(location.search);
+    next.set(key, control.value);
+    location.search = next.toString();
+  });
+}
+
+const REMINDERS = [
+  { id: 23901, title: "Publish MacRemote article", list: "Editorial", dueDate: "2026-07-09T14:00:00", allDay: false, priority: "high", completed: false, flagged: false, urgent: true, subtaskCount: 0 },
+  { id: 23902, title: "Record podcast segment", list: "Podcasts", dueDate: "2026-07-09T14:30:00", allDay: false, priority: "none", completed: false, flagged: false, urgent: false, subtaskCount: 0 },
+  { id: 23903, title: "Reply to WWDC follow-ups", list: "Emails", dueDate: "2026-07-10T09:00:00", allDay: false, priority: "medium", completed: true, flagged: false, urgent: false, subtaskCount: 0 },
+  { id: 23904, title: "Order studio cables", list: "Shopping", dueDate: null, allDay: false, priority: "none", completed: false, flagged: false, urgent: false, subtaskCount: 0 },
+  { id: 23905, title: "Family dinner", list: "Family", dueDate: "2026-07-11T00:00:00", allDay: true, priority: "none", completed: false, flagged: true, urgent: false, subtaskCount: 5 }
+];
+
+const UI_META = {
+  version: 1,
+  profile: "reminderRows",
+  toolTitle: "Upcoming",
+  toolName: "remctl_upcoming",
+  capability: "readOnly",
+  category: "Reminders",
+  accent: "#8b5cf6",
+  table: {
+    columns: [
+      { key: "when", title: "When", derive: "datetime", sourceKey: "dueDate", allDayKey: "allDay" },
+      { key: "title", title: "Task", primary: true },
+      { key: "list", title: "List" },
+      { key: "recurrence", title: "Repeats", derive: "recurrence", sourceKey: "recurrence" },
+      { key: "flag", title: "Flag", derive: "booleanLabel", sourceKey: ["flagged", "isFlagged"], trueLabel: "Flagged" }
+    ],
+    hiddenColumns: ["id", "completed", "recurrence", "flagged", "isFlagged"]
+  },
+  actions: [{
+    id: "complete", title: "Mark Done", kind: "checkOff",
+    toolName: "remctl_run", toolCapability: "destructive",
+    arguments: { args: ["done", "{id}", "--json"] },
+    requiredRowFields: ["id"], completedWhenField: "completed"
+  }, {
+    id: "reschedule", title: "Reschedule", kind: "rowButton",
+    toolName: "remctl_run", toolCapability: "destructive",
+    arguments: { args: ["edit", "{id}", "-d", "{input.due}", "--json"] },
+    requiredRowFields: ["id"],
+    inputs: [{ name: "due", title: "New due", placeholder: "tomorrow 9:30" }]
+  }, {
+    id: "delete", title: "Delete", kind: "rowButton",
+    toolName: "remctl_run", toolCapability: "destructive",
+    arguments: { args: ["delete", "{id}", "--force", "--json"] },
+    requiredRowFields: ["id"], style: "destructive"
+  }]
+};
+
+/* ——— remctl write confirmations ———
+   Mirrors the reminders `change` curation: remctl answers a write with a
+   status + an id + a name, never a record, so `titleKey` carries the name. */
+const REMINDERS_CHANGE = {
+  actionKey: "status", titleKey: "title", warningsKey: "warnings",
+  warningActions: ["partial"], errorKey: "error.message", detailKeys: ["list", "section"],
+  batch: { rowsKey: "results", idKey: "id", titleKey: "title", messageKey: "message", operationKey: "operation",
+    succeededKey: "succeeded", uncertainKey: "uncertain", titles: { done: "Marked done" } },
+  titles: {
+    partial: "Created, but one step failed",
+    created: "Reminder created",
+    updated: "Reminder updated",
+    completed: "Marked done",
+    uncompleted: "Marked not done",
+    deleted: "Reminder deleted",
+    unchanged: "No changes",
+    flagged: "Reminder flagged",
+    unflagged: "Reminder unflagged"
+  }
+};
+
+function remindersMeta(overrides) {
+  return Object.assign({}, UI_META, {
+    table: Object.assign({}, UI_META.table, { change: REMINDERS_CHANGE })
+  }, overrides || {});
+}
+
+// One reminder with its subtasks: exactly the shape that used to render as a
+// table of the CHILDREN with the reminder itself gone. `resolvedList` is the
+// object remctl echoes back — nothing may print "[object Object]" about it.
+const REMINDER_RECORD = {
+  id: 23901, title: "Publish MacRemote article", list: "Editorial",
+  dueDate: "2026-07-09T14:00:00", allDay: false, priority: "high",
+  completed: false, flagged: false, urgent: true,
+  resolvedList: { name: "Editorial", id: "AF13B0C2" },
+  subtasks: [
+    { id: 23911, title: "Draft the intro", completed: true },
+    { id: 23912, title: "Shoot the hero screenshot", completed: false }
+  ]
+};
+
+const RECURRENCE_REMINDERS = [{
+  id: 23921, title: "Publish recurring field notes", list: "Editorial",
+  dueDate: "2026-08-25T09:00:00", allDay: false, completed: false, flagged: true,
+  recurrence: {
+    frequency: "monthly", interval: 2,
+    daysOfWeekDetailed: [{ weekNumber: 4, dayOfTheWeek: 3 }],
+    daysOfWeek: [3], count: 5
+  }
+}, {
+  id: 23922, title: "Review the last Friday report", list: "Work",
+  dueDate: "2026-08-28T09:00:00", allDay: false, completed: false, flagged: false,
+  recurrence: {
+    frequency: "monthly", interval: 1,
+    daysOfWeek: [6], weekNumbers: [-1],
+    endDate: "2026-12-31T23:59:59Z"
+  }
+}, {
+  id: 23923, title: "Review the eleventh-week archive", list: "Work",
+  dueDate: "2027-03-15T09:00:00", allDay: false, completed: false, isFlagged: false,
+  recurrence: {
+    frequency: "yearly", interval: 1,
+    daysOfWeekDetailed: [{ weekNumber: 11, dayOfTheWeek: 2 }]
+  }
+}];
+
+const DENSE_REMINDERS = Array.from({ length: 18 }, (_, index) => {
+  const source = REMINDERS[index % REMINDERS.length];
+  return Object.assign({}, source, {
+    id: 25000 + index,
+    title: (index + 1) + ". " + source.title + (index % 3 === 0 ? " with a deliberately long mobile title that must wrap cleanly" : ""),
+    completed: index % 7 === 0
+  });
+});
+
+const DENSE_UI_META = Object.assign({}, UI_META, {
+  toolTitle: "Dense Upcoming",
+  actions: [UI_META.actions[0], UI_META.actions[1], {
+    id: "edit_title", title: "Edit Title", kind: "rowButton",
+    toolName: "remctl_run", toolCapability: "destructive",
+    arguments: { args: ["edit", "{id}", "--title", "{input.title}", "--json"] },
+    requiredRowFields: ["id"],
+    inputs: [{ name: "title", title: "New title", placeholder: "Reminder title", prefillField: "title" }]
+  }, UI_META.actions[2]]
+});
+
+const EPISODES = [
+  { uuid: "f0fa0c5d-ce56-4079-9054-dcbe414aaee5", url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/secure/upgradeplus626.mp3",
+    published: "2026-06-29T21:00:00Z", duration: 6213, fileType: "audio/mp3", title: "Unprecedented Weirdness", size: "126583816",
+    playingStatus: 2, playedUpTo: 4137, starred: false, podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Upgrade+ — Private to Federico Viticci", episodeNumber: 626, author: "Relay" },
+  { uuid: "01a894b1-c26c-43e2-9f5d-37e738047670", url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/Moretex_177.mp3",
+    published: "2026-03-23T16:15:00Z", duration: 5042, fileType: "audio/mp3", title: "How Major Life Changes Reshape Creative Workflows, With Quinn Nelson", size: "81196535",
+    playingStatus: 2, playedUpTo: 2285, starred: false, podcastUuid: "aa7f4440-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Moretex — Private to Federico Viticci", episodeNumber: 177, author: "Relay" },
+  { uuid: "92f82cef-d654-4e55-9723-09b0dfd632fd", url: "https://www.patreon.com/api/rss/u/example/e/147791572.mp3",
+    published: "2026-01-09T08:00:00Z", duration: 3696, fileType: "audio/mpeg", title: "The Most Anticipated Games of 2026", size: "59136000",
+    playingStatus: 2, playedUpTo: 300, starred: true, podcastUuid: "0e2b1031-e081-6ef1-8f7b-0266557711f5",
+    podcastTitle: "Remaster", episodeNumber: 104, author: "Relay" },
+  // up-next shape: `podcast` instead of podcastUuid, no podcastTitle —
+  // artwork must still resolve via the sourceKey fallback, subtitle absent.
+  { uuid: "c1419c77-aaaa-bbbb-cccc-000000000001", url: "https://example.com/thinking-hitch.mp3",
+    published: "2026-06-20T08:00:00Z", duration: 8340, title: "A Thinking Hitch",
+    playedUpTo: 0, podcast: "3ffe4519-f2f0-8e53-4051-f42dcc2fd1d9", alternateEnclosures: [] }
+];
+
+/* The server no longer curates podcast or habit results (SPEC D88). These
+   fixtures keep the widget's hint-driven renderers covered: any curated
+   profile name takes the curated path, and the `table` hints drive the rest. */
+const POCKET_UI_META = {
+  version: 1,
+  profile: "reminderRows",
+  toolTitle: "Podcast In Progress",
+  toolName: "castctl_in_progress",
+  capability: "readOnly",
+  category: "Podcasts",
+  accent: "#f43e37",
+  table: {
+    columns: [
+      { key: "artwork", title: "", derive: "artwork", sourceKey: ["podcastUuid", "podcast"], altKey: "podcastTitle",
+        urlTemplate: "https://static.pocketcasts.com/discover/images/webp/200/{value}.webp" },
+      { key: "title", title: "Episode", primary: true, subtitleKey: "podcastTitle" },
+      { key: "duration", title: "Duration", derive: "duration", sourceKey: "duration" },
+      { key: "progress", title: "Played", derive: "progress", sourceKey: "playedUpTo", totalKey: "duration", format: "seconds" },
+      { key: "url", title: "Link", derive: "link", sourceKey: "url" }
+    ],
+    hiddenColumns: ["uuid", "published", "fileType", "size", "podcastUuid", "podcast", "podcastTitle",
+                    "playingStatus", "episodeType", "episodeSeason", "isDeleted", "podcastSlug",
+                    "slug", "alternateEnclosures", "bookmarks",
+                    "type", "explicit", "hasVideoEpisodes", "publishedDate"]
+  },
+  actions: [{
+    id: "play_next", title: "Play Next", kind: "rowButton",
+    toolName: "castctl_run", toolCapability: "destructive",
+    arguments: { args: ["play-next", "{uuid}"] }, requiredRowFields: ["uuid"]
+  }, {
+    id: "play_last", title: "Play Last", kind: "rowButton",
+    toolName: "castctl_run", toolCapability: "destructive",
+    arguments: { args: ["play-last", "{uuid}"] }, requiredRowFields: ["uuid"]
+  }, {
+    id: "star", title: "Star", kind: "rowButton",
+    toolName: "castctl_run", toolCapability: "destructive",
+    arguments: { args: ["star", "{uuid}"] }, requiredRowFields: ["uuid"]
+  }]
+};
+
+/* ——— castctl triage / queue-change curation ———
+   Shaped like the podcast curation the server served before SPEC D88: one `table`
+   object carries columns, groups, and change, so these fixtures also prove the
+   change state wins over grouped sections for a payload that has both. */
+const POCKET_GROUPS = [
+  { key: "now", title: "Now Playing", style: "card" },
+  { key: "up_next", title: "Up Next", numbered: true },
+  { key: "in_progress", title: "In Progress" },
+  { key: "new_releases", title: "New Releases" },
+  // search-online --type combined answers with two kinds of row in one object
+  { key: "podcasts", title: "Podcasts" },
+  { key: "episodes", title: "Episodes" }
+];
+const POCKET_CHANGE = {
+  actionKey: "action", episodeKey: "episode",
+  queueKey: "up_next", queueTitle: "Up Next",
+  dryRunKey: "dry_run", countKey: "up_next_count",
+  countNoun: "episode", countNounPlural: "episodes",
+  titles: {
+    "play-now": "Playing now",
+    "play-next": "Queued to play next",
+    "play-last": "Added to the end of Up Next",
+    "remove-up-next": "Removed from Up Next",
+    "episode-done": "Marked played",
+    "episode-unplayed": "Marked unplayed",
+    "episode-star": "Starred",
+    "episode-unstar": "Unstarred",
+    "episode-archive": "Archived",
+    "episode-unarchive": "Unarchived",
+    "episode-progress": "Playback position set"
+  }
+};
+// The same curation with no noun declared: the widget's own generic default
+// ("item"/"items") must take over — never a domain word of its own.
+// (The keys are deleted, not set to undefined: `_meta` has to stay a valid
+// JSON value or the widget rejects the whole result — as it should.)
+const POCKET_CHANGE_NO_NOUN = (() => {
+  const copy = Object.assign({}, POCKET_CHANGE);
+  delete copy.countNoun;
+  delete copy.countNounPlural;
+  return copy;
+})();
+
+// Triage curation whose artwork URL is a data: URI that is not an image, so
+// every load fails locally and deterministically — the placeholder path a host
+// CSP without the artwork origin puts every row through.
+function pocketMetaUnloadableArtwork() {
+  const meta = pocketMeta({ toolTitle: "Podcast Triage", toolName: "castctl_triage" });
+  return Object.assign({}, meta, {
+    table: Object.assign({}, meta.table, {
+      columns: meta.table.columns.map(column => column.derive === "artwork"
+        ? Object.assign({}, column, { urlTemplate: "data:image/webp;base64,{value}" })
+        : column)
+    })
+  });
+}
+
+function pocketMeta(overrides, change) {
+  return Object.assign({}, POCKET_UI_META, {
+    table: Object.assign({}, POCKET_UI_META.table, {
+      groups: POCKET_GROUPS, change: change || POCKET_CHANGE
+    })
+  }, overrides || {});
+}
+
+/* Real `castctl triage --limit 8 --json` rows, trimmed for harness size.
+   now/up_next carry the up-next spelling of the podcast uuid (`podcast`) plus
+   the enriched `podcastTitle`; one up_next row deliberately keeps the
+   unenriched shape (cache miss) so the artwork fallback stays covered. */
+const QUEUE_ROWS = [
+  { uuid: "70965f54-bd6d-4a85-85da-d252453d43fa", title: "Conspiracy to Steal Trade Secrets",
+    url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/secure/upplusjvpoewjnbhui/upgradeplus628-praesidium.mp3",
+    podcast: "484f5720-ec94-0139-d4c2-0acc26574db2", podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Upgrade+ — Private to Federico Viticci",
+    published: "2026-07-13T21:15:00Z", playedUpTo: 681, duration: 6651 },
+  { uuid: "e3d202f8-5dc3-4eaf-bd3e-1ad19bd5442d", title: "Jony Ive Loves a Handle",
+    url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/forcedn/upplusjvpoewjnbhui/upgradeplus629-nonnautical.mp3",
+    podcast: "484f5720-ec94-0139-d4c2-0acc26574db2", podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Upgrade+ — Private to Federico Viticci",
+    published: "2026-07-20T21:45:00Z", duration: 5824 },
+  { uuid: "5d15b076-8899-48c6-8a9b-270d17e9c50d", title: "Repeat 600 Times",
+    url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/secure/upplusjvpoewjnbhui/upgradeplus630-inopercular.mp3",
+    podcast: "484f5720-ec94-0139-d4c2-0acc26574db2", podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Upgrade+ — Private to Federico Viticci",
+    published: "2026-07-27T16:45:00Z", duration: 8111 },
+  { uuid: "06312261-e1b9-409e-bf14-ea64b7949b7c", title: "Google is Not a Serious Company",
+    url: "https://anchor.fm/s/1112097e0/podcast/play/120649541/audio.mp3",
+    podcast: "fbbb2ed0-15e9-013f-2b13-0e956d54cc61", podcastUuid: "fbbb2ed0-15e9-013f-2b13-0e956d54cc61",
+    podcastTitle: "Nerd Snipe with Theo and Ben",
+    published: "2026-05-28T04:17:07Z", playedUpTo: 379, duration: 4966 },
+  { uuid: "8aea3e46-969d-41e0-80fb-f9935c310648", title: "A Thinking Hitch",
+    url: "https://example.com/a-thinking-hitch.mp3",
+    podcast: "be3de8a0-3c99-013f-ebbe-0affd4d95be3",
+    published: "2026-07-24T08:00:00Z", duration: 8342, alternateEnclosures: [] }
+];
+
+const PROGRESS_ROWS = [
+  { uuid: "70965f54-bd6d-4a85-85da-d252453d43fa", title: "Conspiracy to Steal Trade Secrets",
+    url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/secure/upplusjvpoewjnbhui/upgradeplus628-praesidium.mp3",
+    published: "2026-07-13T21:15:00Z", duration: 6651, playedUpTo: 681,
+    podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2", podcastTitle: "Upgrade+ — Private to Federico Viticci",
+    starred: false, episodeNumber: 628, author: "Relay", playingStatus: 2 },
+  { uuid: "06312261-e1b9-409e-bf14-ea64b7949b7c", title: "Google is Not a Serious Company",
+    url: "https://anchor.fm/s/1112097e0/podcast/play/120649541/audio.mp3",
+    published: "2026-05-28T04:17:07Z", duration: 4966, playedUpTo: 379,
+    podcastUuid: "fbbb2ed0-15e9-013f-2b13-0e956d54cc61", podcastTitle: "Nerd Snipe with Theo and Ben",
+    starred: false, episodeNumber: 9, author: "Theo and Ben", playingStatus: 2 },
+  { uuid: "92f82cef-d654-4e55-9723-09b0dfd632fd", title: "The Most Anticipated Games of 2026",
+    url: "https://www.patreon.com/api/rss/u/example/e/147791572.mp3",
+    published: "2026-01-09T08:00:00Z", duration: 3696, playedUpTo: 78,
+    podcastUuid: "a576ab40-8448-013e-59ce-0affef269edf", podcastTitle: "The Besties - Ad-Free Feed",
+    starred: false, episodeNumber: 480, author: "Justin McElroy, Griffin McElroy, Chris Plante, Russ Frushtick", playingStatus: 2 }
+];
+
+const RELEASE_ROWS = [
+  { uuid: "486a29d8-2331-44d0-bc62-0141f5725224", title: "Sacred Realms Retrospective - Dungeons Pt. 1 w/ Josh",
+    url: "https://www.buzzsprout.com/1738494/episodes/19572608-sacred-realms-retrospective-dungeons-pt-1-w-josh.mp3",
+    published: "2026-07-29T22:00:00Z", duration: 11260, playedUpTo: 0,
+    podcastUuid: "0ec08d80-74a1-0139-345d-0acc26574db2", podcastTitle: "Sacred Realms: A Zelda Retrospective Podcast",
+    starred: false, episodeNumber: 2, author: "Lyndon Willoughby", playingStatus: 1 },
+  { uuid: "179ac2f5-6c6d-4c10-8d17-e8bff3bb1dd4", title: "Spicy Raid (feat. Splatoon Raiders and RuneScape: Dragonwilds)",
+    url: "https://www.patreon.com/api/rss/u/example/e/165127406.mp3",
+    published: "2026-07-29T07:00:08Z", duration: 6351, playedUpTo: 0,
+    podcastUuid: "c64f6420-a01f-013c-959f-0e76ec147af9", podcastTitle: "Into the Aether: Low Key Patreon Exclusives",
+    starred: false, episodeNumber: 0, author: "Into the Aether", playingStatus: 1 },
+  { uuid: "212c54af-4e43-4891-9e1e-7913da9810aa", title: "Triple Click - Beanscast: The Odyssey",
+    url: "https://afp-9384.calisto.simplecastaudio.com/685c0196/episodes/9d90141f/audio/128/default.mp3",
+    published: "2026-07-29T04:00:00Z", duration: 4638, playedUpTo: 0,
+    podcastUuid: "0cd2d6e0-51b4-013c-9ebc-0acc26574db2", podcastTitle: "Maximum Fun Bonus Content",
+    starred: false, episodeNumber: 0, author: "Maximum Fun", playingStatus: 1 }
+];
+
+const TRIAGE = {
+  now: [QUEUE_ROWS[0]],
+  up_next: QUEUE_ROWS,
+  in_progress: PROGRESS_ROWS,
+  new_releases: RELEASE_ROWS,
+  // Not part of castctl's own output: a scalar the `groups` curation does
+  // not name, so the harness covers the "uncovered scalar → dim meta chip,
+  // never a tree" rule.
+  limit: 8,
+  // Also not castctl's: an uncovered object and an uncovered list of plain
+  // values. Neither has an honest one-line form ("Window · 2 keys" is the
+  // developer-y shape this UI replaces), so both must stay out of the chips
+  // while the model-facing text fallback still carries them.
+  window: { days: 7, includeArchived: false },
+  sources: ["subscriptions", "listening"]
+};
+
+// The same report on a quiet day: castctl answers with the same four keys and
+// nothing in any of them. This must stay a report, not a key/value tree.
+const EMPTY_TRIAGE = {
+  now: [],
+  up_next: [],
+  in_progress: [],
+  new_releases: [],
+  limit: 8
+};
+
+// play-next: the resulting (or projected) queue, with the moved episode second
+// — right after whatever is playing. Highlighted by uuid in the widget.
+const CHANGED_QUEUE = [QUEUE_ROWS[0], QUEUE_ROWS[1], QUEUE_ROWS[2], QUEUE_ROWS[3], QUEUE_ROWS[4]];
+function changePayload(dryRun) {
+  return {
+    action: "play-next",
+    dry_run: dryRun,
+    episode_uuid: "e3d202f8-5dc3-4eaf-bd3e-1ad19bd5442d",
+    episode: QUEUE_ROWS[1],
+    up_next: CHANGED_QUEUE,
+    up_next_count: CHANGED_QUEUE.length
+  };
+}
+// The shape castctl emitted before the UI upgrade: a recognized action with
+// nothing human-readable. Must still read as a confirmation, never a tree.
+const LEGACY_CHANGE = {
+  dry_run: true,
+  action: "play-next",
+  episode_uuid: "e3d202f8-5dc3-4eaf-bd3e-1ad19bd5442d",
+  up_next_count: 10
+};
+
+// Episode-state writes (star / archive): a confirmation about ONE episode with
+// no queue attached. Before the `episode` summary landed these were a raw tree
+// (star) or a table with zero surviving columns — a literally blank result.
+const EPISODE_STAR = {
+  dry_run: false, action: "episode-star",
+  episode_uuid: QUEUE_ROWS[1].uuid, podcast_uuid: QUEUE_ROWS[1].podcast,
+  star: true, episode: QUEUE_ROWS[1]
+};
+const EPISODE_ARCHIVE = {
+  dry_run: false, action: "episode-archive",
+  archive: true, remove_up_next: false,
+  episodes: [{ uuid: QUEUE_ROWS[3].uuid, podcast: QUEUE_ROWS[3].podcast }],
+  episode: QUEUE_ROWS[3]
+};
+
+// The coexistence case: a curation that names BOTH a scalar title and a record
+// key, against a payload that carries both. The card already shows the name, so
+// the dim title line must stay out of the way rather than say it twice.
+const EPISODE_STAR_WITH_TITLE = Object.assign({}, EPISODE_STAR, {
+  action: "episode-unstar", episode_title: QUEUE_ROWS[1].title
+});
+const POCKET_CHANGE_WITH_TITLE = Object.assign({}, POCKET_CHANGE, {
+  titleKey: "episode_title"
+});
+
+/* A real `castctl search-online --type combined --json` body, trimmed.
+   The two row kinds are genuinely different: a PODCAST row has none of the
+   curated episode fields — not even `podcastUuid` — so its section falls back
+   to auto columns (title + author), while an EPISODE row keeps the curated
+   layout with the cells it can fill. Do NOT give podcast rows a `podcastUuid`
+   they do not have: that fabrication hid what this section really renders. */
+const SEARCH_GROUPS = {
+  podcasts: [
+    { uuid: "b0f0c530-631d-013a-d73a-0acc26574db2", title: "Caffè Swift",
+      author: "Arturo Rivas Arias y Julio César Fernández Muñoz",
+      slug: "caffè-swift", explicit: false, hasVideoEpisodes: false, type: "podcast" },
+    { uuid: "0606a680-91b5-0136-7b92-27f978dac4db", title: "Swift over Coffee",
+      author: "Paul Hudson and Mikaela Caron",
+      slug: "swift-over-coffee", explicit: false, hasVideoEpisodes: false, type: "podcast" }
+  ],
+  episodes: [
+    { uuid: "02739e22-637e-46fc-9fd7-b71f2a095dbe",
+      title: "123: “The evolution of Swift”, with special guest Nick Lockwood",
+      publishedDate: "2022-12-19T15:05:00Z", published: "2022-12-19T15:05:00Z",
+      url: "https://traffic.libsyn.com/swiftbysundell/SwiftBySundell123.mp3",
+      duration: 3807, podcastUuid: "dc696b00-628d-0135-902c-63f4b61a9224",
+      podcastTitle: "Swift by Sundell", podcastSlug: "swift-by-sundell", type: "episode" },
+    { uuid: "a1ab667f-0cf0-41a0-8bca-c272f4e04745", title: "S3E16: Swift 6 strict",
+      publishedDate: "2024-08-06T09:37:51Z", published: "2024-08-06T09:37:51Z",
+      url: "https://example.com/swift6.mp3", duration: 2411,
+      podcastUuid: "0606a680-91b5-0136-7b92-27f978dac4db",
+      podcastTitle: "Swift over Coffee", podcastSlug: "swift-over-coffee", type: "episode" },
+    { uuid: "cc1a5c3b-1111-2222-3333-444455556666", title: "Dirty Swift #12",
+      publishedDate: "2023-02-01T08:00:00Z", published: "2023-02-01T08:00:00Z",
+      url: "https://example.com/dirty12.mp3", duration: 1800,
+      podcastUuid: "04503d90-a6d0-0138-e680-0acc26574db2",
+      podcastTitle: "Dirty Swift", podcastSlug: "dirty-swift", type: "episode" }
+  ]
+};
+
+/* ——— streakctl ———
+   Journal rows and habit DEFINITIONS are different shapes from the same CLI.
+   A definition has no streak and no progress, so the curated columns collapse
+   to one and the card falls back to auto columns — the path where a nested
+   object used to print "[object Object]" straight into the card meta. */
+const HABIT_ROWS = [
+  { id: "-OwFK1", name: "Listen to one new song", status: "inprogress", type: "good", color: "#2A67F4",
+    timeOfDayIds: ["afternoon"], currentStreak: { length: 1, unit: "day" },
+    progress: { current: 0, target: 1, unit: "rep", periodicity: "daily" }, logInfo: { type: "manual" } },
+  { id: "-OwFK2", name: "Morning walk", status: "completed", type: "good", color: "#299240",
+    timeOfDayIds: ["morning"], currentStreak: { length: 12, unit: "day" },
+    progress: { current: 1, target: 1, unit: "rep", periodicity: "daily" }, logInfo: { type: "manual" } },
+  { id: "-OwFK3", name: "Drink water", status: "inprogress", type: "good", color: "#E0861D",
+    timeOfDayIds: ["morning", "afternoon"], currentStreak: { length: 4, unit: "day" },
+    progress: { current: 3, target: 8, unit: "glasses", periodicity: "daily" }, logInfo: { type: "manual" } }
+];
+
+/* A real `streakctl show --json` body, trimmed. `startDate` is DATE-ONLY, the
+   spelling streakctl actually emits — the curated column carries `allDay: true`
+   so this reads "Jan 4", not the meaningless "Jan 4, 12:00 AM" (and not
+   "Jan 3", which is what a UTC-parsed bare date becomes west of Greenwich). */
+const HABIT_DEFINITION = {
+  id: "-OwFK1", name: "Listen to one new song",
+  icon: "mental-health", colorHex: "#2A67F4", type: "good",
+  description: "One album track a day, no repeats",
+  occurrence: { type: "weekDays", days: [1, 2, 3, 4, 5] },
+  startDate: "2026-01-04",
+  createdAt: "2026-01-03T22:23:56.000Z",
+  isArchived: false, logMethod: "manual",
+  goals: [{ id: "ede3cb68", createdAt: "2026-01-03T22:23:56.393+00:00",
+            periodicity: "daily", value: 1, unit: "rep", isActive: true }],
+  customUnitName: null,
+  reminders: { timeTriggers: [{ time: { hour: 15, minute: 0 }, showAsAlarm: false }] },
+  timeOfDays: [{ id: "afternoon", name: "Afternoon" }]
+};
+
+// streakctl real writes: an action, the habit's display name, and the raw API
+// body. No record to card, so the name has to come through `titleKey`.
+const HABIT_CHECK_OFF = {
+  dry_run: false, action: "complete", habit: "Morning walk",
+  result: { status: "ok", logged_at: "2026-07-30T08:12:00+02:00" }
+};
+
+const HABIT_CHANGE = {
+  actionKey: "action", titleKey: "habit", dryRunKey: "dry_run",
+  titles: {
+    complete: "Checked off", failed: "Marked failed", skipped: "Skipped",
+    undo: "Check-off undone", log: "Logged"
+  }
+};
+
+const HABIT_UI_META = {
+  version: 1, profile: "reminderRows", toolTitle: "Habit Today", toolName: "streakctl_today",
+  capability: "readOnly", category: "Habits", accent: "#2a9df4",
+  table: {
+    // Shaped like the habit curation the server served before SPEC D88: one curation
+    // over streakctl's TWO shapes. A journal row keeps Streak/Goal; a habit
+    // DEFINITION (show/search) keeps Target/Started; neither ever falls back
+    // to raw JSON columns. `allDay: true` on the start date is the literal
+    // spelling of all-day-ness — streakctl serializes a start DAY as a full
+    // ISO timestamp, and "Jan 4, 12:00 AM" would be a midnight that means
+    // nothing. (Reminders use the per-row `allDayKey` instead.)
+    columns: [
+      { key: "name", title: "Habit", primary: true, subtitleKey: "description" },
+      { key: "streak", title: "Streak", derive: "quantity", sourceKey: "currentStreak.length", unitKey: "currentStreak.unit" },
+      { key: "goal", title: "Goal", derive: "progress", sourceKey: "progress.current", totalKey: "progress.target", unitKey: "progress.unit" },
+      { key: "target", title: "Target", derive: "quantity", sourceKey: "goals.0.value", unitKey: "goals.0.unit" },
+      { key: "startDate", title: "Started", derive: "datetime", sourceKey: "startDate", allDay: true }
+    ],
+    hiddenColumns: ["id", "status", "color", "iconNamed", "timeOfDayIds", "type", "logInfo",
+                    "colorHex", "icon", "logMethod", "createdAt", "occurrence", "reminders",
+                    "timeOfDays", "goals", "customUnitName", "isArchived", "description"],
+    change: HABIT_CHANGE
+  },
+  actions: [{
+    id: "check", title: "Mark Complete", kind: "checkOff",
+    toolName: "streakctl_run", toolCapability: "destructive",
+    arguments: { args: ["check", "{id}"] },
+    requiredRowFields: ["id"], completedWhenField: "status", completedWhenEquals: "completed"
+  }]
+};
+
+const OVER_TABLE = {
+  rootPath: "data",
+  retryOnError: false,
+  columns: [
+    { key: "title", title: "Episode", primary: true, subtitleKey: ["podcastTitle", "subtitle"] },
+    { key: "tier", title: "Tier", derive: "text", sourceKey: "ranking.tier" },
+    { key: "left", title: "Left", derive: "duration", sourceKey: ["timeLeftSeconds", "timeRemaining"] },
+    { key: "duration", title: "Duration", derive: "duration", sourceKey: ["durationSeconds", "duration"] },
+    { key: "progress", title: "Played", derive: "progress", sourceKey: ["progressSeconds", "progress"], totalKey: ["durationSeconds", "duration"], format: "seconds" }
+  ],
+  hiddenColumns: ["episodeID", "podcastID", "podcastTitle", "ranking", "progressSeconds", "durationSeconds", "timeLeftSeconds"],
+  groups: [{ key: "items", title: "Up Next", numbered: true }],
+  document: { bodyKey: "text", titleKey: "title", fallbackTitle: "Transcript" },
+  context: [
+    { path: "meta.source", title: "Source" },
+    { path: "meta.live", title: "Live" },
+    { path: "data.verified", title: "Read Back" },
+    { path: "data.verificationConclusive", title: "Conclusive" }
+  ],
+  change: {
+    actionKey: "action", dryRunKey: ["dry_run", "dryRun"],
+    submittedKey: "submitted", verifiedKey: "verified",
+    unverifiedWarning: "The write was not confirmed by read-back.",
+    titles: { "queue-add": "Added to Queue", "queue-remove": "Removed from Queue" }
+  }
+};
+
+const OVER_UI_META = {
+  version: 1, profile: "reminderRows", toolTitle: "Episode Queue", toolName: "episode_queue",
+  capability: "readOnly", category: "Podcasts",
+  accent: "light-dark(#9a4300, #ff9f0a)", table: OVER_TABLE, actions: []
+};
+
+const NOTE_TABLE = {
+  columns: [
+    { key: "title", title: "Note", primary: true, subtitleKey: "bodyPreview" },
+    { key: "modified", title: "Modified", derive: "datetime", sourceKey: "modified" },
+    { key: "folder", title: "Folder" },
+    { key: "account", title: "Account" },
+    { key: "attachments", title: "Attachments", derive: "quantity", sourceKey: "attachmentCount", unit: "attachment" },
+    { key: "pinned", title: "Pinned", derive: "booleanLabel", sourceKey: ["pinned", "isPinned"], trueLabel: "Pinned" },
+    { key: "locked", title: "Locked", derive: "booleanLabel", sourceKey: ["isLocked", "locked"], trueLabel: "Locked" }
+  ],
+  document: { bodyKey: ["markdown", "transcript"], titleFromFirstHeading: true, fallbackTitle: "Note" },
+  groups: [{
+    key: "transcripts", title: "Transcripts", style: "documentList",
+    bodyKey: ["transcript", "message"], statusKey: "status",
+    statusTitles: { ok: "Available", error: "Error" },
+    pendingKey: "needsTranscription", pendingTitle: "Pending", fallbackRowTitle: "Recording"
+  }],
+  change: {
+    actionKey: "status", dryRunKey: "dryRun", previewActions: ["planned"],
+    titles: { planned: "Preview ready", created: "Note created", updated: "Note updated", deleted: "Moved to Recently Deleted", ok: "No changes" }
+  }
+};
+
+const NOTE_UI_META = {
+  version: 1, profile: "noteRows", toolTitle: "Note", toolName: "note_reader",
+  capability: "readOnly", category: "Notes",
+  accent: "light-dark(#7a5900, #ffd60a)", table: NOTE_TABLE, actions: []
+};
+
+const NOTE_ROWS = [{
+  identifier: "31D520C4-1CAE-43E3-8A28-566EE44FA2AE",
+  title: "Release Checklist",
+  bodyPreview: "Notarize the build and verify the packaged app.",
+  modified: "2026-08-30T09:15:00+02:00",
+  folder: "MacRemote",
+  account: "iCloud",
+  attachmentCount: 2,
+  pinned: true,
+  isLocked: false,
+  // These real wire fields are intentionally presentation-hidden.
+  modifiedCheckpoint: "HIDDEN_CHECKPOINT_DO_NOT_RENDER",
+  textDecoded: "HIDDEN_DECODED_NOTE_DO_NOT_RENDER"
+}];
+
+const NOTE_PREVIEW = {
+  status: "planned", dryRun: true, wouldChange: true,
+  blocksPlanned: 2, operationCount: 1
+};
+
+const NOTE_APPLIED = {
+  status: "created", dryRun: false, blocksApplied: 2,
+  pushState: "pushed", syncDurability: "durable"
+};
+
+const VISIBILITY_FALLBACK = {
+  content: [
+    {
+      type: "text",
+      text: "USER_ONLY_DO_NOT_RENDER",
+      annotations: { audience: ["user"] }
+    },
+    {
+      type: "text",
+      text: "SAFE_VISIBLE_SUMMARY",
+      annotations: { audience: ["assistant"] }
+    }
+  ],
+  _meta: {
+    "net.viticci.macremote/ui": {
+      version: 1, toolTitle: "Flexible Command", toolName: "provider_run",
+      capability: "destructive", category: "Utilities"
+    },
+    privateTrace: "HIDDEN_META_DO_NOT_RENDER"
+  }
+};
+
+const UNSAFE_FALLBACK_STDOUT = [
+  "SAFE_VISIBLE_SUMMARY",
+  "secretctl publish --token REDACTED",
+  "git status",
+  "swift build",
+  "/Users/private/SecretCLI",
+  "/usr/local/bin/secretctl",
+  "file:///Users/private/secret.txt",
+  "/tmp/private-output.json",
+  "/var/private/state",
+  "/etc/private.conf",
+  "/dev/private-device",
+  "/home/private/secret",
+  "argv: [\"publish\", \"--token\", \"REDACTED\"]",
+  "api_key=API_KEY_DO_NOT_RENDER",
+  "accessToken=ACCESS_TOKEN_DO_NOT_RENDER",
+  "access_token=ACCESS_TOKEN_SNAKE_DO_NOT_RENDER",
+  "bearer BEARER_DO_NOT_RENDER",
+  "credential=CREDENTIAL_DO_NOT_RENDER",
+  "cookie=COOKIE_DO_NOT_RENDER",
+  "session=SESSION_DO_NOT_RENDER",
+  "{\"secret\":\"RAW_JSON_DO_NOT_RENDER\"}"
+].join("\n");
+
+const ARTIFACT_ENVELOPE = envelope({
+  toolName: "filesystem_download_zip",
+  stdout: JSON.stringify({ status: "ready", itemCount: 2, message: "Your download is ready." })
+});
+
+const MULTIMODAL_STRUCTURED = {
+  message: "SAFE_VISIBLE_SUMMARY",
+  itemCount: 2
+};
+
+const SEMANTIC_COUNTS = {
+  itemCount: 3,
+  ready: true,
+  records: ["PRIVATE_RECORD_ONE_DO_NOT_RENDER", "PRIVATE_RECORD_TWO_DO_NOT_RENDER"],
+  message: "ARBITRARY_TEXT_DO_NOT_RENDER",
+  apiKeyValue: "API_KEY_VARIANT_DO_NOT_RENDER",
+  passwordHint: "PASSWORD_VARIANT_DO_NOT_RENDER",
+  client_secret_value: "CLIENT_SECRET_VARIANT_DO_NOT_RENDER",
+  localPath: "/Network/Servers/private",
+  commandLine: "ruby private.rb --verbose",
+  callbackURL: "https://example.com/callback?access_token=CREDENTIAL_URL_DO_NOT_RENDER",
+  "curl https://example.com/private": true,
+  "/Users/name/Documents/report.txt": ["HOSTILE_GENERIC_KEY_VALUE_DO_NOT_RENDER"]
+};
+
+const CURATED_SAFETY_DOCUMENT = [
+  "# Curated Safety",
+  "This safe sentence remains visible.",
+  "password: PASSWORD_VARIANT_DO_NOT_RENDER",
+  "client-secret=CLIENT_SECRET_VARIANT_DO_NOT_RENDER",
+  "authentication AUTH_VARIANT_DO_NOT_RENDER",
+  "passphrase: PASSPHRASE_VARIANT_DO_NOT_RENDER",
+  "/Network/Servers/private/result.txt",
+  "ruby private.rb --verbose",
+  "https://example.com/callback?api_key=CREDENTIAL_URL_DO_NOT_RENDER",
+  "sk-proj-HOSTILECURATEDSECRET123456789_DO_NOT_RENDER",
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwcml2YXRlIn0.HOSTILEJWTSECRET123456789"
+].join("\n\n");
+
+// A transcript: ~97 KB of JSON clipped at the inline stdout cap. What survives
+// parses as nothing at all — the fragment is noise, not output.
+const CLIPPED_JSON = JSON.stringify({
+  episode_uuid: "70965f54-bd6d-4a85-85da-d252453d43fa",
+  segments: Array.from({ length: 40 }, (_, i) => ({
+    start: i * 7.5, end: i * 7.5 + 7.2,
+    speaker: "Speaker " + (i % 3),
+    text: "This is transcript line " + (i + 1) + " of a very long episode transcript."
+  }))
+}).slice(0, 1800);
+
+function envelope(overrides) {
+  return Object.assign({
+    toolID: "remctl_today", toolName: "remctl_today", exitCode: 0, succeeded: true,
+    stdout: "", stderr: "", durationSeconds: 0.42, timedOut: false,
+    truncatedStdout: false, truncatedStderr: false
+  }, overrides || {});
+}
+
+const FIXTURES = {
+  remindertextfallback: { content: [{ type: "text", text: JSON.stringify(envelope({ toolName: "Create Reminder", stdout: JSON.stringify({status: "created", title: "Dentifricio", list: "Shopping", section: "Supermercato"}) })) }],
+    _meta: {"net.viticci.macremote/ui": remindersMeta({toolTitle: "Create Reminder", capability: "write"})} },
+  reminderpartial: { structuredContent: envelope({ succeeded: false, exitCode: 1, stdout: JSON.stringify({status: "partial", title: "Dentifricio", error: {message: "Section was not saved"}}) }), isError: true,
+    _meta: {"net.viticci.macremote/ui": remindersMeta({toolTitle: "Create Reminder", capability: "write"})} },
+  reminderbatch: { structuredContent: envelope({ succeeded: false, exitCode: 1, stdout: JSON.stringify({operation: "done", results: [{id: 1, title: "Dentifricio"}, {id: 2, title: "Scottex", message: "Check before retrying"}, {id: 3, title: "Crema di nocciole"}], succeeded: [1], uncertain: [2], failed: [3]}) }), isError: true,
+    _meta: {"net.viticci.macremote/ui": remindersMeta({toolTitle: "Complete Reminders", capability: "write"})} },
+  reminderdeletedrow: { structuredContent: envelope({ stdout: JSON.stringify({items: [{id: 1, title: "Dentifricio", list: "Shopping", isDeleted: true}]}) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({toolTitle: "Deleted Reminders", capability: "readOnly"})} },
+  table: { structuredContent: envelope({ stdout: JSON.stringify({ items: REMINDERS }) }), _meta: {"net.viticci.macremote/ui": UI_META} },
+  sortrows: {
+    structuredContent: envelope({ stdout: JSON.stringify(
+      [10, 2, "2", null, "", 1, 20, "10", 3, 2].map((amount, index) => ({
+        name: String.fromCharCode(65 + index), amount
+      }))
+    ) }),
+    _meta: {"net.viticci.macremote/ui": {
+      profile: "reminderRows", toolTitle: "Sorting", toolName: "sort_rows",
+      table: { columns: [{ key: "name", primary: true }, { key: "amount" }] }
+    }}
+  },
+  dense: { structuredContent: envelope({ stdout: JSON.stringify({ items: DENSE_REMINDERS }) }), _meta: {"net.viticci.macremote/ui": DENSE_UI_META} },
+  podcasts: { structuredContent: envelope({ toolID: "preset.castctl.in_progress", toolName: "castctl_in_progress", stdout: JSON.stringify(EPISODES) }), _meta: {"net.viticci.macremote/ui": POCKET_UI_META} },
+  // castctl now: one live episode, `podcast` (not podcastUuid) carries the
+  // show uuid — exercises the card layout + sourceKey fallback.
+  nowcard: { structuredContent: envelope({ toolID: "preset.castctl.now", toolName: "castctl_now", stdout: JSON.stringify({
+    uuid: "f0fa0c5d-ce56-4079-9054-dcbe414aaee5",
+    title: "Unprecedented Weirdness",
+    url: "https://www.podtrac.com/pts/redirect.mp3/traffic.libsyn.com/secure/upgradeplus626.mp3",
+    podcast: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastUuid: "484f5720-ec94-0139-d4c2-0acc26574db2",
+    podcastTitle: "Upgrade+ — Private to Federico Viticci",
+    published: "2026-06-29T21:00:00Z",
+    duration: 6213, playedUpTo: 4137, alternateEnclosures: []
+  }) }), _meta: {"net.viticci.macremote/ui": Object.assign({}, POCKET_UI_META, { toolTitle: "Podcast Now", toolName: "castctl_now", actions: [{
+    id: "play_next", title: "Play Next", kind: "rowButton",
+    toolName: "castctl_run", toolCapability: "destructive",
+    arguments: { args: ["play-next", "{uuid}"] }, requiredRowFields: ["uuid"]
+  }] }) } },
+  // castctl triage: four row arrays in one object — grouped sections.
+  triage: { structuredContent: envelope({ toolID: "preset.castctl.triage", toolName: "castctl_triage", stdout: JSON.stringify(TRIAGE) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Triage", toolName: "castctl_triage" })} },
+  // The same triage payload with artwork that can never decode — what a host
+  // whose CSP does not allow the artwork origin does to every image.
+  artworkblocked: { structuredContent: envelope({ toolID: "preset.castctl.triage", toolName: "castctl_triage", stdout: JSON.stringify(TRIAGE) }),
+    _meta: {"net.viticci.macremote/ui": pocketMetaUnloadableArtwork()} },
+  // castctl triage on a quiet day: the group keys are all present and all
+  // empty — the friendly empty line, never the raw tree.
+  emptygroups: { structuredContent: envelope({ toolID: "preset.castctl.triage", toolName: "castctl_triage", stdout: JSON.stringify(EMPTY_TRIAGE) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Triage", toolName: "castctl_triage" })} },
+  // castctl play-next: a change confirmation + the resulting queue.
+  changeupnext: { structuredContent: envelope({ toolID: "preset.castctl.change_up_next", toolName: "castctl_change_up_next", stdout: JSON.stringify(changePayload(false)) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Change Up Next", toolName: "castctl_change_up_next" })} },
+  changeupnextdry: { structuredContent: envelope({ toolID: "preset.castctl.change_up_next", toolName: "castctl_change_up_next", stdout: JSON.stringify(changePayload(true)) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Change Up Next", toolName: "castctl_change_up_next" })} },
+  changeupnextlegacy: { structuredContent: envelope({ toolID: "preset.castctl.change_up_next", toolName: "castctl_change_up_next", stdout: JSON.stringify(LEGACY_CHANGE) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Change Up Next", toolName: "castctl_change_up_next" })} },
+  // Same payload, no countNoun curated: the count line falls back to the
+  // widget's own generic noun rather than a domain word it invented.
+  changedefaultnoun: { structuredContent: envelope({ toolID: "preset.castctl.change_up_next", toolName: "castctl_change_up_next", stdout: JSON.stringify(LEGACY_CHANGE) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Change Up Next", toolName: "castctl_change_up_next" }, POCKET_CHANGE_NO_NOUN)} },
+  // castctl star / archive: one episode, no queue.
+  episodestar: { structuredContent: envelope({ toolID: "preset.castctl.update_state", toolName: "castctl_update_state", stdout: JSON.stringify(EPISODE_STAR) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Update State", toolName: "castctl_update_state" })} },
+  episodearchive: { structuredContent: envelope({ toolID: "preset.castctl.update_state", toolName: "castctl_update_state", stdout: JSON.stringify(EPISODE_ARCHIVE) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Update State", toolName: "castctl_update_state" })} },
+  episodetitledupe: { structuredContent: envelope({ toolID: "preset.castctl.update_state", toolName: "castctl_update_state", stdout: JSON.stringify(EPISODE_STAR_WITH_TITLE) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Update State", toolName: "castctl_update_state" }, POCKET_CHANGE_WITH_TITLE)} },
+  // castctl search-online --type combined: two kinds of row, two sections.
+  // No `actions`, matching the shipped catalog: `search_online` is the one
+  // episode-shaped podcasts tool that deliberately declares none, because its
+  // rows mix podcast records (which also carry a `uuid`) with episodes nobody
+  // is subscribed to — a queue change fired from here is a guaranteed error
+  // wearing a friendly button. The fixture must not show buttons production
+  // never renders.
+  searchgroups: { structuredContent: envelope({ toolID: "preset.castctl.search_online", toolName: "castctl_search_online", stdout: JSON.stringify(SEARCH_GROUPS) }),
+    _meta: {"net.viticci.macremote/ui": pocketMeta({ toolTitle: "Podcast Search", toolName: "castctl_search_online", actions: [] })} },
+  // remctl info: ONE reminder that happens to carry subtasks. The record wins;
+  // the sub-collection stays in the model-facing text fallback.
+  reminderinfo: { structuredContent: envelope({ toolName: "remctl_info", stdout: JSON.stringify(REMINDER_RECORD) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Reminder", toolName: "remctl_info" })} },
+  reminderrecurrence: { structuredContent: envelope({ toolName: "remctl_upcoming", stdout: JSON.stringify({
+      items: RECURRENCE_REMINDERS
+    }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Upcoming", toolName: "remctl_upcoming" })} },
+  remindercreated: { structuredContent: envelope({ toolName: "remctl_add", stdout: JSON.stringify({
+      status: "created", id: 23906, title: "MacRemote UI test", list: "Reminders",
+      resolvedList: { name: "Reminders", id: "AF13B0C2" }
+    }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Add Reminder", toolName: "remctl_add" })} },
+  remindercreatedwarning: { structuredContent: envelope({
+      toolName: "remctl_add",
+      stdout: JSON.stringify({
+        status: "created", id: 23907, title: "Flagged MacRemote UI test", list: "Reminders",
+        warnings: ["flag_not_set: Reminders could not apply the requested flag."]
+      }),
+      stderr: "warning: flag_not_set: Reminders could not apply the requested flag."
+    }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Add Reminder", toolName: "remctl_add" })} },
+  reminderupdated: { structuredContent: envelope({ toolName: "remctl_update", stdout: JSON.stringify({
+      status: "updated", id: 23906, title: "MacRemote UI test (edited)"
+    }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Edit Reminder", toolName: "remctl_update" })} },
+  reminderdeleted: { structuredContent: envelope({ toolName: "remctl_delete", stdout: JSON.stringify({
+      status: "deleted", id: 23906, title: "MacRemote UI test (edited)"
+    }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Delete Reminder", toolName: "remctl_delete" })} },
+  // remctl's structured no-op: an edit that asked for nothing. A real outcome
+  // — a neutral sentence, not an error and not a key/value tree.
+  reminderunchanged: { structuredContent: envelope({ toolName: "remctl_update", stdout: JSON.stringify({
+      status: "unchanged", code: "nothing_to_update", id: 23906,
+      title: "MacRemote UI test (edited)", message: "Nothing to update."
+    }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Edit Reminder", toolName: "remctl_update" })} },
+  reminderflagged: { structuredContent: envelope({ toolName: "remctl_flag", stdout: JSON.stringify({
+      status: "flagged", id: 23906, title: "MacRemote UI test"
+    }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Flag Reminder", toolName: "remctl_flag" })} },
+  reminderunflagged: { structuredContent: envelope({ toolName: "remctl_unflag", stdout: JSON.stringify({
+      status: "unflagged", id: 23906, title: "MacRemote UI test"
+    }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Unflag Reminder", toolName: "remctl_unflag" })} },
+  reminderflagerror: {
+    structuredContent: envelope({
+      toolName: "remctl_flag", succeeded: false, exitCode: 1, stdout: "",
+      stderr: JSON.stringify({
+        status: "error", code: "applescript_flag_failed",
+        message: "Reminders could not apply the requested flag."
+      })
+    }),
+    isError: true,
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Flag Reminder", toolName: "remctl_flag" })}
+  },
+  // Nothing due, nothing found, nothing logged — the three commonest answers
+  // of all, each of which used to render as a raw key/value tree.
+  emptyreminders: { structuredContent: envelope({ toolName: "remctl_today", stdout: "[]" }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Today", toolName: "remctl_today" })} },
+  emptywrapped: { structuredContent: envelope({ toolName: "remctl_search", stdout: JSON.stringify({ items: [] }) }),
+    _meta: {"net.viticci.macremote/ui": remindersMeta({ toolTitle: "Search", toolName: "remctl_search" })} },
+  emptyhabits: { structuredContent: envelope({ toolName: "streakctl_today", stdout: "[]" }),
+    _meta: {"net.viticci.macremote/ui": HABIT_UI_META} },
+  overrows: { structuredContent: envelope({
+      toolID: "preset.example.queue", toolName: "episode_queue",
+      stdout: JSON.stringify({
+        schemaVersion: 1, ok: true, command: "up-next",
+        data: { items: [{
+          episodeID: 812, title: "A Nested Episode", podcastTitle: "Example Show",
+          progressSeconds: 900, durationSeconds: 3600, timeLeftSeconds: 2700,
+          ranking: { tier: "queue" }
+        }] },
+        meta: { source: "cache", live: false, provenance: { snapshot: "kept" } }
+      })
+    }), _meta: {"net.viticci.macremote/ui": OVER_UI_META} },
+  overdry: { structuredContent: envelope({
+      toolID: "preset.example.write", toolName: "episode_queue_write",
+      stdout: JSON.stringify({
+        schemaVersion: 1, ok: true, command: "queue-add",
+        data: { action: "queue-add", dryRun: true, submitted: false, verified: false },
+        meta: { source: "live", live: true }
+      })
+    }), _meta: {"net.viticci.macremote/ui": Object.assign({}, OVER_UI_META, {toolTitle: "Queue Preview", toolName: "episode_queue_write"})} },
+  overunverified: { structuredContent: envelope({
+      toolID: "preset.example.write", toolName: "episode_queue_write",
+      stdout: JSON.stringify({
+        schemaVersion: 1, ok: true, command: "queue-add",
+        data: { action: "queue-add", dryRun: false, submitted: true, verified: false, verificationConclusive: false },
+        meta: { source: "live", live: true }
+      })
+    }), _meta: {"net.viticci.macremote/ui": Object.assign({}, OVER_UI_META, {toolTitle: "Queue Write", toolName: "episode_queue_write"})} },
+  notesdocument: { structuredContent: envelope({
+      toolID: "preset.example.note", toolName: "note_reader",
+      stdout: JSON.stringify({
+        status: "ok", format: "markdown", count: 1,
+        markdown: "# Literal Safety\n\n<scr" + "ipt>window.pwned = true</scr" + "ipt>\n\n<b>not bold</b>\n\n[unsafe](javascript:alert(1))"
+      })
+    }), _meta: {"net.viticci.macremote/ui": NOTE_UI_META} },
+  notestranscripts: { structuredContent: envelope({
+      toolID: "preset.example.transcripts", toolName: "note_reader",
+      stdout: JSON.stringify({
+        noteId: 42,
+        transcripts: [
+          { attachment: "A-1", status: "ok", transcript: "First line <scr" + "ipt>literal</scr" + "ipt>\nSecond line", needsTranscription: false },
+          { attachment: "A-2", status: "ok", transcript: null, needsTranscription: true, message: "Transcript is not available yet" }
+        ]
+      })
+    }), _meta: {"net.viticci.macremote/ui": Object.assign({}, NOTE_UI_META, {toolTitle: "Stored Transcripts"})} },
+  notesrows: { structuredContent: envelope({
+      toolName: "notesctl_search", stdout: JSON.stringify(NOTE_ROWS)
+    }), _meta: {"net.viticci.macremote/ui": Object.assign({}, NOTE_UI_META, {
+      toolTitle: "Find Notes", toolName: "notesctl_search"
+    })} },
+  notespreview: { structuredContent: envelope({
+      toolName: "notesctl_preview_edit", stdout: JSON.stringify(NOTE_PREVIEW)
+    }), _meta: {"net.viticci.macremote/ui": Object.assign({}, NOTE_UI_META, {
+      toolTitle: "Preview Note Edit", toolName: "notesctl_preview_edit", capability: "readOnly"
+    })} },
+  notesapplied: { structuredContent: envelope({
+      toolName: "notesctl_create", stdout: JSON.stringify(NOTE_APPLIED)
+    }), _meta: {"net.viticci.macremote/ui": Object.assign({}, NOTE_UI_META, {
+      toolTitle: "Create Note", toolName: "notesctl_create", capability: "write"
+    })} },
+  visibilityfallback: { ...VISIBILITY_FALLBACK },
+  safefallback: {
+    structuredContent: Object.assign(envelope({
+      toolName: "provider_run", stdout: UNSAFE_FALLBACK_STDOUT
+    }), {
+      executablePath: "/usr/local/bin/secretctl",
+      argv: ["publish", "--token", "REDACTED"],
+      command: "secretctl publish --token REDACTED"
+    }),
+    content: [{
+      type: "text", text: "USER_ONLY_DO_NOT_RENDER",
+      annotations: { audience: ["user"] }
+    }],
+    _meta: {
+      "net.viticci.macremote/ui": {
+        version: 1, toolTitle: "Flexible Command", toolName: "provider_run",
+        capability: "destructive", category: "Utilities"
+      },
+      privateTrace: "HIDDEN_META_DO_NOT_RENDER"
+    }
+  },
+  semanticcounts: {
+    structuredContent: envelope({ toolName: "generic_stats", stdout: JSON.stringify(SEMANTIC_COUNTS) }),
+    _meta: {"net.viticci.macremote/ui": {
+      version: 1, profile: "semanticResult", toolTitle: "Generic Stats", toolName: "generic_stats",
+      capability: "readOnly", category: "Utilities"
+    }}
+  },
+  hostileautokeys: {
+    structuredContent: envelope({
+      toolName: "hostile_auto_keys",
+      stdout: JSON.stringify([{
+        title: "Safe auto-table item",
+        "curl https://example.com/private": true,
+        "/Users/name/Documents/report.txt": ["HOSTILE_AUTO_KEY_VALUE_DO_NOT_RENDER"]
+      }])
+    }),
+    _meta: {"net.viticci.macremote/ui": Object.assign({}, POCKET_UI_META, {
+      toolTitle: "Hostile Auto Keys", toolName: "hostile_auto_keys", actions: []
+    })}
+  },
+  hostilesummarykeys: {
+    structuredContent: envelope({
+      toolName: "hostile_summary_keys",
+      stdout: JSON.stringify({
+        safe_count: 2, safe_ready: true,
+        "curl https://example.com/private": true,
+        "/Users/name/Documents/report.txt": ["HOSTILE_SUMMARY_KEY_VALUE_DO_NOT_RENDER"]
+      })
+    }),
+    _meta: {"net.viticci.macremote/ui": Object.assign({}, UI_META, {
+      toolTitle: "Hostile Summary Keys", toolName: "hostile_summary_keys", actions: []
+    })}
+  },
+  curatedsafety: {
+    structuredContent: envelope({
+      toolID: "preset.example.note", toolName: "note_reader",
+      stdout: JSON.stringify({status: "ok", format: "markdown", count: 1, markdown: CURATED_SAFETY_DOCUMENT})
+    }),
+    _meta: {"net.viticci.macremote/ui": Object.assign({}, NOTE_UI_META, {toolTitle: "Curated Safety"})}
+  },
+  credentiallink: {
+    structuredContent: envelope({
+      toolID: "preset.castctl.private_link", toolName: "castctl_private_link",
+      stdout: JSON.stringify([Object.assign({}, EPISODES[0], {
+        url: "https://example.com/private?key=CREDENTIAL_URL_DO_NOT_RENDER"
+      })])
+    }),
+    _meta: {"net.viticci.macremote/ui": Object.assign({}, POCKET_UI_META, {
+      toolTitle: "Private Link", toolName: "castctl_private_link", actions: []
+    })}
+  },
+  protectedartifact: {
+    structuredContent: envelope({
+      toolName: "protected_download",
+      stdout: JSON.stringify({status: "ready", itemCount: 1})
+    }),
+    content: [{
+      type: "resource_link",
+      uri: "https://example.com/file?jwt=RESOURCE_SECRET_DO_NOT_RENDER",
+      name: "Protected Download",
+      mimeType: "application/zip",
+      size: 4096
+    }],
+    _meta: {"net.viticci.macremote/ui": {
+      version: 1, profile: "semanticResult", toolTitle: "Protected Download",
+      toolName: "protected_download", capability: "readOnly", category: "File Transfer"
+    }}
+  },
+  artifact: {
+    structuredContent: ARTIFACT_ENVELOPE,
+    content: [
+      { type: "text", text: JSON.stringify(ARTIFACT_ENVELOPE) },
+      {
+        type: "resource_link",
+        uri: "http://127.0.0.1:61432/artifact/PRIVATE_ARTIFACT_TOKEN_DO_NOT_RENDER",
+        name: "Release Package.zip",
+        mimeType: "application/zip",
+        size: 245760
+      }
+    ],
+    _meta: {"net.viticci.macremote/ui": {
+      version: 1, toolTitle: "Prepare Download", toolName: "filesystem_download_zip",
+      capability: "readOnly", category: "File Transfer"
+    }}
+  },
+  task: {
+    resultType: "task",
+    taskId: "TASK_ID_DO_NOT_RENDER",
+    status: "working",
+    statusMessage: "TASK_INTERNAL_STATUS_DO_NOT_RENDER",
+    pollIntervalMs: 1000,
+    ttlMs: 60000,
+    _meta: {"net.viticci.macremote/ui": {
+      version: 1, toolTitle: "Find New Releases", toolName: "musicctl_new_releases",
+      capability: "readOnly", category: "Music"
+    }}
+  },
+  multimodal: {
+    structuredContent: MULTIMODAL_STRUCTURED,
+    content: [
+      { type: "text", text: JSON.stringify(MULTIMODAL_STRUCTURED) },
+      { type: "text", text: "A visual and an audio clip are attached.", annotations: { audience: ["assistant"] } },
+      { type: "text", text: "USER_ONLY_DO_NOT_RENDER", annotations: { audience: ["user"] } },
+      { type: "image", data: "MULTIMODAL_IMAGE_DATA_DO_NOT_RENDER", mimeType: "image/png" },
+      { type: "audio", data: "MULTIMODAL_AUDIO_DATA_DO_NOT_RENDER", mimeType: "audio/mpeg" }
+    ],
+    _meta: {"net.viticci.macremote/ui": {
+      version: 1, toolTitle: "Media Result", toolName: "media_result",
+      capability: "readOnly", category: "Media"
+    }}
+  },
+  habitshow: { structuredContent: envelope({ toolName: "streakctl_show", stdout: JSON.stringify(HABIT_DEFINITION) }),
+    _meta: {"net.viticci.macremote/ui": Object.assign({}, HABIT_UI_META, { toolTitle: "Habit Show", toolName: "streakctl_show" })} },
+  habitcheck: { structuredContent: envelope({ toolName: "streakctl_record_result", stdout: JSON.stringify(HABIT_CHECK_OFF) }),
+    _meta: {"net.viticci.macremote/ui": Object.assign({}, HABIT_UI_META, { toolTitle: "Habit Check Off", toolName: "streakctl_record_result" })} },
+  truncatedjson: { structuredContent: envelope({ toolName: "castctl_transcript", stdout: CLIPPED_JSON, truncatedStdout: true }),
+    _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Podcast Transcript", toolName: "castctl_transcript", capability: "readOnly"}} },
+  actionfail: { structuredContent: envelope({ stdout: JSON.stringify({ items: REMINDERS }) }), _meta: {"net.viticci.macremote/ui": UI_META} },
+  tree: { structuredContent: envelope({ stdout: JSON.stringify({ database: { path: "/tmp/db", reminders: 412, lists: 9 }, ok: true }) }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Stats", toolName: "remctl_stats", capability: "readOnly"}} },
+  terminal: { structuredContent: envelope({ stdout: "Build settings:\n  [1mSDKROOT[0m = [32mMacOSX26.5.sdk[0m\n  [33mwarning:[0m 2 targets skipped\n[34mBuild complete![0m (14.2s)\n[38;2;200;40;40mtruecolor-test red[0m [38;5;46m256-green[0m still-[1mbold[0m" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Swift Build", toolName: "swift_cli", capability: "destructive"}} },
+  error: { structuredContent: envelope({ succeeded: false, exitCode: 1, stdout: "", stderr: "error: Reminders store not readable from this process context.\nGrant Full Disk Access and retry." }), isError: true, _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Today", toolName: "remctl_today", capability: "readOnly"}} },
+  empty: { structuredContent: envelope({ stdout: "" }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Sync", toolName: "sync_tool", capability: "write"}} },
+  truncated: { structuredContent: envelope({ stdout: "partial output…", truncatedStdout: true }), _meta: {"net.viticci.macremote/ui": {version: 1, toolTitle: "Log Dump", toolName: "log_dump", capability: "readOnly"}} },
+  habits: { structuredContent: envelope({ toolName: "streakctl_today", stdout: JSON.stringify(HABIT_ROWS) }),
+    _meta: {"net.viticci.macremote/ui": HABIT_UI_META} }
+};
+
+function withFallbackContent(result) {
+  if (Array.isArray(result.content)) return result;
+  const hasStructuredContent = Object.prototype.hasOwnProperty.call(result, "structuredContent");
+  const serialized = hasStructuredContent ? JSON.stringify(result.structuredContent) : "";
+  return Object.assign({}, result, {
+    content: [{ type: "text", text: typeof serialized === "string" ? serialized : "" }]
+  });
+}
+
+for (const name of Object.keys(FIXTURES)) {
+  FIXTURES[name] = withFallbackContent(FIXTURES[name]);
+}
+
+const SEMANTIC_CARD_META = {"net.viticci.macremote/ui": {version: 1, profile: "semanticResult"}};
+
+// The server attaches card metadata to every result whose card the owner
+// allows (SPEC D77). A fixture that brings none stands for that case with the
+// default semantic profile, except `cardoff`: the owner turned cards off while
+// the host still links the card from an older tool list.
+FIXTURES.cardoff = Object.assign({}, FIXTURES.remindertextfallback, {_meta: undefined});
+delete FIXTURES.cardoff._meta;
+for (const name of Object.keys(FIXTURES)) {
+  const fixture = FIXTURES[name];
+  if (name === "cardoff" || fixture._meta?.["net.viticci.macremote/ui"]) continue;
+  FIXTURES[name] = Object.assign({}, fixture, {
+    _meta: Object.assign({}, fixture._meta, {
+      ...SEMANTIC_CARD_META
+    })
+  });
+}
+
+const iframe = document.getElementById("widget");
+const zoomFactor = zoomPercent / 100;
+iframe.style.width = (frameWidth / zoomFactor) + "px";
+iframe.style.zoom = String(zoomFactor);
+window.__toolCalls = [];
+window.__openLinks = [];
+window.__sizeEvents = [];
+window.__initialized = false;
+window.__teardownAck = false;
+window.__unknownMethodError = null;
+window.__widgetErrors = [];
+window.__cancelledSafe = false;
+window.__jsonValuesSafe = false;
+window.__sortRowsSafe = false;
+window.__invalidResultsIgnored = false;
+window.__copiedText = null;
+
+iframe.addEventListener("load", () => {
+  iframe.contentWindow.addEventListener("error", event => {
+    window.__widgetErrors.push(event.message || "widget error");
+  });
+  iframe.contentWindow.addEventListener("unhandledrejection", event => {
+    window.__widgetErrors.push(String(event.reason || "unhandled rejection"));
+  });
+});
+
+// WCAG luminance of a computed color, through a canvas so every syntax the
+// browser can compute (rgb, color(srgb …), light-dark results) resolves.
+// With `over`, the color is painted on that opaque backdrop first, so a
+// translucent text color is measured as it shows, not as its raw channels.
+const harnessColorProbe = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+function harnessLuminance(color, over) {
+  harnessColorProbe.clearRect(0, 0, 1, 1);
+  if (over) {
+    harnessColorProbe.fillStyle = over;
+    harnessColorProbe.fillRect(0, 0, 1, 1);
+  }
+  harnessColorProbe.fillStyle = "#000";
+  harnessColorProbe.fillStyle = color;
+  harnessColorProbe.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = harnessColorProbe.getImageData(0, 0, 1, 1).data;
+  if (a === 0) return null;
+  const linear = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+// The backdrop under the widget's text: its root background when it paints
+// one, otherwise the opaque canvas the browser paints in the root's scheme
+// (the frame's own scheme differs from the harness page's in half the runs).
+function widgetTextContrast(doc) {
+  const rootStyle = getComputedStyle(doc.documentElement);
+  const backdropColor = harnessLuminance(rootStyle.backgroundColor) !== null
+    ? rootStyle.backgroundColor
+    : (rootStyle.colorScheme.trim() === "dark" ? "rgb(18, 18, 18)" : "rgb(255, 255, 255)");
+  const backdrop = harnessLuminance(backdropColor);
+  // Primary, secondary, and tertiary (dim cells, completed rows, queue
+  // positions) text, wherever the fixture renders them.
+  const selectors = [
+    ".mrw-tool", ".mrw-empty-title", ".mrw-empty-sub", ".mrw-error-title",
+    ".mrw-td-dim", "tr.mrw-row-done td", ".mrw-td-pos"
+  ];
+  const ratios = {};
+  for (const selector of selectors) {
+    const node = doc.querySelector(selector);
+    if (!node) continue;
+    const text = harnessLuminance(getComputedStyle(node).color, backdropColor);
+    ratios[selector] = text === null ? 0 :
+      Math.round((Math.max(text, backdrop) + 0.05) / (Math.min(text, backdrop) + 0.05) * 100) / 100;
+  }
+  return ratios;
+}
+
+// The style variables the harness host sends; see `hostVariant`.
+function harnessHostVariables() {
+  const dark = hostVariant === "mismatch" ? theme !== "dark" : theme === "dark";
+  const variables = dark
+    ? { "--color-text-primary": "rgb(244, 244, 245)", "--color-text-secondary": "rgb(161, 161, 170)" }
+    : { "--color-text-primary": "rgb(24, 24, 27)", "--color-text-secondary": "rgb(82, 82, 91)" };
+  if (hostVariant === "lowsecondary") {
+    // Right polarity for the theme, but 2.17:1 (dark) and about 4:1 (light).
+    Object.assign(variables, dark
+      ? { "--color-text-primary": "#f5f5f7", "--color-text-secondary": "#777777", "--color-background-primary": "#444444" }
+      : { "--color-text-primary": "#1d1d1f", "--color-text-secondary": "#757575", "--color-background-primary": "#f0f0f0" });
+  } else if (hostVariant === "unmeasurable") {
+    variables["--color-text-secondary"] = dark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.2)";
+  }
+  variables["--font-sans"] = "-apple-system, BlinkMacSystemFont, sans-serif";
+  return variables;
+}
+
+function inspectWidget() {
+  const doc = iframe.contentDocument;
+  if (!doc || !doc.querySelector(".mrw-card")) return { ready: false };
+  const root = doc.documentElement;
+  const body = doc.body;
+  const scrollers = Array.from(doc.querySelectorAll(".mrw-scroll"));
+  const cardStyle = getComputedStyle(doc.querySelector(".mrw-card"));
+  const rows = Array.from(doc.querySelectorAll("tr.mrw-data-row"));
+  const tableRect = doc.querySelector(".mrw-table")?.getBoundingClientRect();
+  const widgetRect = doc.querySelector(".mrw")?.getBoundingClientRect();
+  const prominentCounts = rows.map(row => row.querySelectorAll(".mrw-check, .mrw-action-primary").length);
+  const openOverflow = doc.querySelector("details.mrw-action-overflow[open]");
+  const openMenuParticipatesInLayout = !openOverflow ||
+    openOverflow.getBoundingClientRect().height > openOverflow.querySelector("summary").getBoundingClientRect().height;
+  const styleSource = Array.from(doc.querySelectorAll("style")).map(style => style.textContent).join("\n");
+  const frameHeight = parseFloat(iframe.style.height) || 0;
+  const interactiveControls = Array.from(doc.querySelectorAll("button, summary, input, select, a[href]"))
+    .filter(node => node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden");
+  const toolActionControls = doc.querySelectorAll("[data-mrw-action-id], [data-mrw-run-again]").length;
+  const controlsWithinViewport = interactiveControls.every(node => {
+    const rect = node.getBoundingClientRect();
+    return rect.left >= -1 && rect.right <= iframe.contentWindow.innerWidth + 1;
+  });
+  const outOfBoundsControls = interactiveControls.flatMap(node => {
+    const rect = node.getBoundingClientRect();
+    if (rect.left >= -1 && rect.right <= iframe.contentWindow.innerWidth + 1) return [];
+    return [{
+      label: node.getAttribute("aria-label") || node.textContent.trim().slice(0, 40),
+      left: Math.round(rect.left * 10) / 10,
+      right: Math.round(rect.right * 10) / 10
+    }];
+  });
+
+  return {
+    ready: true,
+    initialized: window.__initialized,
+    fixture: fixtureName,
+    theme,
+    requestedWidth: frameWidth,
+    zoomPercent,
+    supportsServerTools,
+    supportsOpenLinks,
+    exercise,
+    widgetViewportWidth: iframe.contentWindow.innerWidth,
+    renderedRows: rows.length,
+    totalRows: fixtureName === "dense" ? DENSE_REMINDERS.length : rows.length,
+    noHorizontalOverflow: root.scrollWidth <= root.clientWidth + 1 && body.scrollWidth <= body.clientWidth + 1,
+    rootWidth: [root.scrollWidth, root.clientWidth],
+    bodyWidth: [body.scrollWidth, body.clientWidth],
+    tableWidth: tableRect ? Math.round(tableRect.width * 10) / 10 : null,
+    widgetWidth: widgetRect ? Math.round(widgetRect.width * 10) / 10 : null,
+    noNestedOverflow: scrollers.every(node => {
+      const style = getComputedStyle(node);
+      return style.maxHeight === "none" && style.overflowX === "visible" && style.overflowY === "visible";
+    }),
+    noEmbeddedBrand: !doc.querySelector(".mrw-brand"),
+    noCustomGradient: !/(?:linear|radial|conic)-gradient\s*\(/i.test(styleSource),
+    hostOwnsCardChrome: cardStyle.borderTopWidth === "0px" && cardStyle.boxShadow === "none",
+    interactiveControlsWithinViewport: controlsWithinViewport,
+    outOfBoundsControls,
+    maxProminentActions: prominentCounts.length ? Math.max(...prominentCounts) : 0,
+    overflowMenus: doc.querySelectorAll("details.mrw-action-overflow").length,
+    overflowActions: doc.querySelectorAll(".mrw-action-menu .mrw-rowbtn").length,
+    openMenuParticipatesInLayout,
+    // Fractional layout and iframe zoom can differ by up to two physical
+    // pixels after a host theme/style update.
+    contentFitsFrame: root.scrollHeight <= frameHeight + 2,
+    sizeEventCount: window.__sizeEvents.length,
+    sizeEventsValid: window.__sizeEvents.length > 0 &&
+      window.__sizeEvents.every(params =>
+        params &&
+        Number.isFinite(params.width) && params.width > 0 &&
+        Number.isFinite(params.height) && params.height > 0
+      ),
+    toolActionControls,
+    openLinks: window.__openLinks.slice(),
+    linkModes: Array.from(doc.querySelectorAll(".mrw-link"))
+      .map(link => link.dataset.mrwLinkMode),
+    linkHrefs: Array.from(doc.querySelectorAll(".mrw-link"))
+      .map(link => link.getAttribute("href")),
+    linkTitles: Array.from(doc.querySelectorAll(".mrw-link"))
+      .map(link => link.getAttribute("title")),
+    attachmentHrefs: Array.from(doc.querySelectorAll(".mrw-attachment"))
+      .map(node => node.getAttribute("href")),
+    attachmentTitles: Array.from(doc.querySelectorAll(".mrw-attachment"))
+      .map(node => node.getAttribute("title")),
+    toolCalls: window.__toolCalls.slice(),
+    teardownAck: window.__teardownAck,
+    unknownMethodError: window.__unknownMethodError,
+    widgetErrors: window.__widgetErrors.slice(),
+    cancelledSafe: window.__cancelledSafe,
+    jsonValuesSafe: window.__jsonValuesSafe,
+    sortRowsSafe: window.__sortRowsSafe,
+    invalidResultsIgnored: window.__invalidResultsIgnored,
+    // grouped-sections + change states
+    sectionTitles: Array.from(doc.querySelectorAll(".mrw-section-title")).map(n => n.textContent),
+    sectionCounts: Array.from(doc.querySelectorAll(".mrw-section-count")).map(n => n.textContent),
+    headerTexts: Array.from(doc.querySelectorAll(".mrw-table thead th")).map(n => n.textContent.trim()),
+    artworkImages: doc.querySelectorAll("img.mrw-art").length,
+    // A loaded image and the monogram that replaces one the host refused are
+    // the same tile, so the row keeps its artwork column either way. Each one
+    // carries the URL it asked for, which survives the swap.
+    artworkTiles: Array.from(doc.querySelectorAll(".mrw-art")).map(node => {
+      const rect = node.getBoundingClientRect();
+      return {
+        src: node.dataset.mrwArtSrc || null,
+        placeholder: node.tagName === "SPAN",
+        visible: getComputedStyle(node).visibility !== "hidden" &&
+          rect.width > 0 && rect.height > 0
+      };
+    }),
+    episodeCards: doc.querySelectorAll(".mrw-episode").length,
+    queuePositions: Array.from(doc.querySelectorAll("tr.mrw-data-row .mrw-td-pos")).map(n => n.textContent),
+    markedRows: doc.querySelectorAll("tr.mrw-row-marked").length,
+    metaChips: Array.from(doc.querySelectorAll(".mrw-meta-chip")).map(n => n.textContent),
+    emptyGroupsPanels: doc.querySelectorAll(".mrw-empty-groups").length,
+    emptyPanels: doc.querySelectorAll(".mrw-empty:not(.mrw-empty-groups):not(.mrw-oversized)").length,
+    emptyTitle: doc.querySelector(".mrw-empty-title")?.textContent || null,
+    emptySub: doc.querySelector(".mrw-empty-sub")?.textContent || null,
+    oversizedPanels: doc.querySelectorAll(".mrw-oversized").length,
+    truncationBanners: doc.querySelectorAll(".mrw-truncated").length,
+    partialOutputDisclosures: doc.querySelectorAll(".mrw-oversized details").length,
+    changeHeadline: doc.querySelector(".mrw-change-title")?.textContent || null,
+    changeSubtitle: doc.querySelector(".mrw-change-sub")?.textContent || null,
+    changeSummary: doc.querySelector(".mrw-change-summary")?.textContent || null,
+    previewChip: doc.querySelectorAll(".mrw-preview").length,
+    cardStatus: doc.querySelector(".mrw-card")?.dataset.status || null,
+    statusLabel: doc.querySelector(".mrw-chip")?.textContent || null,
+    warningPanels: doc.querySelectorAll(".mrw-warning").length,
+    warningTitle: doc.querySelector(".mrw-warning-title")?.textContent || null,
+    warningMessages: Array.from(doc.querySelectorAll(".mrw-warning-list li")).map(n => n.textContent),
+    documentTitle: doc.querySelector(".mrw-document-title")?.textContent || null,
+    documentBodyText: doc.querySelector(".mrw-document-body")?.textContent || null,
+    documentItems: doc.querySelectorAll(".mrw-document-item").length,
+    documentItemStatuses: Array.from(doc.querySelectorAll(".mrw-document-item-status")).map(n => n.textContent),
+    documentItemBodies: Array.from(doc.querySelectorAll(".mrw-document-item-body")).map(n => n.textContent),
+    documentDangerousNodes: doc.querySelectorAll(".mrw-document script, .mrw-document a, .mrw-document b, .mrw-document-item script").length,
+    errorPanels: doc.querySelectorAll(".mrw-error").length,
+    errorTitle: doc.querySelector(".mrw-error-title")?.textContent || null,
+    stderrText: doc.querySelector(".mrw-stderr")?.textContent || null,
+    recurrenceCells: Array.from(doc.querySelectorAll('[data-key="recurrence"]')).map(n => n.textContent),
+    flagCells: Array.from(doc.querySelectorAll('[data-key="flag"]')).map(n => n.textContent),
+    cardTitle: doc.querySelector(".mrw-episode-title")?.textContent || null,
+    cardSubtitle: doc.querySelector(".mrw-episode-sub")?.textContent || null,
+    cardMeta: doc.querySelector(".mrw-episode-meta")?.textContent || null,
+    hasTable: !!doc.querySelector(".mrw-table"),
+    hasTree: !!doc.querySelector(".mrw-tree"),
+    hasTerminal: !!doc.querySelector(".mrw-term"),
+    summaryPanels: doc.querySelectorAll(".mrw-summary").length,
+    taskPanels: doc.querySelectorAll(".mrw-task").length,
+    attachmentNames: Array.from(doc.querySelectorAll(".mrw-attachment-name")).map(n => n.textContent),
+    relatedTexts: Array.from(doc.querySelectorAll(".mrw-rich-text")).map(n => n.textContent),
+    // The single most developer-facing string a curated view can print. No
+    // fixture, in any state, may ever contain it.
+    objectObject: (doc.querySelector(".mrw-card")?.textContent || "").includes("[object Object]"),
+    sortControls: doc.querySelectorAll(".mrw-th-btn[type='button'], .mrw-sort-select").length,
+    hostTheme: root.dataset.mrwTheme || null,
+    hostColors: root.dataset.mrwHostColors || null,
+    rootColorScheme: getComputedStyle(root).colorScheme.trim(),
+    textContrast: widgetTextContrast(doc),
+    displayMode: root.dataset.mrwDisplayMode || null,
+    platform: root.dataset.mrwPlatform || null,
+    safeTop: root.style.getPropertyValue("--mrw-safe-top"),
+    hostTextColor: root.style.getPropertyValue("--color-text-primary"),
+    hostFontsInstalled: !!doc.getElementById("mrw-host-fonts")?.textContent,
+    accentLineColor: getComputedStyle(doc.querySelector(".mrw-accent")).backgroundColor,
+    renderedText: doc.querySelector(".mrw-card")?.textContent || "",
+    renderedHTML: doc.querySelector(".mrw-card")?.innerHTML || "",
+    copiedText: window.__copiedText
+  };
+}
+
+// cardoff: the result carries no card metadata, so the card draws nothing and
+// asks for no height. exercise=recover then delivers the same result with its
+// metadata, and the card comes back.
+function updateCardOffAssertions(output) {
+  const doc = iframe.contentDocument;
+  if (!doc || !window.__initialized) return;
+  const off = doc.documentElement.dataset.mrwCard === "off";
+  const lastSize = window.__sizeEvents[window.__sizeEvents.length - 1];
+  const checks = exercise === "recover"
+    ? {
+        cardBack: !off && !!doc.querySelector(".mrw-card") &&
+          doc.getElementById("mrw-root").textContent.includes("Dentifricio"),
+        sizeBack: !!lastSize && lastSize.height > 0
+      }
+    : {
+        cardOff: off,
+        nothingDrawn: doc.getElementById("mrw-root").childElementCount === 0 &&
+          getComputedStyle(doc.body).display === "none",
+        noHeight: !!lastSize && lastSize.height === 0 && lastSize.width > 0
+      };
+  checks.widgetErrors = window.__widgetErrors.length === 0;
+  const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  output.dataset.state = failures.length ? "fail" : "pass";
+  output.textContent = failures.length ? "FAIL · " + failures.join(", ") : "PASS · card off";
+}
+
+function updateAssertions() {
+  const output = document.getElementById("assertions");
+  if (fixtureName === "cardoff") { updateCardOffAssertions(output); return; }
+  const report = inspectWidget();
+  if (!report.ready) return;
+  const checks = {
+    horizontal: report.noHorizontalOverflow,
+    nestedScroll: report.noNestedOverflow,
+    brand: report.noEmbeddedBrand,
+    gradient: report.noCustomGradient,
+    cardChrome: report.hostOwnsCardChrome,
+    controlBounds: report.interactiveControlsWithinViewport,
+    primaryActions: report.maxProminentActions <= 2,
+    menuLayout: report.openMenuParticipatesInLayout,
+    frameHeight: report.contentFitsFrame,
+    sizePayload: report.sizeEventsValid,
+    serverTools: !supportsServerTools ? report.toolActionControls === 0 :
+      (FIXTURES[fixtureName]._meta?.["net.viticci.macremote/ui"]?.capability === "readOnly" ? report.toolActionControls > 0 : true),
+    noWriteReplay: FIXTURES[fixtureName]._meta?.["net.viticci.macremote/ui"]?.capability === "readOnly" ||
+      !iframe.contentDocument.querySelector("[data-mrw-run-again]"),
+    hostContext: report.displayMode === "inline" &&
+      report.platform === "web" &&
+      report.safeTop === "3px" &&
+      !!report.hostTextColor &&
+      report.hostFontsInstalled,
+    objectObject: !report.objectObject,
+    // The root's scheme follows the app's theme, so the backdrop the browser
+    // paints and the text colors agree. A pale title on a white backdrop in
+    // a dark app (v7) failed exactly this.
+    rootScheme: report.rootColorScheme === report.hostTheme,
+    legibleText: Object.keys(report.textContrast).length > 0 &&
+      Object.values(report.textContrast).every(ratio => ratio >= 4.5)
+  };
+  if (["mismatch", "lowsecondary", "unmeasurable"].includes(hostVariant)) {
+    // Light text under a declared light theme, secondary text too faint for
+    // the host background, or a color the widget can't measure: the widget
+    // sets the host colors aside and its own colors stay readable.
+    checks.hostColorsIgnored = report.hostColors === "ignored";
+  } else if (hostVariant === "themeless") {
+    // No declared theme: the host's text color implies one.
+    checks.themeInferred = report.hostTheme === (theme === "dark" ? "dark" : "light") &&
+      report.hostColors === "used";
+  } else if (!exercise) {
+    checks.hostColorsUsed = report.hostColors === "used";
+  }
+    if (["remindertextfallback", "reminderpartial", "reminderbatch", "reminderdeletedrow"].includes(fixtureName)) {
+    checks.reminderVisible = report.renderedText.includes("Dentifricio") && !report.renderedText.includes("technical result details");
+    if (fixtureName !== "reminderdeletedrow") checks.noWriteRerun = !iframe.contentDocument.querySelector("[data-mrw-run-again]");
+    if (fixtureName === "remindertextfallback") checks.receiptDetails = report.renderedText.includes("Supermercato") && report.renderedText.includes("Shopping");
+    if (fixtureName === "reminderpartial") checks.partialTruth = report.renderedText.includes("Section was not saved") && report.renderedText.includes("Completed with warnings");
+    if (fixtureName === "reminderbatch") checks.batchTruth = report.renderedText.includes("1 of 3") && report.renderedText.includes("May have changed") && report.renderedText.includes("Not changed");
+    if (fixtureName === "reminderdeletedrow") checks.noDeletedActions = !iframe.contentDocument.querySelector("[data-mrw-action-id]");
+  }
+  if (exercise === "link") {
+  if (fixtureName === "credentiallink") {
+      checks.protectedLinkDoesNotOpen = report.openLinks.length === 0;
+    } else {
+      checks.openLink = report.openLinks.length === 1;
+    }
+  }
+  if (["podcasts", "nowcard", "triage", "changeupnext", "changeupnextdry", "episodestar", "searchgroups"].includes(fixtureName)) {
+    checks.linkMode = report.linkModes.length > 0 &&
+      report.linkModes.every(mode => mode === (supportsOpenLinks ? "host" : "browser"));
+  }
+  if (exercise === "context") {
+    checks.contextMerge = report.hostTheme === (theme === "dark" ? "light" : "dark") &&
+      report.displayMode === "inline" &&
+      report.safeTop === "3px" &&
+      report.hostTextColor === "rgb(18, 52, 86)";
+  }
+  const sequential = (values) => values.every((value, index) => value === String(index + 1));
+  if (fixtureName === "triage") {
+    // Curated group order, the card group, numbered queue, uncovered scalar as
+    // a chip — and never the raw key/value tree this payload used to fall to.
+    checks.groupOrder = JSON.stringify(report.sectionTitles) ===
+      JSON.stringify(["Now Playing", "Up Next", "In Progress", "New Releases"]);
+    checks.groupCard = report.episodeCards === 1;
+    checks.groupNumbered = report.queuePositions.length > 0 && sequential(report.queuePositions);
+    // Exactly one chip: the uncovered scalar. The uncovered object and the
+    // uncovered list of plain values are suppressed, not summarized by shape.
+    checks.groupChips = report.metaChips.length === 1 &&
+      report.metaChips[0].includes("Limit") && report.metaChips[0].includes("8");
+    checks.groupNoTree = !report.hasTree;
+    // A queue's order is semantic: no control may silently reorder a section.
+    checks.groupNotSortable = report.sortControls === 0;
+    // Every episode row asks the Pocket Casts CDN for its artwork — the one
+    // origin `ui.csp.resourceDomains` has to allow — and keeps a visible tile
+    // whether that image arrives or not.
+    checks.groupArtwork = report.artworkTiles.length > 0 &&
+      report.artworkTiles.every(tile => tile.visible &&
+        (tile.src || "").startsWith("https://static.pocketcasts.com/"));
+  }
+  if (fixtureName === "artworkblocked") {
+    // The artwork can never decode here, which is what a host whose CSP does
+    // not allow the origin does to every image. The tiles must all still be
+    // there: a hidden tile is what let a missing `ui.csp` allowlist read as a
+    // widget that renders podcasts without artwork.
+    checks.blockedArtPlaceholders = report.artworkTiles.length > 0 &&
+      report.artworkImages === 0 &&
+      report.artworkTiles.every(tile => tile.placeholder && tile.visible);
+  }
+  if (fixtureName === "emptygroups") {
+    // Every curated group present and empty: one friendly line naming them, the
+    // leftover scalar still as a chip, no sections, and above all no raw tree.
+    checks.emptyGroupsPanel = report.emptyGroupsPanels === 1;
+    checks.emptyGroupsLine = report.emptyTitle ===
+      "Nothing to show — Now Playing, Up Next, In Progress and New Releases are empty.";
+    checks.emptyGroupsNoSections = report.sectionTitles.length === 0 &&
+      report.episodeCards === 0 && report.queuePositions.length === 0;
+    checks.emptyGroupsChips = report.metaChips.length === 1 &&
+      report.metaChips[0].includes("Limit");
+    checks.emptyGroupsNoTree = !report.hasTree;
+  }
+  if (fixtureName.startsWith("changeupnext")) {
+    const legacy = fixtureName === "changeupnextlegacy";
+    const preview = fixtureName !== "changeupnext";
+    checks.changeHeadline = report.changeHeadline === "Queued to play next";
+    checks.changePreview = report.previewChip === (preview ? 1 : 0);
+    checks.changeNoTree = !report.hasTree;
+    checks.changeBody = legacy
+      ? report.changeSummary === "10 episodes in Up Next" && report.episodeCards === 0
+      : report.episodeCards === 1 &&
+        report.queuePositions.length > 0 &&
+        sequential(report.queuePositions) &&
+        report.markedRows === 1 &&
+        JSON.stringify(report.sectionTitles) === JSON.stringify(["Up Next"]);
+    // A record card carries the name; no dim title line may duplicate it.
+    checks.changeNoDuplicateTitle = legacy || report.changeSubtitle === null;
+  }
+  if (fixtureName === "changedefaultnoun") {
+    // Identical payload, no curated noun: the widget's own generic word.
+    checks.defaultNoun = report.changeSummary === "10 items in Up Next";
+    checks.defaultNounNoTree = !report.hasTree;
+  }
+  if (fixtureName === "episodetitledupe") {
+    // The record card carries the name; the dim title line must not repeat it.
+    checks.dupeHeadline = report.changeHeadline === "Unstarred";
+    checks.dupeNoTitleLine = report.changeSubtitle === null;
+    checks.dupeCardName = report.cardTitle === "Jony Ive Loves a Handle";
+  }
+  if (fixtureName === "episodestar" || fixtureName === "episodearchive") {
+    // These were a raw tree (star) and a zero-column blank table (archive).
+    checks.episodeStateHeadline = report.changeHeadline ===
+      (fixtureName === "episodestar" ? "Starred" : "Archived");
+    checks.episodeStateCard = report.episodeCards === 1 && !!report.cardTitle;
+    checks.episodeStateNoQueue = report.sectionTitles.length === 0 &&
+      report.changeSummary === null;
+    checks.episodeStateNoTree = !report.hasTree;
+    checks.episodeStateApplied = report.previewChip === 0;
+  }
+  if (fixtureName === "searchgroups") {
+    checks.searchSections = JSON.stringify(report.sectionTitles) ===
+      JSON.stringify(["Podcasts", "Episodes"]);
+    checks.searchCounts = JSON.stringify(report.sectionCounts) ===
+      JSON.stringify(["2", "3"]);
+    checks.searchNoTree = !report.hasTree;
+    // A podcast row has no curated episode field, so its section is auto
+    // columns — which must be the two facts a person searched for, not the
+    // API's bookkeeping. "Explicit: false" / "Type: podcast" appearing here
+    // is the regression this pins.
+    checks.searchPodcastColumns = JSON.stringify(report.headerTexts.slice(0, 2)) ===
+      JSON.stringify(["Title", "Author"]);
+    checks.searchNoRawFlags = !/Explicit|Has Video|Type|Slug|Published Date/
+      .test(report.headerTexts.join("|"));
+    // The episode section keeps the curated layout and its artwork.
+    checks.searchEpisodeArtwork = report.artworkImages === 3;
+    // Search results carry no row actions at all — see the fixture comment.
+    checks.searchNoRowActions = report.toolActionControls === 1; // Run again only
+  }
+  if (fixtureName === "reminderinfo") {
+    // The record wins over its sub-collection: a card, not a table of subtasks.
+    checks.infoCard = report.episodeCards === 1 &&
+      report.cardTitle === "Publish MacRemote article";
+    checks.infoNoSubtaskTable = !report.hasTable;
+    checks.infoNoTree = !report.hasTree;
+  }
+  const expectedReminderChange = {
+      remindercreated: ["Reminder created", "MacRemote UI test"],
+      remindercreatedwarning: ["Reminder created", "Flagged MacRemote UI test"],
+      reminderupdated: ["Reminder updated", "MacRemote UI test (edited)"],
+      reminderdeleted: ["Reminder deleted", "MacRemote UI test (edited)"],
+      reminderunchanged: ["No changes", "MacRemote UI test (edited)"],
+      reminderflagged: ["Reminder flagged", "MacRemote UI test"],
+      reminderunflagged: ["Reminder unflagged", "MacRemote UI test"]
+  }[fixtureName];
+  if (expectedReminderChange) {
+    checks.writeHeadline = report.changeHeadline === expectedReminderChange[0];
+    // The name of the thing that changed, from `titleKey` — no record card.
+    checks.writeTitleLine = report.changeSubtitle === expectedReminderChange[1];
+    checks.writeNoCount = report.changeSummary === null;
+    checks.writeNoTree = !report.hasTree && report.episodeCards === 0;
+  }
+  if (fixtureName === "reminderrecurrence") {
+    checks.recurrenceTable = report.hasTable && !report.hasTree;
+    checks.recurrenceDetailedWins = report.recurrenceCells[0] ===
+      "every 2 months 4th Tue, 5 times";
+    checks.recurrenceParallelFallback = report.recurrenceCells[1] ===
+      "monthly last Fri until 2026-12-31";
+    checks.recurrenceOrdinalTeens = report.recurrenceCells[2] ===
+      "yearly 11th Mon";
+    checks.booleanLabels = report.flagCells[0] === "Flagged" &&
+      report.flagCells[1] === "—" &&
+      report.flagCells[2] === "—" &&
+      !report.flagCells.some(value => value === "true" || value === "false");
+  }
+  if (fixtureName === "remindercreatedwarning") {
+    checks.warningIsSuccessful = report.cardStatus === "warning" &&
+      report.statusLabel === "Completed with warnings" &&
+      report.errorPanels === 0;
+    checks.warningVisible = report.warningPanels === 1 &&
+      report.warningTitle === "Completed with a warning" &&
+      report.warningMessages.length === 1 &&
+      report.warningMessages[0] === "Reminders could not apply the requested flag.";
+  }
+  if (fixtureName === "reminderflagged" || fixtureName === "reminderunflagged") {
+    checks.flagChangeSuccessful = report.cardStatus === "success" &&
+      report.warningPanels === 0 && report.errorPanels === 0;
+  }
+  if (fixtureName === "reminderflagerror") {
+    checks.flagFailureIsError = report.cardStatus === "failed" &&
+      report.statusLabel === "Failed" &&
+      report.errorPanels === 1 && report.warningPanels === 0;
+    checks.flagFailureDetailsHidden = report.stderrText === null &&
+      !report.renderedText.includes("applescript_flag_failed") &&
+      !report.renderedText.includes("process context");
+  }
+  if (fixtureName === "habitcheck") {
+    checks.habitHeadline = report.changeHeadline === "Checked off";
+    checks.habitTitleLine = report.changeSubtitle === "Morning walk";
+    checks.habitApplied = report.previewChip === 0;
+    checks.habitNoTree = !report.hasTree;
+  }
+  if (fixtureName === "habitshow") {
+    // A definition has no streak and no goal, but the curation covers its own
+    // shape too: name + description, the goal read out of the `goals` array,
+    // and the start day. Nothing here may reach the auto-column path, which is
+    // where `occurrence` used to print "[object Object]" into the card meta.
+    checks.definitionCard = report.episodeCards === 1 &&
+      report.cardTitle === "Listen to one new song";
+    checks.definitionSub = report.cardSubtitle === "One album track a day, no repeats";
+    // Target from `goals.0.value` + `goals.0.unit`, then the start date.
+    checks.definitionMeta = !!report.cardMeta &&
+      report.cardMeta.includes("1 rep") && report.cardMeta.includes("Jan 4");
+    // The start DAY is a day: no midnight, and no raw ISO string either.
+    checks.definitionNoMidnight = !!report.cardMeta &&
+      !/12:00|00:00|2026-01-04|T00:00/.test(report.cardMeta);
+    // `occurrence` is hidden, so its raw JSON must appear nowhere at all.
+    checks.definitionNoRawJSON = !!report.cardMeta &&
+      !report.cardMeta.includes("{") && !report.cardMeta.includes("daily");
+    checks.definitionNoTree = !report.hasTree;
+  }
+  if (fixtureName === "overrows") {
+    checks.nestedRows = report.renderedRows === 1 && !report.hasTree &&
+      JSON.stringify(report.sectionTitles) === JSON.stringify(["Up Next"]);
+    checks.nestedContext = report.metaChips.some(chip => chip.includes("Source") && chip.includes("cache")) &&
+      report.metaChips.some(chip => chip.includes("Live") && chip.includes("No"));
+    checks.outerEnvelopeHidden = !(report.renderedText.includes("schemaVersion") ||
+      report.renderedText.includes("provenance"));
+  }
+  if (fixtureName === "overdry") {
+    checks.nestedPreview = report.changeHeadline === "Added to Queue" &&
+      report.previewChip === 1 && report.warningPanels === 0 && !report.hasTree;
+  }
+  if (fixtureName === "overunverified") {
+    checks.unverifiedWarning = report.changeHeadline === "Added to Queue" &&
+      report.cardStatus === "warning" && report.warningPanels === 1 &&
+      report.warningMessages.includes("The write was not confirmed by read-back.");
+  }
+  if (fixtureName === "notesdocument") {
+    checks.noteDocumentWins = report.documentTitle === "Literal Safety" &&
+      report.changeHeadline === null && !report.hasTree;
+    checks.noteMarkupLiteral = !!report.documentBodyText &&
+      report.documentBodyText.includes("<scr" + "ipt>window.pwned = true</scr" + "ipt>") &&
+      report.documentBodyText.includes("<b>not bold</b>") &&
+      report.documentBodyText.includes("[unsafe](javascript:alert(1))") &&
+      report.documentDangerousNodes === 0;
+  }
+  if (fixtureName === "notestranscripts") {
+    checks.transcriptDocuments = report.documentItems === 2 && !report.hasTree &&
+      JSON.stringify(report.documentItemStatuses) === JSON.stringify(["Available", "Pending"]);
+    checks.transcriptBodies = report.documentItemBodies[0]?.includes("<scr" + "ipt>literal</scr" + "ipt>") &&
+      report.documentItemBodies[1] === "Transcript is not available yet" &&
+      report.documentDangerousNodes === 0;
+  }
+  if (fixtureName === "notesrows") {
+    checks.noteRowsTable = report.hasTable && report.renderedRows === 1 && !report.hasTree;
+    checks.noteRowsHumanText = report.renderedText.includes("Release Checklist") &&
+      report.renderedText.includes("Notarize the build and verify the packaged app.");
+    checks.noteRowsHideWireFields = !report.renderedText.includes("HIDDEN_CHECKPOINT_DO_NOT_RENDER") &&
+      !report.renderedText.includes("HIDDEN_DECODED_NOTE_DO_NOT_RENDER") &&
+      !report.renderedText.includes("31D520C4-1CAE-43E3-8A28-566EE44FA2AE");
+  }
+  if (fixtureName === "notespreview") {
+    checks.notePreview = report.changeHeadline === "Preview ready" &&
+      report.previewChip === 1 && !report.hasTree && !report.hasTerminal;
+  }
+  if (fixtureName === "notesapplied") {
+    checks.noteApplied = report.changeHeadline === "Note created" &&
+      report.previewChip === 0 && !report.hasTree && !report.hasTerminal;
+  }
+  if (fixtureName === "visibilityfallback") {
+    checks.assistantFallbackHidden = !report.renderedText.includes("SAFE_VISIBLE_SUMMARY");
+    checks.genericFallbackPretty = report.renderedText.includes("Completed") &&
+      !report.hasTree && !report.hasTerminal;
+    checks.userOnlyFallbackHidden = !report.renderedText.includes("USER_ONLY_DO_NOT_RENDER");
+    checks.fallbackMetadataHidden = !report.renderedText.includes("HIDDEN_META_DO_NOT_RENDER");
+  }
+  if (fixtureName === "safefallback") {
+    const forbidden = [
+      "USER_ONLY_DO_NOT_RENDER",
+      "HIDDEN_META_DO_NOT_RENDER",
+      "/Users/private/SecretCLI",
+      "/usr/local/bin/secretctl",
+      "secretctl publish --token REDACTED",
+      "git status",
+      "swift build",
+      "argv:",
+      "RAW_JSON_DO_NOT_RENDER",
+      "file:///Users/private/secret.txt",
+      "/tmp/private-output.json",
+      "/var/private/state",
+      "/etc/private.conf",
+      "/dev/private-device",
+      "/home/private/secret",
+      "API_KEY_DO_NOT_RENDER",
+      "ACCESS_TOKEN_DO_NOT_RENDER",
+      "ACCESS_TOKEN_SNAKE_DO_NOT_RENDER",
+      "BEARER_DO_NOT_RENDER",
+      "CREDENTIAL_DO_NOT_RENDER",
+      "COOKIE_DO_NOT_RENDER",
+      "SESSION_DO_NOT_RENDER"
+    ];
+    checks.safeFallbackHidden = !report.renderedText.includes("SAFE_VISIBLE_SUMMARY");
+    checks.safeFallbackSanitized = forbidden.every(marker => !report.renderedText.includes(marker));
+    checks.safeFallbackPretty = report.renderedText.includes("Completed") &&
+      !report.hasTree && !report.hasTerminal;
+  }
+  if (fixtureName === "semanticcounts") {
+    const forbidden = [
+      "PRIVATE_RECORD_ONE_DO_NOT_RENDER", "PRIVATE_RECORD_TWO_DO_NOT_RENDER",
+      "ARBITRARY_TEXT_DO_NOT_RENDER", "API_KEY_VARIANT_DO_NOT_RENDER",
+      "PASSWORD_VARIANT_DO_NOT_RENDER", "CLIENT_SECRET_VARIANT_DO_NOT_RENDER",
+      "/Network/Servers/private", "ruby private.rb", "--verbose",
+      "CREDENTIAL_URL_DO_NOT_RENDER", "curl https://example.com/private",
+      "/Users/name/Documents/report.txt", "HOSTILE_GENERIC_KEY_VALUE_DO_NOT_RENDER"
+    ];
+    checks.semanticCountsVisible = report.metaChips.includes("Item Count3") &&
+      report.metaChips.includes("ReadyYes") && report.metaChips.includes("Records2");
+    checks.semanticScalarsHidden = forbidden.every(marker => !report.renderedText.includes(marker));
+    checks.semanticCountsPretty = report.renderedText.includes("Completed") &&
+      !report.hasTree && !report.hasTerminal;
+  }
+  if (fixtureName === "curatedsafety") {
+    const forbidden = [
+      "PASSWORD_VARIANT_DO_NOT_RENDER", "CLIENT_SECRET_VARIANT_DO_NOT_RENDER",
+      "AUTH_VARIANT_DO_NOT_RENDER", "PASSPHRASE_VARIANT_DO_NOT_RENDER",
+      "/Network/Servers/private", "ruby private.rb", "--verbose",
+      "CREDENTIAL_URL_DO_NOT_RENDER",
+      "HOSTILECURATEDSECRET123456789_DO_NOT_RENDER",
+      "HOSTILEJWTSECRET123456789"
+    ];
+    checks.curatedSafeTextVisible = report.renderedText.includes("This safe sentence remains visible.");
+    checks.curatedDangerousTextHidden = forbidden.every(marker => !report.renderedText.includes(marker));
+    checks.curatedSafetyPretty = report.documentTitle === "Curated Safety" &&
+      !report.hasTree && !report.hasTerminal;
+  }
+  if (fixtureName === "hostileautokeys" || fixtureName === "hostilesummarykeys") {
+    const forbidden = [
+      "curl https://example.com/private", "/Users/name/Documents/report.txt",
+      "HOSTILE_AUTO_KEY_VALUE_DO_NOT_RENDER", "HOSTILE_SUMMARY_KEY_VALUE_DO_NOT_RENDER"
+    ];
+    checks.hostileKeysHidden = forbidden.every(marker =>
+      !report.renderedText.includes(marker) && !report.renderedHTML.includes(marker));
+    checks.safeKeyControlVisible = fixtureName === "hostileautokeys"
+      ? report.renderedText.includes("Safe auto-table item")
+      : report.renderedText.includes("Safe count") && report.renderedText.includes("Safe ready");
+  }
+  if (fixtureName === "credentiallink") {
+    checks.credentialURLHidden = !report.renderedText.includes("CREDENTIAL_URL_DO_NOT_RENDER") &&
+      !report.renderedHTML.includes("CREDENTIAL_URL_DO_NOT_RENDER") &&
+      !report.renderedHTML.includes("https://example.com/private") &&
+      report.linkHrefs.every(value => value === null) &&
+      report.linkTitles.every(value => value === null) && report.openLinks.length === 0;
+    checks.credentialLinkPretty = report.renderedText.includes("Link available") &&
+      report.linkModes.every(value => value === "protected") &&
+      !report.hasTree && !report.hasTerminal;
+  }
+  if (fixtureName === "protectedartifact") {
+    checks.protectedResourceInert = report.attachmentHrefs.every(value => value === null) &&
+      report.attachmentTitles.every(value => value === null) && report.openLinks.length === 0;
+    checks.protectedResourceHidden = !report.renderedText.includes("RESOURCE_SECRET_DO_NOT_RENDER") &&
+      !report.renderedHTML.includes("RESOURCE_SECRET_DO_NOT_RENDER") &&
+      !report.renderedHTML.includes("https://example.com/file") &&
+      report.renderedText.includes("Protected link");
+  }
+  if (fixtureName === "artifact") {
+    checks.artifactSummary = !report.renderedText.includes("Your download is ready.") &&
+      report.renderedText.includes("Completed");
+    checks.artifactCard = JSON.stringify(report.attachmentNames) ===
+      JSON.stringify(["Release Package.zip"]);
+    checks.artifactURIHidden = !report.renderedText.includes("PRIVATE_ARTIFACT_TOKEN_DO_NOT_RENDER") &&
+      !report.renderedText.includes("127.0.0.1");
+  }
+  if (fixtureName === "task") {
+    checks.taskPretty = report.taskPanels === 1 &&
+      report.renderedText.includes("Running in the background");
+    checks.taskInternalsHidden = !report.renderedText.includes("TASK_ID_DO_NOT_RENDER") &&
+      !report.renderedText.includes("TASK_INTERNAL_STATUS_DO_NOT_RENDER") &&
+      !report.renderedText.includes("pollInterval") && !report.renderedText.includes("ttlMs");
+  }
+  if (fixtureName === "multimodal") {
+    checks.multimodalSummaryHidden = !report.renderedText.includes("SAFE_VISIBLE_SUMMARY");
+    checks.multimodalTextHidden = !report.relatedTexts.includes("A visual and an audio clip are attached.");
+    checks.multimodalAttachments = JSON.stringify(report.attachmentNames) ===
+      JSON.stringify(["Image result", "Audio result"]);
+    checks.multimodalHidden = !report.renderedText.includes("USER_ONLY_DO_NOT_RENDER") &&
+      !report.renderedText.includes("MULTIMODAL_IMAGE_DATA_DO_NOT_RENDER") &&
+      !report.renderedText.includes("MULTIMODAL_AUDIO_DATA_DO_NOT_RENDER");
+  }
+  if (["overrows", "overdry"].includes(fixtureName)) {
+    checks.orangeAccent = report.accentLineColor ===
+      (theme === "dark" ? "rgb(255, 159, 10)" : "rgb(154, 67, 0)");
+  }
+  if (["notesdocument", "notestranscripts", "notesrows", "notespreview", "notesapplied"].includes(fixtureName)) {
+    checks.yellowAccent = report.accentLineColor ===
+      (theme === "dark" ? "rgb(255, 214, 10)" : "rgb(122, 89, 0)");
+  }
+  if (["emptyreminders", "emptywrapped", "emptyhabits"].includes(fixtureName)) {
+    // [] and {"items": []} are the ordinary answers on a quiet day; both used
+    // to render as a raw key/value tree.
+    checks.emptyResultPanel = report.emptyPanels === 1;
+    checks.emptyResultTitle = report.emptyTitle === "Completed — nothing to report";
+    checks.emptyResultSub = !!report.emptySub && report.emptySub.endsWith("with nothing to show.");
+    checks.emptyResultNoTree = !report.hasTree && !report.hasTable;
+  }
+  if (fixtureName === "truncatedjson") {
+    // The generic profile never renders a clipped payload fragment.
+    checks.truncatedGenericSummary = report.renderedText.includes("Completed") &&
+      report.oversizedPanels === 0 && report.truncationBanners === 1;
+    checks.oversizedHidesFragment = report.partialOutputDisclosures === 0 &&
+      !report.renderedText.includes("episode_uuid") &&
+      !report.renderedText.includes("segments");
+  }
+  if (fixtureName === "terminal" || fixtureName === "truncated") {
+    // The generic profile acknowledges completion without rendering command
+    // output, whether complete or clipped.
+    checks.genericTextHidden = report.renderedText.includes("Completed") &&
+      !report.renderedText.includes("Build settings") &&
+      !report.renderedText.includes("partial output") &&
+      !report.hasTerminal && report.oversizedPanels === 0;
+    if (fixtureName === "truncated") {
+      checks.truncatedTextBanner = report.truncationBanners === 1;
+    }
+  }
+  if (exercise === "teardown") checks.teardown = report.teardownAck;
+  if (exercise === "malformed") checks.malformed = report.unknownMethodError === -32601;
+  if (exercise === "cancel") checks.cancelled = report.cancelledSafe;
+  if (exercise === "action") {
+    checks.actionCall = report.toolCalls.length === 1 &&
+      report.toolCalls[0]?.name === "remctl_run" &&
+      JSON.stringify(report.toolCalls[0]?.arguments?.args) ===
+        JSON.stringify(["done", "23901", "--json"]);
+  }
+  if (exercise === "actionrepaint") {
+    // Both calls settled after the rebuild; the rows on screen show it.
+    const doc = iframe.contentDocument;
+    const rowFor = (title) => Array.from(doc.querySelectorAll("tr.mrw-data-row"))
+      .find(row => row.textContent.includes(title));
+    checks.actionCalls = report.toolCalls.length === 2;
+    checks.noStalePending = !doc.querySelector("tr.mrw-data-row [data-state='pending']");
+    checks.checkOffDone = !!rowFor("Publish MacRemote article")?.classList.contains("mrw-row-done");
+    checks.rowButtonDone = rowFor("Record podcast segment")
+      ?.querySelector("[data-mrw-action-id='delete']")?.dataset.state === "done";
+  }
+  if (exercise === "jsonvalues") checks.jsonValues = report.jsonValuesSafe;
+  if (exercise === "sort") checks.sortRows = report.sortRowsSafe;
+  if (exercise === "jsoninvalid") checks.jsonInvalid = report.invalidResultsIgnored;
+  if (exercise === "copy") {
+    if (fixtureName === "curatedsafety") {
+      checks.copyCuratedSecretsSafe = !!report.copiedText &&
+        report.copiedText.includes("This safe sentence remains visible.") &&
+        !report.copiedText.includes("HOSTILECURATEDSECRET123456789_DO_NOT_RENDER") &&
+        !report.copiedText.includes("HOSTILEJWTSECRET123456789");
+    } else if (fixtureName === "credentiallink") {
+      checks.copyCredentialLinkSafe = !!report.copiedText &&
+        report.copiedText.includes("Link available") &&
+        !report.copiedText.includes("CREDENTIAL_URL_DO_NOT_RENDER") &&
+        !report.copiedText.includes("https://example.com/private");
+    } else if (fixtureName === "hostileautokeys" || fixtureName === "hostilesummarykeys") {
+      checks.copyHostileKeysSafe = !!report.copiedText &&
+        !report.copiedText.includes("curl https://example.com/private") &&
+        !report.copiedText.includes("/Users/name/Documents/report.txt") &&
+        !report.copiedText.includes("HOSTILE_AUTO_KEY_VALUE_DO_NOT_RENDER") &&
+        !report.copiedText.includes("HOSTILE_SUMMARY_KEY_VALUE_DO_NOT_RENDER");
+    } else if (fixtureName === "protectedartifact") {
+      checks.copyProtectedResourceSafe = !!report.copiedText &&
+        report.copiedText.includes("Protected link") &&
+        !report.copiedText.includes("RESOURCE_SECRET_DO_NOT_RENDER") &&
+        !report.copiedText.includes("https://example.com/file");
+    } else if (fixtureName === "table") {
+      // The copy is read from the laid-out card: rows on separate lines (one
+      // line each in the wide table), with no closed menu or control labels.
+      const lines = (report.copiedText || "").split("\n");
+      const shown = REMINDERS.filter(reminder => report.renderedText.includes(reminder.title));
+      checks.copyRowsOnSeparateLines = shown.length > 1 && shown.every(reminder =>
+        lines.some(line => line.includes(reminder.title) &&
+          (frameWidth === 390 || line.includes(reminder.list)) &&
+          shown.every(other => other === reminder || !line.includes(other.title))));
+      checks.copyLeavesControlsOut = !!report.copiedText &&
+        ["Delete", "Reschedule", "Default order", "Sort", "▲", "more"]
+          .every(label => !report.copiedText.includes(label));
+    } else {
+      checks.copyVisibleResultOnly = !!report.copiedText &&
+        report.copiedText.includes("A Nested Episode") &&
+        !report.copiedText.includes('"schemaVersion"') &&
+        !report.copiedText.includes('"command"') &&
+        !report.copiedText.includes('"data"') &&
+        !report.copiedText.includes('"meta"') &&
+        !report.copiedText.includes("provenance");
+    }
+  }
+  checks.widgetErrors = report.widgetErrors.length === 0;
+  const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  output.title = JSON.stringify(report);
+  output.dataset.state = failures.length ? "fail" : "pass";
+  output.textContent = failures.length
+    ? "FAIL · " + failures.join(", ")
+    : "PASS · " + report.widgetViewportWidth + " CSS px · " + report.renderedRows + " rows";
+}
+
+let inspectionTimer = null;
+function scheduleInspection() {
+  clearTimeout(inspectionTimer);
+  inspectionTimer = setTimeout(updateAssertions, 80);
+}
+
+window.__harnessReport = inspectWidget;
+window.__openLastOverflow = () => {
+  const doc = iframe.contentDocument;
+  const menus = doc ? Array.from(doc.querySelectorAll("details.mrw-action-overflow")) : [];
+  if (!menus.length) return false;
+  menus[menus.length - 1].open = true;
+  scheduleInspection();
+  return true;
+};
+
+window.addEventListener("message", (event) => {
+  if (event.source !== iframe.contentWindow) { return; }
+  const msg = event.data;
+  if (!msg || msg.jsonrpc !== "2.0") { return; }
+  const send = (m) => iframe.contentWindow.postMessage(m, "*");
+
+  if (msg.method === "ui/initialize") {
+    const hostCapabilities = {};
+    if (supportsServerTools) hostCapabilities.serverTools = {};
+    if (supportsOpenLinks) hostCapabilities.openLinks = {};
+    send({ jsonrpc: "2.0", id: msg.id, result: {
+      protocolVersion: "2026-01-26",
+      hostInfo: { name: "HarnessHost", version: "1.0" },
+      hostCapabilities,
+      hostContext: {
+        theme: hostVariant === "themeless" ? undefined : theme,
+        platform: "web",
+        displayMode: "inline",
+        containerDimensions: { width: frameWidth, maxHeight: 4000 },
+        safeAreaInsets: { top: 3, right: 4, bottom: 5, left: 6 },
+        // A real host hands down variables that match the theme it just
+        // declared. Sending light text colors with `theme: "dark"` made every
+        // dark screenshot unreadable and told the widget nothing true; the
+        // `mismatch` variant does it on purpose to prove the widget copes.
+        styles: {
+          variables: harnessHostVariables(),
+          css: {
+            fonts: "@font-face { font-family: HarnessHost; src: local(-apple-system); }"
+          }
+        }
+      }
+    }});
+    return;
+  }
+  if (msg.method === "ui/notifications/initialized") {
+    window.__initialized = true;
+    if (exercise === "malformed") {
+      send("not-an-object");
+      send({ jsonrpc: "1.0", method: "ui/notifications/tool-result", params: {} });
+      send({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: "bad" });
+      send({ jsonrpc: "2.0", id: 777, method: "host/unknown", params: {} });
+    }
+    send({ jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: { days: 7 } } });
+    if (exercise === "compatibility" || exercise === "compatmetadata") {
+      const fixture = FIXTURES[fixtureName];
+      const realm = iframe.contentWindow;
+      realm.openai = realm.JSON.parse(JSON.stringify({toolOutput: fixture.structuredContent || JSON.parse(fixture.content[0].text), toolResponseMetadata: fixture._meta}));
+      if (exercise === "compatmetadata") send({jsonrpc: "2.0", method: "ui/notifications/tool-result", params: {...fixture, _meta: {}}});
+      realm.dispatchEvent(new realm.Event("openai:set_globals"));
+    } else {
+      send({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: FIXTURES[fixtureName] });
+    }
+    if (fixtureName === "cardoff" && exercise === "recover") {
+      setTimeout(() => send({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: FIXTURES.remindertextfallback }), 200);
+    }
+    scheduleExercise();
+    scheduleInspection();
+    return;
+  }
+  if (msg.method === "ui/notifications/size-changed") {
+    window.__sizeEvents.push(msg.params);
+    if (msg.params && msg.params.height) { iframe.style.height = msg.params.height + "px"; }
+    scheduleInspection();
+    return;
+  }
+  if (msg.method === "tools/call") {
+    window.__toolCalls.push(msg.params);
+    // fixture=actionfail: every proxied call fails with a CLI-style stderr,
+    // exercising the widget's visible Failed state + tooltip.
+    const fail = fixtureName === "actionfail";
+    setTimeout(() => {
+      send({ jsonrpc: "2.0", id: msg.id, result: {
+        structuredContent: envelope({
+          toolName: msg.params.name,
+          exitCode: fail ? 2 : 0, succeeded: !fail,
+          stdout: fail ? "" : "{\"ok\": true}",
+          stderr: fail ? "usage: remctl [-h] ...\nremctl: error: unrecognized arguments: --json" : ""
+        }),
+        content: [{ type: "text", text: fail ? "{}" : "{\"ok\": true}" }],
+        isError: fail
+      }});
+      scheduleInspection();
+    }, 250);
+    return;
+  }
+  if (msg.method === "ui/open-link") {
+    window.__openLinks.push(msg.params && msg.params.url);
+    send({ jsonrpc: "2.0", id: msg.id, result: {} });
+    scheduleInspection();
+    return;
+  }
+  if (msg.id === 777 && msg.error) {
+    window.__unknownMethodError = msg.error.code;
+    scheduleInspection();
+    return;
+  }
+  if (msg.id === 778 && msg.result) {
+    window.__teardownAck = true;
+    scheduleInspection();
+  }
+});
+
+function scheduleExercise() {
+  setTimeout(() => {
+    const doc = iframe.contentDocument;
+    if (!doc) return;
+    if (exercise === "link") {
+      const link = doc.querySelector(".mrw-link");
+      if (link) link.click();
+    } else if (exercise === "copy") {
+      doc.execCommand = () => {
+        window.__copiedText = doc.activeElement && "value" in doc.activeElement
+          ? doc.activeElement.value : null;
+        return true;
+      };
+      const copy = Array.from(doc.querySelectorAll("button"))
+        .find(button => button.textContent.includes("Copy result"));
+      if (copy) copy.click();
+    } else if (exercise === "context") {
+      const nextTheme = theme === "dark" ? "light" : "dark";
+      iframe.contentWindow.postMessage({
+        jsonrpc: "2.0",
+        method: "ui/notifications/host-context-changed",
+        params: {
+          theme: nextTheme,
+          styles: { variables: { "--color-text-primary": "rgb(18, 52, 86)" } }
+        }
+      }, "*");
+    } else if (exercise === "teardown") {
+      const runAgain = doc.querySelector("[data-mrw-run-again]");
+      if (runAgain) runAgain.click();
+      setTimeout(() => {
+        iframe.contentWindow.postMessage({
+          jsonrpc: "2.0", id: 778, method: "ui/resource-teardown", params: {}
+        }, "*");
+      }, 25);
+    } else if (exercise === "cancel") {
+      iframe.contentWindow.postMessage({
+        jsonrpc: "2.0",
+        method: "ui/notifications/tool-cancelled",
+        params: { reason: "<b>Stopped safely</b>" }
+      }, "*");
+      setTimeout(() => {
+        window.__cancelledSafe =
+          doc.querySelector(".mrw-waiting")?.textContent === "Cancelled" &&
+          !doc.querySelector(".mrw-waiting b");
+        iframe.contentWindow.postMessage({
+          jsonrpc: "2.0",
+          method: "ui/notifications/tool-result",
+          params: FIXTURES[fixtureName]
+        }, "*");
+        scheduleInspection();
+      }, 25);
+    } else if (exercise === "action") {
+      const action = doc.querySelector(
+        "tr.mrw-data-row:not(.mrw-row-done) [data-mrw-action-id='complete']"
+      );
+      if (action) action.click();
+    } else if (exercise === "actionrepaint") {
+      // Start a check-off and a row button, then rebuild the rows (a header
+      // sort when wide, the sort menu when narrow) before either call settles.
+      // "Show more" rebuilds them the same way, but it grows the frame, and
+      // headless Chrome can end before the widget reports the new height.
+      const rowFor = (title) => Array.from(doc.querySelectorAll("tr.mrw-data-row"))
+        .find(row => row.textContent.includes(title));
+      rowFor("Publish MacRemote article")?.querySelector("[data-mrw-action-id='complete']")?.click();
+      const overflow = rowFor("Record podcast segment")?.querySelector("details.mrw-action-overflow");
+      if (overflow) overflow.open = true;
+      const remove = overflow?.querySelector("[data-mrw-action-id='delete']");
+      remove?.click();
+      remove?.click();
+      const select = doc.querySelector(".mrw-sort-select");
+      if (frameWidth === 390 && select) {
+        select.value = "title";
+        select.dispatchEvent(new iframe.contentWindow.Event("change"));
+      } else {
+        doc.querySelectorAll(".mrw-th-btn[type='button']")[1]?.click();
+      }
+    } else if (exercise === "sort") {
+      // Natural numeric order, stable ties, and nulls last in both directions.
+      // Switching columns and restoring default order must use the source rows.
+      const names = () => Array.from(doc.querySelectorAll('tbody [data-key="name"]'))
+        .map(node => node.textContent).join("");
+      const amount = doc.querySelectorAll(".mrw-th-btn[type='button']")[1];
+      const select = doc.querySelector(".mrw-sort-select");
+      if (amount && select) {
+        amount.click();
+        let passed = names() === "FBCJIAHGDE".slice(0, frameWidth === 390 ? 4 : 8);
+        const more = doc.querySelector(".mrw-more-btn");
+        for (let page = 0; page < 3 && more && !more.parentElement.hidden; page++) more.click();
+        passed = passed && names() === "FBCJIAHGDE";
+        amount.click();
+        passed = passed && names() === "GAHIBCJFDE";
+        select.value = "name";
+        select.dispatchEvent(new iframe.contentWindow.Event("change"));
+        passed = passed && names() === "ABCDEFGHIJ";
+        doc.querySelector(".mrw-sort-dir").click();
+        passed = passed && names() === "JIHGFEDCBA";
+        select.value = "amount";
+        select.dispatchEvent(new iframe.contentWindow.Event("change"));
+        passed = passed && names() === "FBCJIAHGDE";
+        select.value = "";
+        select.dispatchEvent(new iframe.contentWindow.Event("change"));
+        window.__sortRowsSafe = passed && names() === "ABCDEFGHIJ";
+      }
+      iframe.contentWindow.postMessage({
+        jsonrpc: "2.0", method: "ui/notifications/tool-result", params: FIXTURES[fixtureName]
+      }, "*");
+      scheduleInspection();
+    } else if (exercise === "jsonvalues") {
+      const cases = [
+        { value: null, forbidden: [] },
+        { value: ["array-value", 7], forbidden: ["array-value"] },
+        { value: "string-value", forbidden: ["string-value"] },
+        { value: true, forbidden: ["Yes"] },
+        { value: 42.5, forbidden: ["42.5"] }
+      ];
+      let index = 0;
+      let allVisible = true;
+      const renderNext = () => {
+        if (index < cases.length) {
+          const current = cases[index++];
+          iframe.contentWindow.postMessage({
+            jsonrpc: "2.0",
+            method: "ui/notifications/tool-result",
+            params: {
+              content: [{ type: "text", text: "content-fallback-must-not-win" }],
+              structuredContent: current.value,
+              _meta: SEMANTIC_CARD_META
+            }
+          }, "*");
+          setTimeout(() => {
+            const text = doc.querySelector(".mrw-card")?.textContent || "";
+            const casePassed =
+              !!doc.querySelector(".mrw-card[data-status='success']") &&
+              text.includes("Completed") &&
+              current.forbidden.every(marker => !text.includes(marker)) &&
+              !text.includes("content-fallback-must-not-win");
+            allVisible = allVisible &&
+              casePassed;
+            renderNext();
+          }, 35);
+          return;
+        }
+
+        iframe.contentWindow.postMessage({
+          jsonrpc: "2.0",
+          method: "ui/notifications/tool-result",
+          params: {
+            content: [{ type: "text", text: "content-only-fallback" }],
+            _meta: SEMANTIC_CARD_META
+          }
+        }, "*");
+        setTimeout(() => {
+          const text = doc.querySelector(".mrw-card")?.textContent || "";
+          const contentOnlyPassed =
+            !!doc.querySelector(".mrw-card[data-status='success']") &&
+            text.includes("Completed") &&
+            !text.includes("content-only-fallback");
+          window.__jsonValuesSafe = allVisible &&
+            contentOnlyPassed;
+          iframe.contentWindow.postMessage({
+            jsonrpc: "2.0",
+            method: "ui/notifications/tool-result",
+            params: FIXTURES[fixtureName]
+          }, "*");
+          scheduleInspection();
+        }, 35);
+      };
+      renderNext();
+    } else if (exercise === "jsoninvalid") {
+      const baseline = doc.querySelector(".mrw-card")?.textContent || "";
+      const invalidValues = [
+        undefined,
+        NaN,
+        Infinity,
+        -Infinity,
+        [1, undefined]
+      ];
+      const cycle = {};
+      cycle.self = cycle;
+      invalidValues.push(cycle);
+      let index = 0;
+      let stayedStable = !!baseline;
+
+      const dispatchRealmResult = (value, text) => {
+        const realm = iframe.contentWindow;
+        const block = new realm.Object();
+        block.type = "text";
+        block.text = text;
+        const content = new realm.Array();
+        content.push(block);
+        const result = new realm.Object();
+        result.content = content;
+        result.structuredContent = value;
+        result._meta = realm.JSON.parse(JSON.stringify(SEMANTIC_CARD_META));
+        const message = new realm.Object();
+        message.jsonrpc = "2.0";
+        message.method = "ui/notifications/tool-result";
+        message.params = result;
+        realm.dispatchEvent(new realm.MessageEvent("message", {
+          data: message,
+          source: window
+        }));
+      };
+
+      const rejectNext = () => {
+        if (index < invalidValues.length) {
+          iframe.contentWindow.postMessage({
+            jsonrpc: "2.0",
+            method: "ui/notifications/tool-result",
+            params: {
+              content: [{ type: "text", text: "invalid-value" }],
+              structuredContent: invalidValues[index++]
+            }
+          }, "*");
+          setTimeout(() => {
+            stayedStable = stayedStable &&
+              doc.querySelector(".mrw-card")?.textContent === baseline;
+            rejectNext();
+          }, 30);
+          return;
+        }
+
+        // A valid control proves that the synthetic MessageEvent reaches the
+        // widget before the uncloneable function is injected through it.
+        dispatchRealmResult("synthetic-control", "synthetic-control-fallback");
+        setTimeout(() => {
+          const syntheticDelivered =
+            (doc.querySelector(".mrw-card")?.textContent || "").includes("Completed") &&
+            !doc.querySelector(".mrw-table");
+          iframe.contentWindow.postMessage({
+            jsonrpc: "2.0",
+            method: "ui/notifications/tool-result",
+            params: FIXTURES[fixtureName]
+          }, "*");
+          setTimeout(() => {
+            stayedStable = stayedStable &&
+              doc.querySelector(".mrw-card")?.textContent === baseline;
+            dispatchRealmResult(
+              iframe.contentWindow.Function("return 1"),
+              "invalid-function"
+            );
+            setTimeout(() => {
+              stayedStable = stayedStable &&
+                doc.querySelector(".mrw-card")?.textContent === baseline;
+              window.__invalidResultsIgnored = stayedStable && syntheticDelivered;
+              scheduleInspection();
+            }, 30);
+          }, 30);
+        }, 30);
+      };
+      rejectNext();
+    }
+    scheduleInspection();
+  }, 180);
+}
+</script>
+</body>
+</html>

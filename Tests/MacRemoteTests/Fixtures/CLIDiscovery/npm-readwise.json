@@ -1,0 +1,13 @@
+{
+  "name": "@readwise/cli",
+  "version": "1.4.2",
+  "description": "Access highlights, documents, and your entire reading library from the command line.",
+  "bin": {
+    "readwise": "dist/run.js"
+  },
+  "keywords": [
+    "reading",
+    "highlights"
+  ],
+  "homepage": "https://readwise.io"
+}

@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: castctl
+Version: 0.1.0
+Summary: Power-user CLI for a podcast app.
+Project-URL: Homepage, https://github.com/fixture/castctl
+Project-URL: Repository, https://github.com/fixture/castctl
+Author: Fixture Author
+License-Expression: MIT
+License-File: LICENSE
+Keywords: agents,cli,podcast-app,podcasts,transcripts
+Classifier: Development Status :: 3 - Alpha
+Classifier: Environment :: Console
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
+# castctl
+
+Body text is not part of the headers and must be ignored.

@@ -1,0 +1,40 @@
+.TH RG 1 2025-10-22 "15.1.0" "User Commands"
+.
+.
+.SH NAME
+rg \- recursively search the current directory for lines matching a pattern
+.
+.
+.SH SYNOPSIS
+.\" I considered using GNU troff's .SY and .YS "synopsis" macros here, but it
+.\" looks like they aren't portable. Specifically, they don't appear to be in
+.\" BSD's mdoc used on macOS.
+.sp
+\fBrg\fP [\fIOPTIONS\fP] \fIPATTERN\fP [\fIPATH\fP...]
+.sp
+\fBrg\fP [\fIOPTIONS\fP] \fB\-e\fP \fIPATTERN\fP... [\fIPATH\fP...]
+.sp
+\fBrg\fP [\fIOPTIONS\fP] \fB\-f\fP \fIPATTERNFILE\fP... [\fIPATH\fP...]
+.sp
+\fBrg\fP [\fIOPTIONS\fP] \fB\-\-files\fP [\fIPATH\fP...]
+.sp
+\fBrg\fP [\fIOPTIONS\fP] \fB\-\-type\-list\fP
+.sp
+\fIcommand\fP | \fBrg\fP [\fIOPTIONS\fP] \fIPATTERN\fP
+.sp
+\fBrg\fP [\fIOPTIONS\fP] \fB\-\-help\fP
+.sp
+\fBrg\fP [\fIOPTIONS\fP] \fB\-\-version\fP
+.
+.
+.SH DESCRIPTION
+ripgrep (rg) recursively searches the current directory for a regex pattern.
+By default, ripgrep will respect your \fB.gitignore\fP and automatically skip
+hidden files/directories and binary files.
+.sp
+ripgrep's default regex engine uses finite automata and guarantees linear
+time searching. Because of this, features like backreferences and arbitrary
+look-around are not supported. However, if ripgrep is built with PCRE2,
+then the \fB\-P/\-\-pcre2\fP flag can be used to enable backreferences and
+look-around.
+.sp

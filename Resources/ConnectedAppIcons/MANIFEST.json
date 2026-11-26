@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 2,
+  "purpose": "Presentation-only marks for connected apps (decision D46). Selecting a mark grants no privilege and changes no security decision; see the trust-boundary note in Models/ConnectedAppIdentity.swift.",
+  "policy": "Artwork ships only when published brand terms permit redistribution. No favicons, no community re-drawings, no runtime fetching. Where redistribution is unproven, the mark may still be read from a copy of the app already installed on this Mac (see localExtraction) or accepted from the app's own MCP handshake as a data: URI (see clientSuppliedIcons). Everything else uses an SF Symbol fallback.",
+  "precedence": [
+    "1. curated bundled asset (icons below)",
+    "2. locally installed app bundle (localExtraction below)",
+    "3. clientInfo.icons data: URI supplied by the app itself (clientSuppliedIcons below)",
+    "4. SF Symbol fallback"
+  ],
+  "icons": [
+    {
+      "file": "t3code.png",
+      "brandID": "t3code",
+      "product": "T3 Code",
+      "owner": "T3 Tools Inc.",
+      "sourceURL": "https://github.com/pingdotgg/t3code/blob/1b4830ff06bf80e505dbf669deef189af85f77d7/assets/prod/black-macos-1024.png",
+      "sourceCommit": "1b4830ff06bf80e505dbf669deef189af85f77d7",
+      "sourceSHA256": "2585f4007e41fa89c1916f28ea34eaadeb2660e2a8663efb1ef29f4e3e8a8fa6",
+      "retrievedAt": "2026-07-29",
+      "license": "MIT",
+      "licenseURL": "https://github.com/pingdotgg/t3code/blob/1b4830ff06bf80e505dbf669deef189af85f77d7/LICENSE",
+      "redistributionPermitted": true,
+      "redistributionEvidence": "MIT License, Copyright (c) 2026 T3 Tools Inc.: \"Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \\\"Software\\\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software\". The repository ships these marks in assets/prod under that license; the notice is reproduced verbatim in THIRD-PARTY-NOTICES.md.",
+      "originalFormat": "PNG, 1024x1024, 16-bit/color RGBA",
+      "transformations": [
+        "Downscaled to 512x512 with /usr/bin/sips -s format png -z 512 512 (8-bit/color RGBA output). No recolor, no crop, no re-drawing."
+      ],
+      "sha256": "073e3e3336e1feadcce3b0d750e4c6a2fbb1c127d26282a13489e42c4bd14580",
+      "appearance": "universal",
+      "appearanceNote": "assets/prod at this commit publishes only black-* marks — there is no light/white variant. The macOS icon is a dark squircle with a light wordmark and its own margins, so one file serves both light and dark appearances."
+    },
+    {
+      "file": "grok-light.png",
+      "brandID": "grok",
+      "product": "Grok (xAI)",
+      "owner": "xAI Corp.",
+      "sourceURL": "https://data.x.ai/logos/SpaceXAI_Grok_Assets.zip",
+      "sourceArchiveSHA256": "db9129acd4efc4c2202d25afe31b70281a79f8507f75520ab5e6b3356895a7e9",
+      "sourceMember": "SpaceXAI_Grok_Assets/Grok_Logomark_Dark.png",
+      "sourceSHA256": "37ddbcb6e2a7f2e4b3be78a7d41296a3bc7edf6926362434efc00df5a56a3586",
+      "retrievedAt": "2026-07-30",
+      "license": "xAI Brand Guidelines (trademark permission, not a copyright license)",
+      "licenseURL": "https://x.ai/legal/brand-guidelines",
+      "redistributionPermitted": true,
+      "redistributionEvidence": "xAI Brand Guidelines, Usage Terms: \"Use our Marks only to accurately refer to us or our services.\" The prohibitions are use unrelated to xAI, use that implies endorsement, use in an app title or product name, adding elements in close proximity that create a new mark, and use as part of our own marks — none of which apply to naming which app connected to this Mac. The logo section adds: \"By using our logos, you agree to the Usage Terms above and further agree to only use our logos exactly as provided at the download link below, without any alteration or adjustment.\" This file is therefore the archive member byte-for-byte, with no transformation at all. The archive URL above is the download link published on that guidelines page.",
+      "originalFormat": "PNG, 1024x1024, 8-bit/color RGBA",
+      "transformations": [],
+      "sha256": "37ddbcb6e2a7f2e4b3be78a7d41296a3bc7edf6926362434efc00df5a56a3586",
+      "appearance": "light",
+      "appearanceNote": "xAI names its files after the mark's own colour, not the background it sits on: Grok_Logomark_Dark.png is the near-black (#0A0A0A) mark, so it is the file for MacRemote's LIGHT appearance. Verified by decoding the PNG: mean colour of visible pixels is (10,10,10)."
+    },
+    {
+      "file": "grok-dark.png",
+      "brandID": "grok",
+      "product": "Grok (xAI)",
+      "owner": "xAI Corp.",
+      "sourceURL": "https://data.x.ai/logos/SpaceXAI_Grok_Assets.zip",
+      "sourceArchiveSHA256": "db9129acd4efc4c2202d25afe31b70281a79f8507f75520ab5e6b3356895a7e9",
+      "sourceMember": "SpaceXAI_Grok_Assets/Grok_Logomark_Light.png",
+      "sourceSHA256": "359056ee8983cfa0ba7e72795078c7c0ddf6c5d7a1870401ab960ed4f9df9e53",
+      "retrievedAt": "2026-07-30",
+      "license": "xAI Brand Guidelines (trademark permission, not a copyright license)",
+      "licenseURL": "https://x.ai/legal/brand-guidelines",
+      "redistributionPermitted": true,
+      "redistributionEvidence": "Same grant as grok-light.png: \"Use our Marks only to accurately refer to us or our services\", and logos must be used \"exactly as provided ... without any alteration or adjustment\". This file is the archive member byte-for-byte.",
+      "originalFormat": "PNG, 1024x1024, 8-bit/color RGBA",
+      "transformations": [],
+      "sha256": "359056ee8983cfa0ba7e72795078c7c0ddf6c5d7a1870401ab960ed4f9df9e53",
+      "appearance": "dark",
+      "appearanceNote": "Grok_Logomark_Light.png is the white mark, so it serves MacRemote's DARK appearance. Verified by decoding the PNG: mean colour of visible pixels is (255,255,255)."
+    },
+    {
+      "file": "raycast-light.png",
+      "brandID": "raycast",
+      "product": "Raycast",
+      "owner": "Raycast Technologies Inc.",
+      "sourceURL": "https://fz1sd71lwhbqy6sh.public.blob.vercel-storage.com/press/images/logo/raycast-logo-light.png",
+      "sourcePage": "https://www.raycast.com/press",
+      "sourceSHA256": "46fd3688c06dd1b0c67d37cf564a88510f725f26f69c0cef3f358c890abe21fe",
+      "retrievedAt": "2026-07-30",
+      "license": "Raycast press kit terms",
+      "licenseURL": "https://www.raycast.com/press",
+      "redistributionPermitted": true,
+      "redistributionEvidence": "raycast.com/press: \"Use the logo whenever you're referring to Raycast. The dark logo is used exclusively on dark backgrounds, and the light logo is used exclusively on light backgrounds.\" and \"Download the full brand-asset bundle, including logos, app icons, and high-resolution screenshots.\" MacRemote refers to Raycast when Raycast is the app that connected, which is the permitted purpose. The page's one restriction on alteration (\"Do not alter its colors\") is honoured: the file is the published asset byte-for-byte.",
+      "originalFormat": "PNG, 1024x1024, 8-bit/color RGBA",
+      "transformations": [],
+      "sha256": "46fd3688c06dd1b0c67d37cf564a88510f725f26f69c0cef3f358c890abe21fe",
+      "appearance": "light",
+      "appearanceNote": "Raycast names its files after the background they sit on, the opposite of xAI's convention: raycast-logo-light.png is the variant Raycast publishes for light backgrounds, so it serves MacRemote's LIGHT appearance. Both variants use the same Raycast red (#FF6363); they differ in which counters are knocked out."
+    },
+    {
+      "file": "raycast-dark.png",
+      "brandID": "raycast",
+      "product": "Raycast",
+      "owner": "Raycast Technologies Inc.",
+      "sourceURL": "https://fz1sd71lwhbqy6sh.public.blob.vercel-storage.com/press/images/logo/raycast-logo-dark.png",
+      "sourcePage": "https://www.raycast.com/press",
+      "sourceSHA256": "5f87f8fdbed1b29a3ad4e53078ff45c0c99a58ba24c72718b6d17d4675c18936",
+      "retrievedAt": "2026-07-30",
+      "license": "Raycast press kit terms",
+      "licenseURL": "https://www.raycast.com/press",
+      "redistributionPermitted": true,
+      "redistributionEvidence": "Same grant as raycast-light.png. Raycast states the dark logo \"is used exclusively on dark backgrounds\", which is exactly how MacRemote uses it. Byte-for-byte, colours unaltered.",
+      "originalFormat": "PNG, 1024x1024, 8-bit/color RGBA",
+      "transformations": [],
+      "sha256": "5f87f8fdbed1b29a3ad4e53078ff45c0c99a58ba24c72718b6d17d4675c18936",
+      "appearance": "dark",
+      "appearanceNote": "Published for dark backgrounds, so it serves MacRemote's DARK appearance."
+    }
+  ],
+  "localExtraction": {
+    "what": "For brands MacRemote may not redistribute, the mark can still be read at runtime from a copy of the vendor's own app that is already installed on this Mac. Nothing is copied into the repository and nothing is fetched from the network; if the app is not installed the tier yields nothing and the next tier applies.",
+    "why": "Displaying a mark from the vendor's own installed bundle is ordinary nominative use of software already licensed onto this machine. It does not redistribute the asset, so it does not need a redistribution grant.",
+    "resolution": "NSWorkspace.shared.urlForApplication(withBundleIdentifier:), then the densest named appearance-variant resource inside Contents/Resources (@3x, @2x, @1x) when the bundle ships one AND that raster is at least twice the point size it will be drawn at, otherwise NSWorkspace.shared.icon(forFile:). The size test matters: Claude's tray art tops out at 72 px, right for a 24 pt row and too soft for the 64 pt approval ring, which therefore uses Claude's own app icon instead.",
+    "notEvidence": "A locally extracted mark is not stronger evidence of identity than any other tier. It is still selected from the name the app supplied about itself.",
+    "brands": [
+      {
+        "brandID": "claude",
+        "bundleIdentifiers": ["com.anthropic.claudefordesktop"],
+        "lightResource": "TrayIconTemplate",
+        "darkResource": "TrayIconTemplate-Dark",
+        "note": "macOS template artwork at 24/48/72 px (@1x/@2x/@3x). TrayIconTemplate is the pure-black mark and -Dark the pure-white one, verified by decoding both; they are used as published, unrecoloured. 72 px covers the 24 pt and 28 pt sites; the 64 pt approval ring falls through to Claude's app icon. Anthropic publishes no brand terms, so nothing is bundled."
+      },
+      {
+        "brandID": "chatgpt",
+        "bundleIdentifiers": ["com.openai.codex"],
+        "lightResource": "icon-chatgpt",
+        "darkResource": "icon-chatgpt",
+        "note": "icon-chatgpt.png is 2048x2048 and reads on both appearances. OpenAI's brand guidelines permit unaltered use, but OpenAI publishes no downloadable logo pack, so nothing is bundled."
+      },
+      {
+        "brandID": "codex",
+        "bundleIdentifiers": ["com.openai.codex"],
+        "lightResource": "icon-codex-light",
+        "darkResource": "icon-codex-dark-color",
+        "note": "The ChatGPT bundle ships a genuine appearance pair at 1024x1024. Verified by decoding: icon-codex-light is the pale variant (mean 193,197,247) and icon-codex-dark-color the dark one (mean 75,79,130), so the file names follow the appearance they are for."
+      },
+      {
+        "brandID": "raycast",
+        "bundleIdentifiers": ["com.raycast.macos"],
+        "note": "Ships only AppIcon-Release.icns, so this tier would fall back to the app icon. In practice the bundled press-kit logo above wins, and this tier only matters if the bundled asset is ever removed."
+      },
+      {
+        "brandID": "notion",
+        "bundleIdentifiers": ["notion.id"],
+        "note": "Notion's brand page is sign-in-gated, so redistribution stays unverifiable and nothing is bundled. The installed app's icon covers it on this Mac."
+      },
+      {
+        "brandID": "t3code",
+        "bundleIdentifiers": ["com.t3tools.t3code"],
+        "note": "Recorded for completeness; the MIT-licensed bundled mark already wins."
+      }
+    ]
+  },
+  "clientSuppliedIcons": {
+    "what": "MCP 2026-07-28 lets a client attach icons to its clientInfo (Implementation extends Icons, each Icon carrying src, mimeType, sizes and an optional light/dark theme). MacRemote accepts those and shows them below both curated tiers.",
+    "accepted": "data: URIs only, base64, image/png or image/jpeg, at most 256 KiB of decoded image data per icon.",
+    "rejected": "http(s) sources (fetching one would be a network call to an attacker-chosen host and would leak that this Mac is online), svg (scriptable), any other scheme including javascript:, and anything over the size cap.",
+    "oauthLogoURI": "OAuth Dynamic Client Registration's logo_uri is still dropped, not shown. It arrives before any approval, from an unauthenticated registration request, so honouring it would let an unapproved stranger put a picture in MacRemote's UI.",
+    "notEvidence": "A supplied icon is decoration on a self-reported name. It cannot outrank a curated mark, and it changes no trust, permission, or approval outcome."
+  },
+  "heldBack": [
+    {
+      "brandID": "notion",
+      "product": "Notion",
+      "blocker": "Unverifiable terms. Notion's brand-asset page is sign-in-gated, so its redistribution terms cannot be read or quoted. Nothing is bundled; the locally installed app's icon covers it.",
+      "fallbackSymbol": "square.grid.2x2"
+    },
+    {
+      "brandID": "chatgpt",
+      "product": "ChatGPT",
+      "blocker": "Conditional grant, no distributable asset. OpenAI's published brand guidelines do permit third-party use of the mark when it is unaltered and not shown more prominently than our own marks — no written permission is required for that. But OpenAI publishes no downloadable logo pack, so there is no official file to bundle. Local extraction from the installed app covers it.",
+      "fallbackSymbol": "sparkles"
+    },
+    {
+      "brandID": "claude",
+      "product": "Claude",
+      "blocker": "No published redistribution terms. Anthropic publishes no brand-asset license covering third-party app bundling, so redistribution is unproven. Local extraction from the installed app covers it.",
+      "fallbackSymbol": "bubble.left.and.bubble.right"
+    },
+    {
+      "brandID": "codex",
+      "product": "Codex",
+      "blocker": "Conditional grant, no distributable asset. Same OpenAI guidelines as ChatGPT, and again no published file. The installed ChatGPT bundle ships a light/dark Codex pair, so local extraction covers it.",
+      "fallbackSymbol": "terminal"
+    }
+  ]
+}

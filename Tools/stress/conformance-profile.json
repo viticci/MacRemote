@@ -1,0 +1,10 @@
+{
+  "form": {"tool": "stress_ask", "arguments": {}},
+  "link": {"tool": "stress_ask", "arguments": {"kind": "url"}},
+  "twice": {"tool": "stress_ask", "arguments": {"rounds": 2}},
+  "task": {"tool": "stress_echo", "arguments": {"args": ["from-task"], "run_in_background": true}},
+  "task_forever": {"tool": "stress_task_sleep", "arguments": {}},
+  "task_input": {"tool": "stress_ask", "arguments": {}},
+  "file": {"tool": "filesystem_upload_file", "arguments": {"path": "~/conformance.txt", "overwrite": true}, "argument": "file"},
+  "file_inline": {"tool": "filesystem_upload_file", "arguments": {"path": "~/conformance-inline.txt", "overwrite": true}, "argument": "file"}
+}

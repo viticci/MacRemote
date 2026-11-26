@@ -1,0 +1,3 @@
+a2ps:a2ps a2ps-lpr-wrapper card composeglyphs fixps lp2 ogonkify pdiff
+ripgrep:rg
+bat:bat

@@ -1,0 +1,9 @@
+[tool]
+requirements = [{ name = "streakctl", directory = "/Users/fixture/Projects/streakctl" }]
+entrypoints = [
+    { name = "streak", install-path = "/Users/fixture/.local/bin/streak", from = "streakctl" },
+    { name = "streakctl", install-path = "/Users/fixture/.local/bin/streakctl", from = "streakctl" },
+]
+
+[tool.options]
+exclude-newer = "2026-06-01T00:00:00Z"

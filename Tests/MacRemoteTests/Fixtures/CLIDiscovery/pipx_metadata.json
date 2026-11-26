@@ -1,0 +1,21 @@
+{
+  "main_package": {
+    "package": "monologue-cli",
+    "package_or_url": "monologue-cli",
+    "apps": [
+      "monologue"
+    ],
+    "app_paths": [
+      {
+        "__Path__": "/Users/fixture/.local/pipx/venvs/monologue-cli/bin/monologue",
+        "__type__": "Path"
+      }
+    ],
+    "package_version": "0.9.1",
+    "include_apps": true
+  },
+  "python_version": "Python 3.12.4",
+  "venv_args": [],
+  "injected_packages": {},
+  "pipx_metadata_version": "0.2"
+}

@@ -1,0 +1,3401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MacRemote Tool Output</title>
+<style>
+/* The color scheme lives on the root, not only on the card. When the root's
+   scheme differs from the page that embeds the frame, the browser paints the
+   frame's backdrop opaque in the root's scheme. With no scheme on the root,
+   a dark app got a white backdrop under dark-theme text (D77/v8). Following
+   the app's theme here keeps text and backdrop in the same scheme. */
+:root { color-scheme: light dark; background: var(--color-background-primary, transparent); }
+:root[data-mrw-theme="dark"] { color-scheme: dark; }
+:root[data-mrw-theme="light"] { color-scheme: light; }
+/* Host colors that contradict the theme (light text with a light theme, or
+   too little contrast with the host background) are set aside, and the
+   widget's own light-dark() colors take over. `initial` makes a custom
+   property invalid, so each var() below falls back. */
+:root[data-mrw-host-colors="ignored"] { background: transparent; }
+:root[data-mrw-host-colors="ignored"] :is(.mrw, .mrw-waiting) {
+  --color-background-primary: initial;
+  --color-background-secondary: initial;
+  --color-text-primary: initial;
+  --color-text-secondary: initial;
+  --color-text-tertiary: initial;
+  --color-text-info: initial;
+  --color-text-success: initial;
+  --color-text-danger: initial;
+  --color-text-warning: initial;
+  --color-border-primary: initial;
+  --color-border-secondary: initial;
+  --color-border-success: initial;
+  --color-border-danger: initial;
+  --color-border-warning: initial;
+}
+html, body { box-sizing: border-box; width: 100%; margin: 0; }
+body { background: transparent; }
+/* The owner turned this result's card off (see renderResult). */
+:root[data-mrw-card="off"] body { display: none; }
+body {
+  padding:
+    var(--mrw-safe-top, 0px)
+    var(--mrw-safe-right, 0px)
+    var(--mrw-safe-bottom, 0px)
+    var(--mrw-safe-left, 0px);
+}
+.mrw-waiting {
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif);
+  font-size: 12px; color: var(--color-text-secondary, light-dark(#6e6e73, #a1a1a6));
+  padding: 18px; text-align: center;
+}
+/* Destructive arm state + inline input forms */
+.mrw-rowbtn[data-state="armed"] { color: var(--bad); border-color: var(--bad-line); }
+.mrw-rowbtn.mrw-destructive { color: var(--bad); }
+tr.mrw-inputrow td { background: var(--panel); padding: 0; }
+.mrw-inputform { display: flex; gap: 8px; align-items: center; padding: 9px 12px; flex-wrap: wrap; }
+.mrw-inputlabel { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--text2); font-weight: 590; }
+.mrw-input {
+  font: inherit; font-size: 12px; padding: 4px 9px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text); min-width: min(190px, 100%);
+}
+.mrw-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MACREMOTE WIDGET — REUSABLE STYLES  (everything scoped under .mrw)
+   The widget is a precision instrument: one card, one accent line for
+   status, dense-but-calm typography, hover-revealed affordances.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.mrw, .mrw * { box-sizing: border-box; margin: 0; padding: 0; }
+
+.mrw {
+  /* color-scheme is inherited from :root, which follows the app's theme. */
+  /* — instrument palette — */
+  --bg:          var(--color-background-primary, light-dark(#ffffff, #1d1d20));
+  --panel:       var(--color-background-secondary, light-dark(#f6f6f8, #161619));
+  --text:        var(--color-text-primary, light-dark(#1d1d1f, #f5f5f7));
+  /* Solid grays: at least 4.5:1 on the card and panel colors in both schemes.
+     Light has no room for a third, lighter gray that still reads at 4.5:1,
+     so there --text3 equals --text2; dark keeps a step dimmer. Keep these in
+     step with WIDGET_COLORS in the script. */
+  --text2:       var(--color-text-secondary, light-dark(#6e6e73, #a1a1a6));
+  --text3:       var(--color-text-tertiary, light-dark(#6e6e73, #8e8e93));
+  --line:        var(--color-border-primary, light-dark(rgba(0,0,0,.10),  rgba(255,255,255,.11)));
+  --line2:       var(--color-border-secondary, light-dark(rgba(0,0,0,.055), rgba(255,255,255,.065)));
+  --accent:      var(--color-text-info, light-dark(#0071e3, #0a84ff));
+  --accent-tint: light-dark(rgba(0,113,227,.09), rgba(10,132,255,.16));
+  --ok:          var(--color-text-success, light-dark(#1d7a35, #32d158));
+  --ok-line:     var(--color-border-success, light-dark(#34c759, #30d158));
+  --ok-tint:     light-dark(rgba(52,199,89,.13),  rgba(48,209,88,.16));
+  --bad:         var(--color-text-danger, light-dark(#d70015, #ff6961));
+  --bad-line:    var(--color-border-danger, light-dark(#ff3b30, #ff453a));
+  --bad-tint:    light-dark(rgba(255,59,48,.09),  rgba(255,69,58,.14));
+  --warn:        var(--color-text-warning, light-dark(#9a5200, #ffb340));
+  --warn-line:   var(--color-border-warning, light-dark(#ff9500, #ff9f0a));
+  --warn-tint:   light-dark(rgba(255,149,0,.13), rgba(255,159,10,.15));
+  --hover:       light-dark(rgba(0,0,0,.035), rgba(255,255,255,.05));
+  --press:       light-dark(rgba(0,0,0,.06),  rgba(255,255,255,.08));
+  --code-bg:     light-dark(rgba(0,0,0,.045), rgba(255,255,255,.07));
+
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, sans-serif);
+  --mono: var(--font-mono, ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ——— host-native shell ——— */
+.mrw-card {
+  position: relative;
+  background: transparent;
+  overflow: visible;
+}
+
+/* the single accent line — the whole status story in 2px */
+.mrw-accent {
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: var(--status-line);
+  opacity: .95;
+}
+.mrw-card[data-status="success"] { --status: var(--ok);   --status-line: var(--ok-line);   --status-tint: var(--ok-tint); }
+.mrw-card[data-status="warning"] { --status: var(--warn); --status-line: var(--warn-line); --status-tint: var(--warn-tint); }
+.mrw-card[data-status="failed"]  { --status: var(--bad);  --status-line: var(--bad-line);  --status-tint: var(--bad-tint); }
+.mrw-card[data-status="timeout"] { --status: var(--warn); --status-line: var(--warn-line); --status-tint: var(--warn-tint); }
+
+/* ——— header ——— */
+.mrw-header {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 12px 16px 10px;
+}
+.mrw-title-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mrw-tool { font-size: 13px; font-weight: 600; letter-spacing: -.08px; white-space: nowrap; }
+.mrw-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 590; letter-spacing: .01em;
+  padding: 2px 8px 2px 7px; border-radius: 100px;
+  color: var(--status); background: var(--status-tint);
+  white-space: nowrap;
+}
+.mrw-chip::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--status-line); flex: none;
+}
+/* ——— truncation notice ——— */
+.mrw-truncated {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0 16px 8px; padding: 5px 10px;
+  font-size: 11px; color: var(--text2);
+  background: var(--line2); border-radius: 6px;
+}
+.mrw-truncated svg { flex: none; opacity: .7; }
+.mrw-truncated b { font-weight: 590; font-variant-numeric: tabular-nums; color: var(--text); }
+
+/* ——— body ——— */
+.mrw-scroll {
+  max-height: none;
+  overflow: visible;
+  border-top: 1px solid var(--line2);
+}
+
+/* ════════ TABLE state — the hero ════════ */
+.mrw-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: auto; }
+.mrw-table th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg);
+  font-size: 11px; font-weight: 590; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text2); text-align: left;
+  padding: 0; box-shadow: inset 0 -1px var(--line2);
+}
+.mrw-th-btn {
+  all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 4px;
+  width: 100%; padding: 8px 12px; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-th-btn:hover { color: var(--text); }
+/* a section header cell reuses the same metrics without pretending to sort */
+span.mrw-th-btn { cursor: default; }
+span.mrw-th-btn:hover { color: inherit; }
+.mrw-th-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.mrw-sort-glyph { font-size: 8px; line-height: 1; color: var(--accent); opacity: 0; transform: translateY(-.5px); }
+th[aria-sort] .mrw-sort-glyph { opacity: 1; }
+
+.mrw-table td {
+  padding: 9px 12px; font-size: 12.5px;
+  border-bottom: 1px solid var(--line2);
+  vertical-align: middle;
+  transition: background-color .12s ease;
+}
+.mrw-table tr:last-child td { border-bottom: none; }
+.mrw-table tbody tr:hover td { background: var(--hover); }
+.mrw-td-num { text-align: right; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.mrw-td-dim { color: var(--text3); }
+.mrw-td-primary { font-weight: 480; }
+tr.mrw-row-done .mrw-td-primary { text-decoration: line-through; }
+tr.mrw-row-done td { color: var(--text3); }
+
+/* leading check circle — Apple Reminders energy */
+.mrw-td-check { width: 38px; padding-right: 0 !important; }
+.mrw-check {
+  all: unset; display: grid; place-items: center;
+  width: 19px; height: 19px; border-radius: 50%;
+  border: 1.5px solid var(--line); cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-check:hover { border-color: var(--accent); }
+.mrw-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mrw-check svg { opacity: 0; transition: opacity .12s ease; }
+.mrw-check[data-state="pending"] {
+  border-color: var(--line2); border-top-color: var(--accent);
+  animation: mrw-spin .65s linear infinite;
+}
+.mrw-check[data-state="done"] {
+  border-color: var(--accent); background: var(--accent); animation: mrw-pop .2s ease;
+}
+.mrw-check[data-state="done"] svg { opacity: 1; }
+
+/* title cell with a dim subtitle (episode title over podcast name) */
+.mrw-titlecell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mrw-titlecell-sub { font-size: 11px; color: var(--text2); font-weight: 400; }
+
+/* ════════ CARD state — a single curated row (e.g. now playing) ════════ */
+.mrw-episode { display: flex; gap: 14px; padding: 16px; align-items: flex-start; }
+.mrw-art.mrw-episode-art { width: 56px; height: 56px; border-radius: 10px; }
+.mrw-episode-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 7px; }
+.mrw-episode-title { font-size: 14px; font-weight: 600; letter-spacing: -.1px; }
+.mrw-episode-sub { font-size: 12px; color: var(--text2); margin-top: 1px; }
+.mrw-episode-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); flex-wrap: wrap; }
+.mrw-episode-dot { color: var(--text3); }
+.mrw-episode-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.mrw-episode-actions .mrw-inputform { padding: 0; flex-basis: 100%; }
+
+/* ════════ DOCUMENT state — safe text preview, never interpreted HTML ════════ */
+.mrw-document { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.mrw-document-title { font-size: 15px; font-weight: 650; letter-spacing: -.15px; }
+.mrw-document-body { color: var(--text); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.mrw-document-body > * { margin: 0 0 10px; }
+.mrw-document-body > *:last-child { margin-bottom: 0; }
+.mrw-document-body h3 { font-size: 13px; font-weight: 650; }
+.mrw-document-body blockquote { border-left: 2px solid var(--accent); padding-left: 10px; color: var(--text2); }
+.mrw-document-body ul { padding-left: 19px; }
+.mrw-document-code { font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; padding: 9px 10px; border-radius: 8px; background: var(--code-bg); }
+.mrw-document-list { display: flex; flex-direction: column; gap: 10px; padding: 10px 16px 14px; }
+.mrw-document-item { padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.mrw-document-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+.mrw-document-item-title { font-size: 12px; font-weight: 650; }
+.mrw-document-item-status { color: var(--text2); font-size: 11px; white-space: nowrap; }
+.mrw-document-item-body { color: var(--text); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ═══════ SEMANTIC SUMMARY — safe fallback for every result shape ═══════
+   Unknown structured results stay readable without showing their wire format.
+   Nested objects become titled groups; only human-safe scalar facts appear. */
+.mrw-summary { padding: 13px 16px 15px; display: flex; flex-direction: column; gap: 12px; }
+.mrw-summary-lead { font-size: 13px; line-height: 1.55; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mrw-summary-section { display: flex; flex-direction: column; gap: 7px; }
+.mrw-summary-title {
+  font-size: 10.5px; font-weight: 650; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text2);
+}
+.mrw-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 7px; }
+.mrw-fact {
+  min-width: 0; padding: 9px 10px; border-radius: 8px;
+  background: var(--panel); box-shadow: inset 0 0 0 1px var(--line2);
+}
+.mrw-fact-label { display: block; font-size: 10.5px; font-weight: 590; color: var(--text2); margin-bottom: 2px; }
+.mrw-fact-value { display: block; font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+
+/* Content blocks are attachments, not protocol dumps. The widget never prints
+   base64, resource URIs, annotations, or hidden result metadata. */
+.mrw-rich { border-top: 1px solid var(--line2); padding: 12px 16px 14px; }
+.mrw-rich-title {
+  font-size: 10.5px; font-weight: 650; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text2); margin-bottom: 8px;
+}
+.mrw-rich-list { display: flex; flex-direction: column; gap: 7px; }
+.mrw-rich-text {
+  padding: 9px 10px; border-radius: 8px; background: var(--panel);
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.mrw-attachment {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0;
+  padding: 9px 10px; border-radius: 8px; background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line2); color: var(--text); text-decoration: none;
+}
+button.mrw-attachment { border: 0; font: inherit; text-align: left; cursor: pointer; }
+.mrw-attachment:hover { background: var(--hover); }
+.mrw-attachment:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mrw-attachment-icon {
+  flex: none; width: 28px; height: 28px; display: grid; place-items: center;
+  border-radius: 7px; color: var(--accent); background: var(--accent-tint);
+  font-size: 13px; font-weight: 650;
+}
+.mrw-attachment-main { min-width: 0; flex: 1; }
+.mrw-attachment-name { display: block; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.mrw-attachment-meta { display: block; font-size: 10.5px; color: var(--text2); margin-top: 1px; }
+.mrw-attachment-open { flex: none; color: var(--accent); font-size: 11px; font-weight: 590; }
+
+/* ════════ GROUPED SECTIONS state — one payload, several curated groups ════════
+   Section headers are the same small uppercase dim label as a table head, so a
+   triage result reads as one instrument, not four stacked widgets. */
+.mrw-scroll > .mrw-section { border-top: 1px solid var(--line2); }
+.mrw-scroll > .mrw-section:first-child { border-top: none; }
+.mrw-section-head {
+  display: flex; align-items: baseline; gap: 7px;
+  padding: 11px 16px 4px;
+}
+.mrw-section-title {
+  font-size: 11px; font-weight: 590; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--text2);
+}
+.mrw-section-count {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text3);
+  font-variant-numeric: tabular-nums;
+}
+.mrw-section .mrw-episode { padding-top: 6px; }
+
+/* numbered queue position — a queue's order is data, so it reads as a metric */
+.mrw-td-pos {
+  width: 34px; padding-right: 0 !important; text-align: right;
+  font-family: var(--mono); font-size: 11px; color: var(--text3);
+  font-variant-numeric: tabular-nums;
+}
+/* `.mrw-table th` sets text-align: left at equal specificity — win on order */
+th.mrw-td-pos { text-align: right; color: var(--text3); padding-right: 0; }
+tr.mrw-row-marked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+tr.mrw-row-marked:hover td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+tr.mrw-row-marked .mrw-td-pos { color: var(--accent); font-weight: 600; }
+
+/* leftover scalars from a grouped payload: dim meta chips, never a raw tree */
+.mrw-meta-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 12px; }
+.mrw-meta-chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  font-size: 11px; color: var(--text2);
+  padding: 3px 8px; border-radius: 6px; background: var(--line2);
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.mrw-meta-chip b { font-weight: 590; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ════════ CHANGE state — a confirmed (or previewed) queue update ════════ */
+.mrw-change { padding: 14px 16px 6px; }
+.mrw-change-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.mrw-change-icon {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--accent); background: var(--accent-tint);
+}
+.mrw-change-title { font-size: 13.5px; font-weight: 600; letter-spacing: -.09px; min-width: 0; }
+.mrw-preview {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; font-weight: 590; letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 100px; white-space: nowrap;
+  color: var(--accent); background: var(--accent-tint);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+/* the thing that changed, when the command answered with a name instead of a
+   whole record (a reminder edit, a habit check-off) */
+.mrw-change-sub {
+  font-size: 12.5px; color: var(--text2); margin-top: 4px; padding-left: 31px;
+  overflow-wrap: anywhere;
+}
+.mrw-change-summary {
+  font-size: 12px; color: var(--text2); margin-top: 5px; padding-left: 31px;
+  font-variant-numeric: tabular-nums;
+}
+.mrw-warning {
+  display: flex; align-items: flex-start; gap: 9px;
+  margin-top: 11px; padding: 9px 11px;
+  color: var(--text); background: var(--warn-tint);
+  border: 1px solid color-mix(in srgb, var(--warn-line) 24%, transparent);
+  border-left: 3px solid var(--warn-line); border-radius: 8px;
+}
+.mrw-warning-icon {
+  flex: none; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--warn); background: color-mix(in srgb, var(--warn-line) 13%, transparent);
+}
+.mrw-warning-body { min-width: 0; }
+.mrw-warning-title { font-size: 12px; font-weight: 600; color: var(--warn); }
+.mrw-warning-list {
+  margin: 2px 0 0; padding: 0; list-style: none;
+  font-size: 11.5px; line-height: 1.5; color: var(--text2);
+  overflow-wrap: anywhere;
+}
+.mrw-warning-list li + li { margin-top: 3px; }
+
+/* derived cells: artwork, duration, progress pie, compact link */
+.mrw-td-art { width: 40px; padding-right: 0 !important; }
+.mrw-art {
+  display: block; width: 28px; height: 28px; border-radius: 6px;
+  object-fit: cover; background: var(--line2);
+  box-shadow: inset 0 0 0 .5px var(--line);
+}
+/* same tile, no image: a monogram when the artwork can't be loaded */
+.mrw-art-fallback {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; color: var(--text3);
+  user-select: none; overflow: hidden;
+}
+.mrw-art-fallback.mrw-episode-art { font-size: 20px; }
+.mrw-progress { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.mrw-pie {
+  width: 14px; height: 14px; border-radius: 50%; flex: none;
+  transform: rotate(-90deg);
+}
+.mrw-pie-track { fill: none; stroke: var(--line); stroke-width: 2.5; }
+.mrw-pie-value { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; }
+.mrw-progress-label { font-family: var(--mono); font-size: 11px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.mrw-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 560; color: var(--accent);
+  text-decoration: none; padding: 3px 8px; border-radius: 6px;
+  background: var(--accent-tint); white-space: nowrap;
+}
+.mrw-link:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.mrw-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* trailing actions: two at most remain prominent, extras live in More */
+.mrw-td-actions { width: 1%; text-align: right; white-space: normal; }
+.mrw-action-group { display: inline-flex; align-items: flex-start; justify-content: flex-end; gap: 5px; max-width: 100%; }
+.mrw-rowbtn {
+  all: unset; font-size: 11px; font-weight: 560; color: var(--accent);
+  padding: 3.5px 9px; border-radius: 6px; cursor: pointer;
+  background: var(--accent-tint);
+  transition: background-color .14s ease;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  margin-left: 0;
+}
+.mrw-rowbtn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.mrw-rowbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mrw-rowbtn[data-state="pending"] { color: var(--text2); background: var(--line2); pointer-events: none; }
+.mrw-rowbtn[data-state="done"] { color: var(--ok); background: var(--ok-tint); pointer-events: none; }
+.mrw-rowbtn[data-state="failed"] { color: var(--bad); background: var(--bad-tint); }
+.mrw-check[data-state="failed"] { border-color: var(--bad-line); }
+@media (hover: none) { .mrw-rowbtn { opacity: 1; transform: none; } }
+
+.mrw-action-overflow { display: inline-grid; justify-items: end; }
+.mrw-action-overflow > summary {
+  list-style: none; display: inline-flex; align-items: center; gap: 4px;
+  min-height: 24px; padding: 3.5px 8px; border-radius: 6px;
+  color: var(--text2); background: var(--line2); cursor: pointer;
+  font-size: 11px; font-weight: 560; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-action-overflow > summary::-webkit-details-marker { display: none; }
+.mrw-action-overflow > summary:hover { color: var(--text); background: var(--hover); }
+.mrw-action-overflow > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mrw-action-overflow[open] > summary { color: var(--text); background: var(--press); }
+.mrw-action-overflow .mrw-disclose { width: 8px; height: 8px; transform: rotate(90deg); }
+.mrw-action-overflow[open] .mrw-disclose { transform: rotate(-90deg); }
+.mrw-action-menu {
+  position: static; display: grid; gap: 2px; min-width: 148px; padding: 5px;
+  margin-top: 5px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}
+.mrw-action-overflow:not([open]) > .mrw-action-menu { display: none; }
+.mrw-action-menu .mrw-rowbtn {
+  width: 100%; justify-content: flex-start; padding: 7px 9px;
+  color: var(--text); background: transparent;
+}
+.mrw-action-menu .mrw-rowbtn:hover { background: var(--hover); }
+.mrw-action-menu .mrw-rowbtn.mrw-destructive { color: var(--bad); }
+.mrw-action-menu .mrw-rowbtn[data-state="pending"] { color: var(--text2); background: var(--line2); }
+.mrw-action-menu .mrw-rowbtn[data-state="done"] { color: var(--ok); background: var(--ok-tint); }
+.mrw-action-menu .mrw-rowbtn[data-state="failed"] { color: var(--bad); background: var(--bad-tint); }
+
+.mrw-mobile-sort { display: none; }
+/* mount() reads the copied text with this class on the card, so sort and
+   action controls stay out of the clipboard. */
+.mrw-copy-read :is(.mrw-mobile-sort, .mrw-sort-glyph, .mrw-action-group, .mrw-more) { display: none !important; }
+.mrw-copy-read .mrw-th-btn { display: inline; }
+.mrw-more {
+  display: flex; justify-content: center; padding: 9px 12px 10px;
+  border-top: 1px solid var(--line2);
+}
+.mrw-more[hidden] { display: none; }
+.mrw-more-btn {
+  all: unset; display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px; border-radius: 7px; cursor: pointer;
+  color: var(--accent); font-size: 11.5px; font-weight: 560;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-more-btn:hover { background: var(--accent-tint); }
+.mrw-more-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.mrw-disclose {
+  flex: none; width: 12px; height: 12px; display: grid; place-items: center;
+  color: var(--text3); transition: transform .16s ease;
+}
+
+/* ════════ ERROR state ════════ */
+.mrw-error { padding: 14px 16px 16px; }
+.mrw-error-head { display: flex; align-items: flex-start; gap: 9px; }
+.mrw-error-icon {
+  flex: none; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--bad); background: var(--bad-tint); margin-top: 1px;
+}
+.mrw-error-title { font-size: 13px; font-weight: 600; letter-spacing: -.08px; }
+.mrw-error-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+/* ════════ EMPTY state ════════ */
+.mrw-empty {
+  padding: 30px 20px 32px; text-align: center;
+}
+.mrw-empty-icon {
+  width: 34px; height: 34px; margin: 0 auto 10px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--ok); background: var(--ok-tint);
+}
+.mrw-empty-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: -.08px; }
+.mrw-empty-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+/* an all-empty grouped report: same empty language, plus any leftover scalars */
+.mrw-empty-groups .mrw-empty-title { font-weight: 560; text-wrap: balance; }
+.mrw-empty-groups .mrw-meta-chips { justify-content: center; padding: 10px 0 0; }
+
+/* ════════ OVERSIZED state — output clipped before it could be read ════════ */
+.mrw-oversized .mrw-empty-icon { color: var(--warn); background: var(--warn-tint); }
+.mrw-oversized .mrw-meta-chips { justify-content: center; padding: 10px 0 0; }
+
+/* ——— footer ——— */
+.mrw-footer {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px 8px 16px;
+  border-top: 1px solid var(--line2);
+}
+.mrw-footer-spacer { flex: 1; }
+.mrw-btn {
+  all: unset; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 560; color: var(--text2);
+  padding: 4.5px 9px; border-radius: 7px; cursor: pointer;
+  transition: background-color .13s ease, color .13s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.mrw-btn:hover { background: var(--hover); color: var(--text); }
+.mrw-btn:active { background: var(--press); }
+.mrw-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mrw-btn svg { flex: none; }
+.mrw-btn[data-state="done"] { color: var(--ok); }
+.mrw-btn[data-state="pending"] { color: var(--text3); pointer-events: none; }
+.mrw-btn-primary { color: var(--accent); }
+.mrw-btn-primary:hover { background: var(--accent-tint); color: var(--accent); }
+
+/* shared inline spinner */
+.mrw-spin {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  border: 1.5px solid var(--line); border-top-color: currentColor;
+  animation: mrw-spin .65s linear infinite;
+}
+@keyframes mrw-spin { to { transform: rotate(360deg); } }
+@keyframes mrw-pop { 0% { transform: scale(.7); } 60% { transform: scale(1.12); } 100% { transform: scale(1); } }
+
+/* narrow layouts (~360px) */
+@media (max-width: 480px) {
+  .mrw-header { padding: 11px 13px 9px; }
+  .mrw-truncated { margin: 0 13px 8px; }
+  .mrw-error { padding: 12px 13px 14px; }
+  .mrw-footer { padding-left: 13px; }
+  .mrw-inputform { align-items: stretch; }
+  .mrw-inputlabel { width: 100%; flex-direction: column; align-items: stretch; }
+  .mrw-input { width: 100%; min-width: 0; min-height: 32px; }
+
+  .mrw-mobile-sort {
+    display: flex; align-items: center; gap: 7px; padding: 8px 13px;
+    border-bottom: 1px solid var(--line2); color: var(--text2);
+  }
+  .mrw-sort-label { font-size: 11px; font-weight: 590; }
+  .mrw-sort-select {
+    min-width: 0; flex: 1; min-height: 30px; padding: 3px 25px 3px 8px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit; font-size: 12px;
+  }
+  .mrw-sort-dir {
+    all: unset; display: grid; place-items: center; width: 30px; height: 30px;
+    border-radius: 6px; color: var(--accent); background: var(--accent-tint); cursor: pointer;
+  }
+  .mrw-sort-dir:disabled { color: var(--text3); background: var(--line2); cursor: default; }
+  .mrw-sort-dir:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .mrw-table, .mrw-table tbody { display: block; width: 100%; }
+  .mrw-table thead { display: none; }
+  .mrw-table tr.mrw-data-row {
+    position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px 14px; width: 100%; padding: 12px 13px;
+    border-bottom: 1px solid var(--line2);
+  }
+  .mrw-table tr.mrw-data-row:last-child { border-bottom: none; }
+  .mrw-table td {
+    display: flex; min-width: 0; padding: 0; border: 0;
+    flex-direction: column; align-items: flex-start; gap: 2px;
+    text-align: left; overflow-wrap: anywhere;
+  }
+  .mrw-table td::before {
+    content: attr(data-label); display: block;
+    color: var(--text3); font-size: 10px; font-weight: 590;
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  .mrw-table td.mrw-td-primary {
+    grid-column: 1 / -1; font-size: 13px; line-height: 1.4;
+  }
+  .mrw-table td.mrw-td-primary::before,
+  .mrw-table td.mrw-td-art::before,
+  .mrw-table td.mrw-td-actions::before,
+  .mrw-table td.mrw-td-check::before { display: none; }
+  .mrw-table td.mrw-td-num { text-align: left; }
+  .mrw-table tbody tr:hover td { background: transparent; }
+  .mrw-row-has-check .mrw-td-primary { padding-right: 34px; }
+  .mrw-table td.mrw-td-check {
+    position: absolute; z-index: 2; top: 12px; right: 13px; width: 22px;
+  }
+  .mrw-table td.mrw-td-art {
+    position: absolute; top: 12px; left: 13px; width: 36px;
+  }
+  .mrw-row-has-art .mrw-td-primary { min-height: 34px; padding-left: 44px; }
+  .mrw-row-has-art.mrw-row-has-check .mrw-td-primary { padding-right: 34px; }
+  /* the queue position leads the row on narrow layouts too, with artwork
+     stepping right so both stay left of the episode title */
+  .mrw-table td.mrw-td-pos {
+    position: absolute; top: 12px; left: 13px; width: 20px;
+    align-items: flex-end; text-align: right;
+  }
+  .mrw-table td.mrw-td-pos::before { display: none; }
+  .mrw-row-has-pos .mrw-td-primary { padding-left: 30px; }
+  .mrw-row-has-pos.mrw-row-has-art .mrw-td-art { left: 39px; }
+  .mrw-row-has-pos.mrw-row-has-art .mrw-td-primary { padding-left: 70px; }
+  .mrw-section-head { padding: 10px 13px 4px; }
+  .mrw-meta-chips { padding: 9px 13px 11px; }
+  .mrw-change { padding: 12px 13px 6px; }
+  .mrw-change-summary { padding-left: 0; }
+  .mrw-warning { padding: 8px 10px; }
+  .mrw-table td.mrw-td-actions {
+    grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-start;
+    width: 100%; overflow: visible; text-align: left;
+  }
+  .mrw-td-actions .mrw-action-group { justify-content: flex-start; flex-wrap: wrap; }
+  .mrw-action-overflow { justify-items: start; }
+  tr.mrw-inputrow { display: block; width: 100%; }
+  tr.mrw-inputrow td { display: block; width: 100%; }
+  tr.mrw-inputrow td::before { display: none; }
+  .mrw-episode { gap: 11px; padding: 13px; }
+  .mrw-art.mrw-episode-art { width: 48px; height: 48px; }
+  .mrw-episode-actions .mrw-action-group { justify-content: flex-start; flex-wrap: wrap; }
+  .mrw-episode-actions .mrw-action-menu { left: 0; right: auto; }
+}
+
+@media (max-width: 260px) {
+  .mrw-title-group { width: 100%; flex-wrap: wrap; gap: 5px 7px; }
+  .mrw-tool { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+  .mrw-footer-spacer { display: none; }
+  .mrw-footer { justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mrw * { transition: none !important; animation-duration: 1.2s; }
+}
+</style>
+</head>
+<body>
+<div id="mrw-root"><div class="mrw-waiting">Waiting for tool output…</div></div>
+<script id="macremote-widget">
+/* ════════════════════════════════════════════════════════════════════════
+   MACREMOTE WIDGET — REUSABLE RENDERING MODULE
+   API:  MacRemoteWidget.mount(container, payload)
+   payload = {
+     tool:       { name },
+     profile:    'semanticResult' | curated profile name,
+     status:     'success' | 'failed' | 'timeout',
+     stdout:     string,           // raw tool output (JSON or text/ANSI)
+     truncated:  { shown, total, unit? } | null,
+     rowActions: [ { id, kind:'check'|'button', label?, doneLabel?, title? } ],
+     onAction:   (actionId, row)  => Promise,   // host bridge (optional)
+     onRunAgain: ()               => Promise    // host bridge (optional)
+   }
+   ════════════════════════════════════════════════════════════════════════ */
+const MacRemoteWidget = (() => {
+  'use strict';
+
+  /* ---------- tiny DOM helpers ---------- */
+  const el = (tag, cls, ...kids) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    for (const k of kids) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k));
+    return n;
+  };
+  const svg = (m) => { const t = document.createElement('template'); t.innerHTML = m.trim(); return t.content.firstChild; };
+
+  /* ---------- iconography (13–14px strokes, currentColor) ---------- */
+  const I = {
+    check: () => svg('<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 6.3 5 8.8l4.5-5.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    checkTint: () => svg('<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 6.3 5 8.8l4.5-5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    copy: () => svg('<svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true"><rect x="4.75" y="4.75" width="7.5" height="7.5" rx="1.8" stroke="currentColor" stroke-width="1.4"/><path d="M9.25 3V2.8A1.8 1.8 0 0 0 7.45 1H2.8A1.8 1.8 0 0 0 1 2.8v4.65a1.8 1.8 0 0 0 1.8 1.8H4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'),
+    rerun: () => svg('<svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M12.25 7A5.25 5.25 0 1 1 7 1.75c1.9 0 3.57 1 4.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11.9 1.4v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    chevron: () => svg('<svg class="mrw-disclose" width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M3.2 1.6 6.8 5 3.2 8.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    alert: () => svg('<svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 4.4v3.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="7" cy="10.3" r=".95" fill="currentColor"/></svg>'),
+    scissors: () => svg('<svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1.5 7h11M10.2 4.6 12.5 7l-2.3 2.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2.2 2"/></svg>'),
+    emptyCheck: () => svg('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.2 8.6 6.4 11.8 12.8 4.6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    linkArrow: () => svg('<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4 2.5h5.5V8M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+    spinner: () => el('span', 'mrw-spin')
+  };
+
+  /* ---------- formatting ---------- */
+  const STATUS = {
+    success: { label: 'Success' },
+    warning: { label: 'Completed with warnings' },
+    failed:  { label: 'Failed' },
+    timeout: { label: 'Timed out' }
+  };
+  const prettyKey = (k) => String(k)
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, c => c.toUpperCase());
+
+  /* ---------- display-safety boundary ----------
+     The model fallback retains the complete wire result. This view is for a
+     person, so it deliberately omits execution details: commands, argv,
+     local paths, stderr/stdout, credentials, protocol metadata, and JSON
+     serialization. Catalog hints may select semantic fields, but no payload
+     can opt out of this final defensive filter. */
+  const INTERNAL_KEYS = new Set([
+    'args', 'argv', 'arguments', 'argumentpattern', 'command', 'commands', 'cwd',
+    'environment', 'env', 'executable', 'executablepath', 'path', 'filepath',
+    'stderr', 'stdout', 'exitcode', 'timedout', 'truncatedstdout',
+    'truncatedstderr', 'reason', 'toolid', 'toolname', 'resulttype', 'taskid',
+    'pollintervalms', 'ttlms', 'protocolversion', 'clientcapabilities',
+    'auth', 'authentication', 'authorization', 'token', 'accesstoken',
+    'refreshtoken', 'bearer', 'secret', 'clientsecret', 'privatekey',
+    'signingkey', 'password', 'passphrase', 'apikey', 'credential',
+    'credentials', 'cookie', 'cookies',
+    'session', 'sessionid', 'meta', 'metadata', 'artifactpath', 'downloadurl', 'private'
+  ]);
+  const normalizeKey = (key) => String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const SENSITIVE_KEY_PARTS = [
+    'apikey', 'authorization', 'credential', 'password', 'passphrase',
+    'secret', 'token', 'privatekey', 'signingkey', 'cookie', 'session', 'bearer'
+  ];
+  const CREDENTIAL_URL_KEYS = new Set([
+    'auth', 'authentication', 'code', 'idtoken', 'jwt', 'key', 'oauthcode',
+    'sig', 'signature'
+  ]);
+  function isSafeDisplayKey(key) {
+    const normalized = normalizeKey(key);
+    if (!normalized || INTERNAL_KEYS.has(normalized)) return false;
+    if (normalized === 'auth' || normalized === 'authentication') return false;
+    return !SENSITIVE_KEY_PARTS.some(part => normalized.includes(part)) &&
+      !/(?:argv|stderr|stdout|executable|command)/i.test(String(key));
+  }
+
+  // Raw JSON property names are attacker-controlled presentation input. Only
+  // ordinary identifier-shaped keys may become labels; curated server titles
+  // use their own explicit text fields.
+  function safeKeyLabel(key) {
+    if (typeof key !== 'string') return null;
+    const value = key.trim();
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value)) return null;
+    if (!isSafeDisplayKey(value)) return null;
+    return prettyKey(value);
+  }
+
+  function isCredentialBearingURL(value) {
+    if (typeof value !== 'string' || !/^https?:\/\//i.test(value.trim())) return false;
+    try {
+      const url = new URL(value.trim());
+      if (url.username || url.password) return true;
+      for (const key of url.searchParams.keys()) {
+        const normalized = normalizeKey(key);
+        if (CREDENTIAL_URL_KEYS.has(normalized) ||
+            SENSITIVE_KEY_PARTS.some(part => normalized.includes(part))) return true;
+      }
+      return /(?:access_token|id_token|client_secret|api[_-]?key|password|signature|jwt|key)=/i.test(url.hash);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function stripControlText(value) {
+    return String(value == null ? '' : value)
+      .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  }
+
+  // Recognize established credential formats only. High-entropy-looking prose
+  // and ordinary IDs remain visible; known secret formats do not depend on the
+  // payload using an honest field label.
+  function containsRecognizedSecret(value) {
+    const text = String(value);
+    return /\bsk-(?:proj|live|test)-[A-Za-z0-9_-]{12,}\b/.test(text) ||
+      /\bgh(?:p|o|u|s|r)_[A-Za-z0-9]{20,}\b/.test(text) ||
+      /\bgithub_pat_[A-Za-z0-9_]{20,}\b/.test(text) ||
+      /\bxox(?:b|p|a|r|s)-[A-Za-z0-9-]{10,}\b/.test(text) ||
+      /\bAKIA[0-9A-Z]{16}\b/.test(text) ||
+      /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/.test(text);
+  }
+
+  function unsafeDisplayLine(line) {
+    const text = String(line).trim();
+    if (!text) return false;
+    if (containsRecognizedSecret(text)) return true;
+    // Local absolute paths, executable invocations, shell prompts, and flags.
+    if (/\bfile:\/\//i.test(text) ||
+        /(^|[\s"'=(])(?:~\/|\.\.?\/|\/(?!\/)[^\s"')]+)/.test(text) ||
+        /(^|[\s"'=(])[A-Za-z]:\\[^\s"')]+/.test(text)) return true;
+    if (/^(?:\$|%|>)\s+/.test(text) || /\b(?:bash|zsh|sh)\s+-c\b/i.test(text)) return true;
+    if (/\b(?:argv|stderr|stdout|executable(?:Path)?|command|cwd|environment)\s*[:=]/i.test(text)) return true;
+    if (/\b(?:auth(?:entication|orization)?|bearer|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|private[_ -]?key|password|passphrase|secret|credential|cookie|session)\s*[:=]?\s*\S+/i.test(text)) return true;
+    if (/(^|\s)--?[A-Za-z][A-Za-z0-9_-]*(?:=\S+|\s|$)/.test(text)) return true;
+    if (/^(?:sudo\s+)?(?:env\s+)?(?:bash|zsh|sh|fish|git|swift|python3?|ruby|perl|php|node|deno|bun|java|osascript|npm|npx|pnpm|yarn|brew|docker|podman|cloudflared|remctl|notesctl|habitctl|pocketctl|overctl|musicctl|goodlinksctl|alexandria|iris|apple-frames|curl|wget|ssh|scp|rsync|make|cmake|xcodebuild|rg|grep|jq|find|ls|cat|echo)\b(?:\s|$)/i.test(text)) return true;
+    if ((text.match(/https?:\/\/[^\s]+/gi) || []).some(isCredentialBearingURL)) return true;
+    // A complete JSON object/array is a transport encoding, not presentation.
+    if ((text.startsWith('{') && text.endsWith('}')) ||
+        (text.startsWith('[') && text.endsWith(']'))) {
+      try { JSON.parse(text); return true; } catch (_) {}
+    }
+    return false;
+  }
+
+  function safeDisplayText(value, options) {
+    const opts = options || {};
+    const lines = stripControlText(value).replace(/\r\n?/g, '\n').split('\n');
+    const kept = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        if (kept.length && kept[kept.length - 1] !== '') kept.push('');
+        continue;
+      }
+      if (unsafeDisplayLine(trimmed)) continue;
+      kept.push(opts.singleLine ? trimmed.replace(/\s+/g, ' ') : trimmed);
+      if (opts.singleLine) break;
+    }
+    return kept.join(opts.singleLine ? ' ' : '\n').trim().slice(0, opts.maximum || 12_000);
+  }
+
+  function safeScalar(value) {
+    if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    if (typeof value !== 'string') return null;
+    if (/^https?:\/\//i.test(value.trim())) return 'Link available';
+    const text = safeDisplayText(value, { singleLine: true, maximum: 500 });
+    return text || null;
+  }
+
+  /* ---------- content-state detection ---------- */
+  const isRowArray = (a) => Array.isArray(a) && a.length &&
+    a.every(x => x && typeof x === 'object' && !Array.isArray(x));
+  const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+  // Rows for the table state: a bare array of objects, or the common
+  // CLI shape of an object with exactly one array-of-objects value
+  // (e.g. remctl's {"items": [...]}).
+  function tableRowsFrom(j) {
+    if (isRowArray(j)) return j;
+    if (isObject(j)) {
+      const arrayKeys = Object.keys(j).filter(k => Array.isArray(j[k]));
+      if (arrayKeys.length === 1 && isRowArray(j[arrayKeys[0]])) return j[arrayKeys[0]];
+    }
+    return null;
+  }
+
+  // The server can point presentation at a nested value while the transport,
+  // model fallback, and the transport retain the complete result. If the path is
+  // absent, fall back to the complete value so schema drift stays visible.
+  function presentationValueFrom(j, p) {
+    if (!p || typeof p.rootPath !== 'string' || !p.rootPath) return j;
+    const nested = fieldValue(j, p.rootPath);
+    return nested === null ? j : nested;
+  }
+
+  function documentPayloadFrom(j, p) {
+    const hint = isObject(p.document) ? p.document : null;
+    if (!hint || !isObject(j)) return null;
+    const bodyValue = firstFieldValue(j, hint.bodyKey);
+    if (typeof bodyValue !== 'string' || !bodyValue.trim()) return null;
+    let body = safeDisplayText(bodyValue, { maximum: 32_000 });
+    if (!body) return null;
+    let titleValue = firstFieldValue(j, hint.titleKey);
+    let title = typeof titleValue === 'string'
+      ? (safeDisplayText(titleValue, { singleLine: true, maximum: 200 }) || null) : null;
+    if (!title && hint.titleFromFirstHeading === true) {
+      const firstLine = body.split(/\r?\n/, 1)[0];
+      const match = firstLine.match(/^#{1,6}\s+(.+)$/);
+      if (match) {
+        title = match[1].trim();
+        body = body.slice(firstLine.length).replace(/^\r?\n+/, '');
+      }
+    }
+    if (!title && typeof hint.fallbackTitle === 'string') {
+      title = safeDisplayText(hint.fallbackTitle, { singleLine: true, maximum: 200 }) || null;
+    }
+    return { title: title || null, body };
+  }
+
+  // A result that came back with nothing in it: an empty array, or an object
+  // whose values are all empty arrays (the wrapped spelling of the same
+  // answer — nothing due today, no search hits, an untouched journal). Any
+  // populated value or leftover scalar disqualifies it: the friendly empty
+  // state would hide real content, and hiding content is worse than a tree.
+  function isEmptyResult(j) {
+    if (Array.isArray(j)) return j.length === 0;
+    if (!isObject(j)) return false;
+    const values = Object.values(j);
+    if (!values.length) return true;
+    let sawArray = false;
+    for (const v of values) {
+      if (Array.isArray(v)) {
+        if (v.length) return false;
+        sawArray = true;
+      } else if (v !== null && v !== undefined) {
+        return false;
+      }
+    }
+    return sawArray;
+  }
+
+  // A confirmation object from a command that changed something, recognized
+  // purely from the host's `change` hint: the value at `actionKey` must be one
+  // of the curated `titles`. That mapping is both the recognition set and the
+  // headline copy, so an unrecognized action falls through untouched.
+  function changePayloadFrom(j, p) {
+    const hint = isObject(p.change) ? p.change : null;
+    if (!hint || !isObject(j)) return null;
+    const titles = isObject(hint.titles) ? hint.titles : null;
+    if (!titles) return null;
+    const action = fieldValue(j, hint.actionKey || 'action');
+    if (typeof action !== 'string') return null;
+    if (!Object.prototype.hasOwnProperty.call(titles, action)) return null;
+    let headline = titles[action];
+    if (typeof headline !== 'string' || !headline) return null;
+
+    const outcome = hint.outcomeKey ? fieldValue(j, hint.outcomeKey) : null;
+    if (typeof outcome === 'string' && isObject(hint.outcomeTitles)) {
+      const override = hint.outcomeTitles[outcome];
+      if (typeof override === 'string' && override) headline = override;
+    }
+
+    const record = j[hint.episodeKey || 'episode'];
+    const episode = isObject(record) && Object.keys(record).length ? record : null;
+    const queueKey = hint.queueKey || 'items';
+    const queue = isRowArray(j[queueKey]) ? j[queueKey] : null;
+    const count = hint.countKey ? fieldValue(j, hint.countKey) : null;
+    // A preview must never read as applied, so the string spelling of the flag
+    // counts too: a CLI (or a JSON bridge) that emits "true" means true, and
+    // erring toward the Preview chip is the safe direction of the two.
+    const dryRunValue = firstFieldValue(j, hint.dryRunKey);
+    const dryRun = dryRunValue === true ||
+      (typeof dryRunValue === 'string' && dryRunValue.trim().toLowerCase() === 'true') ||
+      (Array.isArray(hint.previewActions) && hint.previewActions.includes(action));
+    // Identity for the accent highlight: the widget's ordinary row-identity
+    // convention (uuid, else id), read off the acted-on record.
+    const marked = episode
+      ? [episode.uuid, episode.id].find(v => typeof v === 'string' || typeof v === 'number')
+      : undefined;
+    // Most write commands answer with an id and a name, not a whole record.
+    // `titleKey` names that scalar so the confirmation can say WHAT changed.
+    const titleValue = hint.titleKey ? fieldValue(j, hint.titleKey) : null;
+    const title = typeof titleValue === 'string'
+      ? (safeDisplayText(titleValue, { singleLine: true, maximum: 300 }) || null)
+      : (typeof titleValue === 'number' ? String(titleValue) : null);
+    // The count line's noun is curation, not widget vocabulary: a queue counts
+    // episodes, a list counts reminders, and the widget knows neither.
+    const noun = typeof hint.countNoun === 'string' && hint.countNoun.trim()
+      ? hint.countNoun.trim() : 'item';
+    const nounPlural = typeof hint.countNounPlural === 'string' && hint.countNounPlural.trim()
+      ? hint.countNounPlural.trim() : pluralUnit(noun, 2);
+    const warnings = warningMessagesFrom(j, p);
+    const submitted = hint.submittedKey ? fieldValue(j, hint.submittedKey) : null;
+    const verified = hint.verifiedKey ? fieldValue(j, hint.verifiedKey) : null;
+    if (!dryRun && submitted === true && verified !== true &&
+        typeof hint.unverifiedWarning === 'string' && hint.unverifiedWarning.trim()) {
+      warnings.push(hint.unverifiedWarning.trim());
+    }
+    return {
+      action: action,
+      headline: headline,
+      title: title,
+      details: (Array.isArray(hint.detailKeys) ? hint.detailKeys : [])
+        .map(key => safeScalar(fieldValue(j, key))).filter(Boolean),
+      episode: episode,
+      queue: queue,
+      queueTitle: typeof hint.queueTitle === 'string' ? hint.queueTitle : prettyKey(queueKey),
+      dryRun: dryRun,
+      count: typeof count === 'number' ? count : (queue ? queue.length : null),
+      countNoun: noun,
+      countNounPlural: nounPlural,
+      warnings: warnings,
+      marked: marked == null ? null : String(marked)
+    };
+  }
+
+  // Warnings are opt-in presentation metadata. A successful command may write
+  // diagnostics to stderr for many unrelated reasons, so only the field named
+  // by the host's `warningsKey` becomes a warning callout.
+  function warningMessagesFrom(j, p) {
+    const hint = isObject(p.change) ? p.change : null;
+    if (!hint || typeof hint.warningsKey !== 'string' || !hint.warningsKey) return [];
+    const raw = fieldValue(j, hint.warningsKey);
+    const values = Array.isArray(raw) ? [...raw] : (raw == null ? [] : [raw]);
+    if (Array.isArray(hint.warningActions) && hint.warningActions.includes(fieldValue(j, hint.actionKey))) {
+      values.push(fieldValue(j, hint.errorKey) || 'One step failed. Check the saved item before retrying.');
+    }
+    return values.map(value => {
+      if (typeof value === 'string') {
+        return safeDisplayText(value, { singleLine: true, maximum: 500 })
+          .replace(/^[a-z][a-z0-9_]{2,}:\s*/i, '');
+      }
+      if (typeof value === 'number') return String(value);
+      return '';
+    }).filter(Boolean);
+  }
+
+  function warningMessagesFromPayload(p) {
+    const out = (p.stdout || '').trim();
+    if (!out) return [];
+    try {
+      const complete = JSON.parse(out);
+      const presented = presentationValueFrom(complete, p);
+      const change = changePayloadFrom(presented, p);
+      return change ? change.warnings : warningMessagesFrom(presented, p);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // Several curated row arrays in one object (a triage-style report). Sections
+  // follow the hint order; empty groups vanish while any other group has rows.
+  // Keys the curation doesn't name still get shown — row arrays as a generic
+  // section, scalars as a dim meta chip — so this state never degrades into a
+  // raw tree. When the payload IS this shape but every curated group came back
+  // empty, that stays a grouped result too (`empty: [...]`): a report with
+  // nothing in it is still a report, and dropping it through to the tree would
+  // show a raw key/value dump for the most ordinary answer of all.
+  function groupSectionsFrom(j, p) {
+    if (!isObject(j) || !Array.isArray(p.groups) || !p.groups.length) return null;
+    const covered = new Set();
+    const sections = [];
+    const emptyTitles = [];
+    for (const group of p.groups) {
+      if (!isObject(group) || typeof group.key !== 'string') continue;
+      covered.add(group.key);
+      const title = typeof group.title === 'string'
+        ? group.title : (safeKeyLabel(group.key) || 'Section');
+      if (!isRowArray(j[group.key])) {
+        // Present but with no rows — remembered so the all-empty case can name
+        // exactly which sections came back empty.
+        if (Array.isArray(j[group.key])) emptyTitles.push(title);
+        continue;
+      }
+      sections.push({
+        title: title,
+        rows: j[group.key],
+        style: group.style === 'card' || group.style === 'documentList'
+          ? group.style : 'table',
+        numbered: group.numbered === true,
+        documentList: group.style === 'documentList' ? {
+          bodyKey: group.bodyKey,
+          titleKey: group.titleKey,
+          statusKey: group.statusKey,
+          statusTitles: isObject(group.statusTitles) ? group.statusTitles : null,
+          pendingKey: group.pendingKey,
+          pendingTitle: group.pendingTitle,
+          fallbackRowTitle: group.fallbackRowTitle
+        } : null
+      });
+    }
+
+    const chips = [];
+    const extra = [];
+    for (const [key, value] of Object.entries(j)) {
+      if (covered.has(key)) continue;
+      if (isRowArray(value)) {
+        const label = safeKeyLabel(key);
+        if (label) extra.push({ title: label, rows: value, style: 'table', numbered: false });
+      } else if (isChipValue(value)) {
+        const safe = isSafeDisplayKey(key) ? chipValue(value) : null;
+        const label = safeKeyLabel(key);
+        if (safe && label) chips.push({ label, value: safe });
+      }
+    }
+    if (!sections.length && !extra.length && !emptyTitles.length) return null;
+    return {
+      sections: sections.concat(extra),
+      chips: chips,
+      empty: sections.length || extra.length ? [] : emptyTitles
+    };
+  }
+
+  // Only scalars become meta chips. A nested object or a list of plain values
+  // has no honest one-line form, and "Episode · 8 keys" is exactly the
+  // developer-facing shape this widget exists to replace — the model-facing
+  // text fallback still carries the whole payload.
+  const isChipValue = (v) =>
+    typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+
+  function chipValue(v) {
+    return safeScalar(v);
+  }
+
+  // "Now Playing and Up Next are empty." — plain language built from the
+  // curated titles, so no CLI vocabulary is baked into the widget.
+  function emptyGroupsSentence(titles) {
+    if (!titles.length) return 'There is nothing to show.';
+    const list = titles.length === 1
+      ? titles[0]
+      : titles.slice(0, -1).join(', ') + ' and ' + titles[titles.length - 1];
+    return list + (titles.length === 1 ? ' is empty.' : ' are empty.');
+  }
+
+  function detectState(p) {
+    const out = (p.stdout || '').trim();
+    if (p.status !== 'timeout' && p.profile !== 'semanticResult') {
+      try {
+        const value = presentationValueFrom(JSON.parse(out), p);
+        if (batchPayloadFrom(value, p)) return 'batch';
+        const partial = changePayloadFrom(value, p);
+        if (partial && Array.isArray(p.change.warningActions) && p.change.warningActions.includes(partial.action)) return 'change';
+      } catch (_) {}
+    }
+    if (p.status === 'failed' || p.status === 'timeout') return 'error';
+    if (p.task) return 'task';
+    if (p.profile === 'semanticResult') {
+      return out || (Array.isArray(p.richContent) && p.richContent.length)
+        ? 'semantic' : 'empty';
+    }
+    if (!out) return Array.isArray(p.richContent) && p.richContent.length ? 'content' : 'empty';
+    try {
+      const j = presentationValueFrom(JSON.parse(out), p);
+      // Curated multi-value states come first: both look like "some object"
+      // to the single-array table detection below.
+      // A document may carry a generic success status; recognize its explicit
+      // body before interpreting that status as a write confirmation.
+      if (documentPayloadFrom(j, p)) return 'document';
+      if (changePayloadFrom(j, p)) return 'change';
+      if (groupSectionsFrom(j, p)) return 'groups';
+      // A bare array of records is unambiguously a table. An object is not: a
+      // single record that happens to carry one sub-collection (a reminder
+      // with subtasks, a habit with goals) used to render as a table of its
+      // CHILDREN with the record itself gone. So the card claims an object
+      // first, and the wrapped table shape ({"items": [...]}, which has no
+      // primary field of its own) takes what is left.
+      if (isRowArray(j)) return 'table';
+      if (cardRowFrom(j, p)) return 'card';
+      if (tableRowsFrom(j)) return 'table';
+      if (isEmptyResult(j)) return 'empty';
+      if (j !== undefined) return 'summary';
+    } catch (_) {
+      // Output clipped mid-JSON isn't text: the surviving fragment is exactly
+      // the developer-facing view this widget exists to remove. A truncated
+      // text log is different — its surviving tail is still readable, so it
+      // keeps the terminal state and the ordinary truncation banner.
+      if (p.truncated && /^\s*[\[{]/.test(out)) return 'oversized';
+    }
+    return 'text';
+  }
+
+  /* ════════ header ════════ */
+  function renderHeader(p) {
+    const meta = STATUS[p.status] || STATUS.success;
+    const header = el('header', 'mrw-header');
+    const chip = el('span', 'mrw-chip', meta.label);
+    chip.setAttribute('role', 'status');
+    header.append(el('div', 'mrw-title-group', el('span', 'mrw-tool', p.tool.name), chip));
+
+    return header;
+  }
+
+  function renderTruncated(t) {
+    const n = el('div', 'mrw-truncated');
+    n.append(I.scissors());
+    const unit = t.unit || 'lines';
+    if (t.total == null) {
+      const strong = el('b', null, 'first ' + t.shown.toLocaleString() + ' ' + unit);
+      n.append('Output truncated — showing the ', strong, '; the full result stayed on the Mac.');
+    } else {
+      const strong = el('b', null, t.shown.toLocaleString() + ' of ' + t.total.toLocaleString());
+      n.append('Output truncated — showing ', strong, ' ' + unit + '.');
+    }
+    return n;
+  }
+
+  /* ════════ TABLE state ════════ */
+  // Format an ISO date (+ all-day flag) into a friendly "When": "Jul 9" for
+  // all-day, "Jul 9, 2:00 PM" with a time, "Jul 9, 2027" across years.
+  function formatWhen(iso, allDay) {
+    if (!iso) return null;
+    // A bare "YYYY-MM-DD" is a calendar day, but `new Date` reads it as UTC
+    // midnight — which is the PREVIOUS day everywhere west of Greenwich. A
+    // habit that started on the 29th must not read "Jun 28" in Chicago, so
+    // date-only strings are pinned to local midnight. Anything carrying a
+    // time (reminders' "2026-07-09T14:00:00") is left exactly as it was.
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(iso));
+    const d = dateOnly
+      ? new Date(Number(String(iso).slice(0, 4)), Number(String(iso).slice(5, 7)) - 1,
+                 Number(String(iso).slice(8, 10)))
+      : new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    if (dateOnly) allDay = true;
+    const now = new Date();
+    const dateOpts = { month: 'short', day: 'numeric' };
+    if (d.getFullYear() !== now.getFullYear()) dateOpts.year = 'numeric';
+    let out = d.toLocaleDateString(undefined, dateOpts);
+    if (!allDay) out += ', ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return out;
+  }
+
+  // "day" × 4 → "days"; leaves units already ending in s alone.
+  function pluralUnit(unit, count) {
+    const u = String(unit);
+    return count === 1 || u.endsWith('s') ? u : u + 's';
+  }
+
+  const RECURRENCE_DAY_NAMES = {
+    1: 'Sun', 2: 'Mon', 3: 'Tue', 4: 'Wed', 5: 'Thu', 6: 'Fri', 7: 'Sat'
+  };
+
+  function recurrenceWeekLabel(week, dayName) {
+    const n = Number(week) || 0;
+    if (!n) return dayName;
+    if (n === -1) return 'last ' + dayName;
+    const absolute = Math.abs(n);
+    const mod100 = absolute % 100;
+    const suffix = mod100 >= 11 && mod100 <= 13
+      ? 'th'
+      : absolute % 10 === 1 ? 'st' : absolute % 10 === 2 ? 'nd' : absolute % 10 === 3 ? 'rd' : 'th';
+    return n > 0
+      ? absolute + suffix + ' ' + dayName
+      : absolute + suffix + '-last ' + dayName;
+  }
+
+  function recurrenceDayLabels(recurrence) {
+    const detailed = recurrence.daysOfWeekDetailed;
+    let pairs;
+    if (Array.isArray(detailed) && detailed.length) {
+      pairs = detailed
+        .filter(entry => isObject(entry) && entry.dayOfTheWeek != null)
+        .map(entry => [entry.dayOfTheWeek, entry.weekNumber]);
+    } else {
+      const days = Array.isArray(recurrence.daysOfWeek) ? recurrence.daysOfWeek : [];
+      const weeks = Array.isArray(recurrence.weekNumbers) ? recurrence.weekNumbers : [];
+      pairs = days.map((day, index) => [day, index < weeks.length ? weeks[index] : 0]);
+    }
+    return pairs.map(([day, week]) => {
+      const numericDay = Number(day);
+      const name = RECURRENCE_DAY_NAMES[numericDay] || String(day);
+      return recurrenceWeekLabel(week, name);
+    });
+  }
+
+  function formatRecurrence(recurrence) {
+    if (!isObject(recurrence)) return null;
+    const frequency = typeof recurrence.frequency === 'string'
+      ? recurrence.frequency.trim().toLowerCase() : '';
+    const units = {
+      daily: ['day', 'days'],
+      weekly: ['week', 'weeks'],
+      monthly: ['month', 'months'],
+      yearly: ['year', 'years']
+    };
+    if (!units[frequency]) return null;
+    const rawInterval = Number(recurrence.interval);
+    const interval = Number.isFinite(rawInterval) && rawInterval > 0 ? Math.floor(rawInterval) : 1;
+    let label = interval === 1 ? frequency : 'every ' + interval + ' ' + units[frequency][1];
+
+    if (frequency === 'weekly' || frequency === 'monthly' || frequency === 'yearly') {
+      const days = recurrenceDayLabels(recurrence);
+      if (days.length) label += ' ' + days.join(', ');
+    }
+    if (frequency === 'monthly' && Array.isArray(recurrence.daysOfMonth) &&
+        recurrence.daysOfMonth.length) {
+      label += ' on ' + recurrence.daysOfMonth.join(', ');
+    }
+
+    const count = Number(recurrence.count);
+    if (Number.isFinite(count) && count > 0) {
+      label += ', ' + count + (count === 1 ? ' time' : ' times');
+    } else if (recurrence.endDate) {
+      label += ' until ' + String(recurrence.endDate).slice(0, 10);
+    }
+    return label;
+  }
+
+  // Seconds → compact human duration: "1h 43m", "43m", "58s".
+  function formatSeconds(s) {
+    if (typeof s !== 'number' || !isFinite(s) || s < 0) return null;
+    const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+    if (h) return h + 'h' + (m ? ' ' + String(m).padStart(2, '0') + 'm' : '');
+    if (m) return m + 'm';
+    return Math.round(s) + 's';
+  }
+
+  // The artwork tile without the artwork: the show's initial, or an empty tile
+  // when the row carries no title to letter. It keeps the failed image's
+  // classes (the card layout adds its own size class) and the URL that was
+  // refused, so a blocked load stays diagnosable from the DOM.
+  function artFallback(img, label) {
+    const safeLabel = safeDisplayText(label, { singleLine: true, maximum: 180 });
+    const initial = (Array.from(safeLabel)[0] || '').toUpperCase();
+    const box = el('span', img.className + ' mrw-art-fallback', initial || null);
+    box.dataset.mrwArtSrc = img.dataset.mrwArtSrc || '';
+    // Decorative: the row's title column already names the show, and a lone
+    // announced letter is noise. The tooltip keeps it identifiable by hover.
+    box.setAttribute('aria-hidden', 'true');
+    if (safeLabel) box.title = safeLabel;
+    return box;
+  }
+
+  // Resolve a field key against a row. Keys may be dot-paths into nested
+  // objects ("currentStreak.length") — habit rows nest streak and goal.
+  function fieldValue(row, key) {
+    if (key == null) return null;
+    let v = row;
+    for (const part of String(key).split('.')) {
+      if (v === null || v === undefined || typeof v !== 'object') return null;
+      v = v[part];
+    }
+    return v === undefined ? null : v;
+  }
+
+  function firstFieldValue(row, keys) {
+    for (const key of [].concat(keys || [])) {
+      const value = fieldValue(row, key);
+      if (value !== null && value !== '') return value;
+    }
+    return null;
+  }
+
+  // Derived cell renderers keyed by a column spec's `derive` field. Each
+  // returns {value(row) -> node|string|null, sortValue(row), tdClass?}.
+  // `sourceKey` may be a string or an array of fallback keys — different
+  // commands of the same CLI name the same fact differently (one podcast
+  // command calls the podcast uuid `podcast`, another `podcastUuid`).
+  function derivedColumn(spec, payload) {
+    const sources = [].concat(spec.sourceKey || []);
+    const pick = (row) => {
+      for (const k of sources) {
+        const v = fieldValue(row, k);
+        if (v !== null && v !== '') return v;
+      }
+      return null;
+    };
+    // All-day-ness has two spellings. `allDayKey` reads a per-row flag (a
+    // reminder is all-day or it isn't). `allDay: true` is the literal form,
+    // for a source whose date is a DAY that happens to serialize as a full
+    // ISO timestamp — a habit's start date is "Jan 4", never "Jan 4, 12:00 AM",
+    // and midnight there is an artifact of the encoding, not a time of day.
+    if (spec.derive === 'datetime') return {
+      value: (row) => formatWhen(pick(row),
+        spec.allDay === true || (spec.allDayKey ? !!fieldValue(row, spec.allDayKey) : false)),
+      sortValue: (row) => pick(row) || ''
+    };
+    if (spec.derive === 'duration') return {
+      value: (row) => formatSeconds(pick(row)),
+      sortValue: (row) => pick(row)
+    };
+    // A count with a unit ("4 days", "1 rep") — habit streaks.
+    if (spec.derive === 'quantity') return {
+      value: (row) => {
+        const n = pick(row);
+        if (typeof n !== 'number' || !isFinite(n)) return null;
+        const unit = spec.unitKey ? fieldValue(row, spec.unitKey) : spec.unit;
+        return unit ? n + ' ' + pluralUnit(unit, n) : String(n);
+      },
+      sortValue: (row) => pick(row)
+    };
+    if (spec.derive === 'text') return {
+      value: (row) => pick(row),
+      sortValue: (row) => pick(row)
+    };
+    if (spec.derive === 'recurrence') return {
+      value: (row) => formatRecurrence(pick(row)),
+      sortValue: (row) => formatRecurrence(pick(row)) || ''
+    };
+    if (spec.derive === 'booleanLabel') return {
+      value: (row) => {
+        const raw = pick(row);
+        let value = null;
+        if (typeof raw === 'boolean') value = raw;
+        else if (raw === 1 || raw === 0) value = raw === 1;
+        else if (typeof raw === 'string' && /^(true|false)$/i.test(raw.trim())) {
+          value = raw.trim().toLowerCase() === 'true';
+        }
+        if (value == null) return null;
+        const trueLabel = typeof spec.trueLabel === 'string' ? spec.trueLabel : 'Yes';
+        const falseLabel = typeof spec.falseLabel === 'string' ? spec.falseLabel : '';
+        return value ? trueLabel : falseLabel;
+      },
+      sortValue: (row) => {
+        const raw = pick(row);
+        if (raw === true || raw === 1 || (typeof raw === 'string' && raw.trim().toLowerCase() === 'true')) return 1;
+        if (raw === false || raw === 0 || (typeof raw === 'string' && raw.trim().toLowerCase() === 'false')) return 0;
+        return null;
+      }
+    };
+    if (spec.derive === 'artwork') return {
+      tdClass: 'mrw-td-art',
+      value: (row) => {
+        const v = pick(row);
+        if (v == null) return null;
+        const label = spec.altKey && row[spec.altKey] != null
+          ? safeDisplayText(row[spec.altKey], { singleLine: true, maximum: 180 }) : '';
+        const img = document.createElement('img');
+        img.className = 'mrw-art';
+        img.loading = 'lazy';
+        img.alt = label;
+        const src = String(spec.urlTemplate || '').replace('{value}', encodeURIComponent(String(v)));
+        img.dataset.mrwArtSrc = src;
+        img.src = src;
+        // Artwork is the one thing here that comes off the network, so it is
+        // the one thing a host sandbox can refuse — its CSP has to allow the
+        // origin. A refusal must not leave a hole in the row: swap the image
+        // for the same tile with the show's initial. Hiding the element is
+        // what let a host that blocked every image look like a widget bug.
+        img.addEventListener('error', () => img.replaceWith(artFallback(img, label)));
+        return img;
+      },
+      sortValue: (row) => (spec.altKey && row[spec.altKey]) || pick(row) || ''
+    };
+    // Pie + label. `format: "seconds"` (podcast playback) labels with a
+    // percent and a played-time tooltip; the default treats the values as
+    // counts (habit goals) and labels with the fraction ("1/1", "3/8").
+    if (spec.derive === 'progress') return {
+      value: (row) => {
+        const done = pick(row), total = firstFieldValue(row, spec.totalKey);
+        if (typeof done !== 'number' || typeof total !== 'number' || total <= 0) return null;
+        const pct = Math.max(0, Math.min(100, (done / total) * 100));
+        const pie = svg('<svg class="mrw-pie" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle class="mrw-pie-track" cx="8" cy="8" r="6"/><circle class="mrw-pie-value" cx="8" cy="8" r="6" pathLength="100"/></svg>');
+        pie.querySelector('.mrw-pie-value').setAttribute('stroke-dasharray', pct + ' 100');
+        const seconds = spec.format === 'seconds';
+        const label = seconds ? Math.round(pct) + '%' : done + '/' + total;
+        const box = el('span', 'mrw-progress', pie, el('span', 'mrw-progress-label', label));
+        if (seconds) {
+          box.title = (formatSeconds(done) || '0s') + ' of ' + (formatSeconds(total) || '?') + ' played';
+        } else {
+          const unit = spec.unitKey ? fieldValue(row, spec.unitKey) : null;
+          box.title = done + ' of ' + total + (unit ? ' ' + pluralUnit(unit, total) : '');
+        }
+        return box;
+      },
+      sortValue: (row) => {
+        const done = pick(row), total = firstFieldValue(row, spec.totalKey);
+        return (typeof done === 'number' && typeof total === 'number' && total > 0) ? done / total : null;
+      }
+    };
+    if (spec.derive === 'link') return {
+      value: (row) => {
+        const raw = pick(row);
+        if (typeof raw !== 'string' || !/^https?:\/\//i.test(raw)) return null;
+        const credentialBearing = isCredentialBearingURL(raw);
+        const a = document.createElement(credentialBearing ? 'span' : 'a');
+        a.className = 'mrw-link';
+        if (!credentialBearing) a.href = raw;
+        if (!credentialBearing) {
+          a.target = '_blank'; a.rel = 'noopener noreferrer';
+        }
+        a.dataset.mrwLinkMode = credentialBearing
+          ? 'protected' : (payload && payload.onOpenLink ? 'host' : 'browser');
+        if (!credentialBearing && payload && payload.onOpenLink) {
+          a.addEventListener('click', (event) => {
+            event.preventDefault();
+            Promise.resolve(payload.onOpenLink(raw)).catch(() => {
+              a.dataset.state = 'failed';
+              a.title = 'The host could not open this link.';
+            });
+          });
+        }
+        a.append(I.linkArrow(), credentialBearing ? 'Link available' : 'Open');
+        return a;
+      },
+      sortValue: (row) => pick(row) || ''
+    };
+    return null;
+  }
+
+  // Build the column specs the table renders: a curated set from the host
+  // (p.columns, may include derived columns), otherwise auto-detected raw
+  // keys minus any p.hiddenColumns. Curated specs whose source fields never
+  // appear in the rows are dropped; if too few survive (the rows aren't the
+  // shape this curation was written for), fall back to auto columns.
+  function columnSpecsFor(p, rows) {
+    if (Array.isArray(p.columns) && p.columns.length) {
+      const hasData = (keys) => [].concat(keys || [])
+        .some(k => rows.some(r => {
+          const v = fieldValue(r, k);
+          return v !== null && v !== '';
+        }));
+      const curated = p.columns
+        .filter(spec => {
+          const source = spec.derive ? spec.sourceKey : spec.key;
+          if (!hasData(source)) return false;
+          return spec.derive !== 'progress' || !spec.totalKey || hasData(spec.totalKey);
+        })
+        .map((spec, i) => {
+          const derived = spec.derive ? derivedColumn(spec, p) : null;
+          if (spec.derive && !derived) return null; // unknown derive: skip
+          // subtitleKey renders a dim second line inside the cell (episode
+          // title over podcast name); sorting stays on the main value.
+          const subtitle = !spec.derive && spec.subtitleKey ? (row) => {
+            const v = firstFieldValue(row, spec.subtitleKey);
+            return v == null || v === '' ? null : String(v);
+          } : null;
+          const plainValue = (row) => {
+            const raw = row[spec.key];
+            const sub = subtitle && subtitle(row);
+            const safeRaw = safeScalar(raw);
+            if (sub == null) return safeRaw;
+            const safeSub = safeScalar(sub);
+            const wrap = el('span', 'mrw-titlecell');
+            wrap.append(el('span', null, safeRaw || '—'));
+            if (safeSub) wrap.append(el('span', 'mrw-titlecell-sub', safeSub));
+            return wrap;
+          };
+          return {
+            key: spec.key,
+            title: spec.title != null
+              ? (safeDisplayText(spec.title, { singleLine: true, maximum: 80 }) || 'Value')
+              : (safeKeyLabel(spec.key) || 'Value'),
+            primary: spec.primary != null ? !!spec.primary : (!spec.derive && i === 0),
+            isNumeric: !derived && rows.every(r => r[spec.key] == null || typeof r[spec.key] === 'number'),
+            tdClass: derived ? derived.tdClass : null,
+            subtitle: subtitle,
+            rawValue: derived ? derived.value : (row) => row[spec.key],
+            value: derived ? derived.value : plainValue,
+            sortValue: derived ? derived.sortValue : (row) => row[spec.key]
+          };
+        })
+        .filter(Boolean);
+      if (curated.length >= 2) return curated;
+    }
+    const hidden = new Set(p.hiddenColumns || []);
+    const PREFERRED = ['id', 'title', 'name', 'list', 'due', 'date', 'priority', 'completed'];
+    const seen = [];
+    for (const r of rows) for (const k of Object.keys(r)) if (!seen.includes(k)) seen.push(k);
+    return seen
+      .filter(k => !hidden.has(k) && safeKeyLabel(k) && rows.some(r => safeScalar(r[k]) != null))
+      .sort((a, b) => {
+        const pa = PREFERRED.indexOf(a), pb = PREFERRED.indexOf(b);
+        return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+      })
+      .slice(0, 8)
+      .map((c, i) => ({
+        key: c, title: safeKeyLabel(c), primary: i === 0,
+        isNumeric: rows.every(r => r[c] == null || typeof r[c] === 'number'),
+        value: (row) => safeScalar(row[c]), sortValue: (row) => safeScalar(row[c])
+      }));
+  }
+
+  // `opts` lets a curated section reuse the whole table machinery:
+  // `sortable: false` (a queue's order is semantic — a sort control must not
+  // silently reorder it), `numbered` for a leading position column, `marked`
+  // to accent one row by identity, `wrapClass` to skip the outer scroll shell.
+  function renderTable(p, rows, opts) {
+    const options = opts || {};
+    const sortable = options.sortable !== false;
+    const numbered = options.numbered === true;
+    const marked = options.marked == null ? null : String(options.marked);
+    const isMarked = (row) => marked !== null &&
+      [fieldValue(row, 'uuid'), fieldValue(row, 'id'), fieldValue(row, 'episodeID')]
+        .some(v => v != null && String(v) === marked);
+    const columns = columnSpecsFor(p, rows);
+    const specByKey = Object.fromEntries(columns.map(c => [c.key, c]));
+    const rowIndex = new Map(rows.map((row, index) => [row, index]));
+    const actionState = new Map();          // rowIdx -> { actionId -> state }
+    const sort = { key: null, dir: 1 };
+    const pageSize = window.matchMedia('(max-width: 480px)').matches ? 4 : 8;
+    let visibleCount = Math.min(pageSize, rows.length);
+
+    const wrap = el('div', options.wrapClass || 'mrw-scroll');
+    const table = el('table', 'mrw-table');
+    const checkActions  = (p.rowActions || []).filter(a => a.kind === 'check');
+    const buttonActions = (p.rowActions || []).filter(a => a.kind === 'button');
+
+    /* — sticky sortable header — */
+    const thead = el('thead'); const headRow = el('tr');
+    if (numbered) {
+      const th = el('th', 'mrw-td-pos', '#');
+      th.setAttribute('aria-label', 'Position');
+      headRow.append(th);
+    }
+    if (checkActions.length) headRow.append(el('th', 'mrw-td-check'));
+    const ths = {};
+    for (const spec of columns) {
+      const th = el('th', spec.isNumeric ? 'mrw-td-num' : null);
+      if (sortable) {
+        const glyph = el('span', 'mrw-sort-glyph', '▲');
+        const btn = el('button', 'mrw-th-btn', spec.title, glyph);
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+          if (sort.key === spec.key) sort.dir *= -1; else { sort.key = spec.key; sort.dir = 1; }
+          syncSortControls();
+          paintRows();
+        });
+        th.append(btn);
+      } else {
+        th.append(el('span', 'mrw-th-btn', spec.title));
+      }
+      ths[spec.key] = th; headRow.append(th);
+    }
+    if (buttonActions.length) headRow.append(el('th', 'mrw-td-actions'));
+    thead.append(headRow);
+
+    const tbody = el('tbody');
+    const mobileSort = el('div', 'mrw-mobile-sort');
+    const sortSelect = document.createElement('select');
+    sortSelect.className = 'mrw-sort-select';
+    sortSelect.setAttribute('aria-label', 'Sort rows');
+    sortSelect.append(new Option('Default order', ''));
+    for (const spec of columns) sortSelect.append(new Option(spec.title, spec.key));
+    const sortDirection = el('button', 'mrw-sort-dir', '↑');
+    sortDirection.type = 'button';
+    sortDirection.disabled = true;
+    mobileSort.append(el('span', 'mrw-sort-label', 'Sort'), sortSelect, sortDirection);
+
+    sortSelect.addEventListener('change', () => {
+      sort.key = sortSelect.value || null;
+      sort.dir = 1;
+      syncSortControls();
+      paintRows();
+    });
+    sortDirection.addEventListener('click', () => {
+      if (!sort.key) return;
+      sort.dir *= -1;
+      syncSortControls();
+      paintRows();
+    });
+
+    const more = el('div', 'mrw-more');
+    const moreButton = el('button', 'mrw-more-btn');
+    moreButton.type = 'button';
+    moreButton.addEventListener('click', () => {
+      visibleCount = Math.min(rows.length, visibleCount + pageSize);
+      paintRows();
+    });
+    more.append(moreButton);
+
+    function syncSortControls() {
+      for (const [key, th] of Object.entries(ths)) {
+        if (key === sort.key) {
+          th.setAttribute('aria-sort', sort.dir > 0 ? 'ascending' : 'descending');
+          th.querySelector('.mrw-sort-glyph').textContent = sort.dir > 0 ? '▲' : '▼';
+        } else {
+          th.removeAttribute('aria-sort');
+        }
+      }
+      sortSelect.value = sort.key || '';
+      sortDirection.disabled = !sort.key;
+      sortDirection.textContent = sort.dir > 0 ? '↑' : '↓';
+      sortDirection.setAttribute('aria-label', sort.dir > 0 ? 'Sort descending' : 'Sort ascending');
+      sortDirection.title = sortDirection.getAttribute('aria-label');
+    }
+
+    function cellNode(spec, row) {
+      const value = spec.value(row);
+      const cls = [spec.tdClass || '', spec.isNumeric ? 'mrw-td-num' : '', spec.primary ? 'mrw-td-primary' : ''].join(' ').trim();
+      let td;
+      if (value == null) td = el('td', (cls + ' mrw-td-dim').trim(), '—');
+      else if (value.nodeType) td = el('td', cls || null, value);
+      else if (typeof value === 'object') td = el('td', (cls + ' mrw-td-dim').trim(), '—');
+      else {
+        const safe = safeScalar(value);
+        td = el('td', safe == null ? (cls + ' mrw-td-dim').trim() : (cls || null), safe || '—');
+      }
+      td.dataset.label = spec.title || '';
+      td.dataset.key = spec.key;
+      return td;
+    }
+
+    function paintRows() {
+      const ordered = rows.slice();
+      if (sort.key && specByKey[sort.key]) {
+        const sv = specByKey[sort.key].sortValue;
+        // Project each row once; comparisons reuse the same locale settings.
+        const values = new Map(rows.map(row => [row, sv(row)]));
+        const compare = new Intl.Collator(undefined, { numeric: true }).compare;
+        ordered.sort((a, b) => {
+          const av = values.get(a), bv = values.get(b);
+          if (av == null || av === '') return 1; if (bv == null || bv === '') return -1;
+          if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sort.dir;
+          return compare(String(av), String(bv)) * sort.dir;
+        });
+      }
+      tbody.textContent = '';
+      for (const row of ordered.slice(0, visibleCount)) {
+        const tr = el('tr', 'mrw-data-row');
+        const index = rowIndex.get(row);
+        const rowSt = actionState.get(index) || {};
+        const primary = columns.find(spec => spec.primary) || columns[0];
+        const rowLabel = primary && fieldValue(row, primary.key) != null
+          ? (safeScalar(fieldValue(row, primary.key)) || 'row ' + (index + 1))
+          : 'row ' + (index + 1);
+        if (checkActions.length) tr.classList.add('mrw-row-has-check');
+        if (columns.some(spec => spec.tdClass === 'mrw-td-art')) tr.classList.add('mrw-row-has-art');
+        if (isMarked(row)) tr.classList.add('mrw-row-marked');
+        if (numbered) {
+          tr.classList.add('mrw-row-has-pos');
+          const td = el('td', 'mrw-td-pos', String(index + 1));
+          td.dataset.label = '#';
+          tr.append(td);
+        }
+
+        if (checkActions.length) {
+          const act = checkActions[0];
+          const applies = !p.actionApplies || p.actionApplies(act, row);
+          const alreadyDone = !!(p.isRowCompleted && p.isRowCompleted(row));
+          if (!applies) { tr.append(el('td', 'mrw-td-check')); }
+          else {
+          const btn = el('button', 'mrw-check');
+          btn.type = 'button';
+          btn.title = act.title || 'Mark complete';
+          btn.dataset.mrwActionId = act.id;
+          btn.setAttribute('aria-label', (act.title || 'Mark complete') + ': ' + rowLabel);
+          btn.append(I.check());
+          btn.dataset.state = alreadyDone ? 'done' : (rowSt[act.id] || '');
+          if (alreadyDone || rowSt[act.id] === 'done') tr.classList.add('mrw-row-done');
+          btn.addEventListener('click', () => {
+            if (btn.dataset.state) return;
+            btn.dataset.state = 'pending';
+            setRowState(row, act.id, 'pending');
+            invoke(act.id, row).then(() => {
+              btn.dataset.state = 'done';
+              setRowState(row, act.id, 'done');
+              tr.classList.add('mrw-row-done');
+            }).catch((err) => {
+              // A silent reset reads as "the button does nothing" — flash
+              // the failure and carry the reason in the tooltip.
+              btn.dataset.state = 'failed'; setRowState(row, act.id, '');
+              btn.title = actionFailureTitle(err, act.title || 'Mark complete');
+              setTimeout(() => { if (btn.dataset.state === 'failed') { btn.dataset.state = ''; } }, 3000);
+            }).finally(() => repaintIfReplaced(tr));
+          });
+          tr.append(el('td', 'mrw-td-check', btn));
+          }
+        }
+
+        columns.forEach((spec) => tr.append(cellNode(spec, row)));
+
+        if (buttonActions.length) {
+          const td = el('td', 'mrw-td-actions');
+          td.dataset.label = 'Actions';
+          const applicable = buttonActions.filter(act => !p.actionApplies || p.actionApplies(act, row));
+          const visibleLimit = Math.max(0, 2 - Math.min(checkActions.length, 1));
+          td.append(renderActionGroup(applicable, (act) => ({
+              initialState: rowSt[act.id] || '',
+              run: (values) => invoke(act.id, row, values),
+              onState: (s) => {
+                setRowState(row, act.id, s);
+                if (s !== 'pending') repaintIfReplaced(tr);
+              },
+              requestInputs: (fire) => toggleInputForm(tr, act, row, fire)
+            }), visibleLimit));
+          tr.append(td);
+        }
+        tbody.append(tr);
+      }
+      const remaining = Math.max(0, rows.length - visibleCount);
+      more.hidden = remaining === 0;
+      if (remaining) {
+        const next = Math.min(pageSize, remaining);
+        moreButton.textContent = 'Show ' + next + ' more';
+        moreButton.title = remaining + (remaining === 1 ? ' row remains' : ' rows remain');
+        moreButton.setAttribute('aria-label', 'Show ' + next + ' more; ' + remaining + ' remaining');
+      }
+    }
+    function setRowState(row, actionId, s) {
+      const index = rowIndex.get(row);
+      const cur = actionState.get(index) || {};
+      cur[actionId] = s; actionState.set(index, cur);
+    }
+    // Sorting and "Show more" rebuild every row from actionState. A call that
+    // settles afterwards updated a row that is gone, so paint the new rows.
+    function repaintIfReplaced(tr) {
+      if (!tr.isConnected && tbody.isConnected) paintRows();
+    }
+    function invoke(actionId, row, inputValues) {
+      const clean = { ...row };
+      return p.onAction ? Promise.resolve(p.onAction(actionId, clean, inputValues || {})) : Promise.resolve();
+    }
+
+    /* Inline input row (reschedule/edit): expands beneath the acted-on row,
+       prefilled from it, Enter or Apply to fire. */
+    function toggleInputForm(tr, act, row, fire) {
+      const existing = tr.nextElementSibling;
+      if (existing && existing.classList.contains('mrw-inputrow')) { existing.remove(); return; }
+      tbody.querySelectorAll('tr.mrw-inputrow').forEach(n => n.remove());
+      const formTr = el('tr', 'mrw-inputrow');
+      const td = el('td'); td.colSpan = 99;
+      const built = buildInputForm(act, row, fire, () => formTr.remove());
+      td.append(built.form); formTr.append(td);
+      tr.after(formTr);
+      built.focus();
+    }
+
+    table.append(thead, tbody);
+    if (sortable) wrap.append(mobileSort);
+    wrap.append(table, more);
+    syncSortControls();
+    paintRows();
+    return wrap;
+  }
+
+  /* ════════ shared action affordances (table rows + episode card) ════════ */
+  function actionFailureTitle(err, actionTitle) {
+    return actionTitle + ' failed. Check MacRemote on the Mac for details.';
+  }
+
+  /* One action button: idle → pending → done, destructive two-step arm,
+     visible Failed state with the reason in the tooltip (never a silent
+     reset), optional inline inputs collected before firing. */
+  function actionButton(act, opts) {
+    const b = el('button', 'mrw-rowbtn' + (act.style === 'destructive' ? ' mrw-destructive' : ''));
+    b.type = 'button';
+    b.dataset.mrwActionId = act.id;
+    b.dataset.state = opts.initialState || '';
+    const label = () => {
+      b.textContent = '';
+      if (b.dataset.state === 'pending') { b.append(I.spinner(), act.label || 'Run'); }
+      else if (b.dataset.state === 'done') { b.append(I.checkTint(), act.doneLabel || 'Done'); }
+      else if (b.dataset.state === 'armed') { b.append('Confirm?'); }
+      else if (b.dataset.state === 'failed') { b.append('Failed'); }
+      else b.append(act.label || 'Run');
+    };
+    label();
+    const fire = (inputValues) => {
+      b.dataset.state = 'pending';
+      if (opts.onState) opts.onState('pending');
+      label();
+      Promise.resolve(opts.run(inputValues || {})).then(() => {
+        b.dataset.state = 'done';
+        if (opts.onState) opts.onState('done');
+        label();
+      }).catch((err) => {
+        b.dataset.state = 'failed';
+        if (opts.onState) opts.onState('');
+        label();
+        b.title = actionFailureTitle(err, act.label || 'Run');
+        setTimeout(() => {
+          if (b.dataset.state === 'failed') { b.dataset.state = ''; label(); }
+        }, 3500);
+      });
+    };
+    b.addEventListener('click', () => {
+      if (b.dataset.state === 'pending' || b.dataset.state === 'done') return;
+      if (act.inputs && act.inputs.length && opts.requestInputs) { opts.requestInputs(fire); return; }
+      if (act.style === 'destructive') {
+        if (b.dataset.state !== 'armed') {
+          b.dataset.state = 'armed'; label();
+          setTimeout(() => {
+            if (b.dataset.state === 'armed') { b.dataset.state = ''; label(); }
+          }, 3500);
+          return;
+        }
+        b.dataset.state = '';
+      }
+      fire();
+    });
+    return b;
+  }
+
+  /* Keep the surface calm without dropping capabilities: at most two
+     actions are prominent, and every additional action stays available in
+     a native disclosure that expands the document (and therefore the host
+     iframe) instead of floating beyond its measured bounds. */
+  function renderActionGroup(actions, optionsFor, visibleLimit) {
+    const group = el('div', 'mrw-action-group');
+    const limit = Math.max(0, visibleLimit == null ? 2 : visibleLimit);
+    for (const act of actions.slice(0, limit)) {
+      const button = actionButton(act, optionsFor(act));
+      button.classList.add('mrw-action-primary');
+      group.append(button);
+    }
+
+    const overflow = actions.slice(limit);
+    if (!overflow.length) return group;
+
+    const details = el('details', 'mrw-action-overflow');
+    details.dataset.mrwActionOverflow = String(overflow.length);
+    const summary = el('summary');
+    summary.setAttribute('aria-label', 'More actions, ' + overflow.length + ' available');
+    summary.append('More', I.chevron());
+    const menu = el('div', 'mrw-action-menu');
+    menu.setAttribute('aria-label', 'More actions');
+
+    for (const act of overflow) {
+      const options = optionsFor(act);
+      if (options.requestInputs) {
+        const requestInputs = options.requestInputs;
+        options.requestInputs = (fire) => {
+          details.open = false;
+          requestInputs(fire);
+        };
+      }
+      menu.append(actionButton(act, options));
+    }
+    details.append(summary, menu);
+    details.addEventListener('toggle', () => {
+      if (!details.open) return;
+      document.querySelectorAll('details.mrw-action-overflow[open]').forEach(other => {
+        if (other !== details) other.open = false;
+      });
+    });
+    details.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      details.open = false;
+      summary.focus();
+      event.stopPropagation();
+    });
+    group.append(details);
+    return group;
+  }
+
+  /* Inline input form (reschedule/edit): prefilled from the row, Enter or
+     the apply button fires, Cancel closes. The host (table/card) decides
+     where the form element lives. */
+  function buildInputForm(act, row, fire, close) {
+    const form = el('div', 'mrw-inputform');
+    const fields = {};
+    const go = el('button', 'mrw-rowbtn');
+    for (const inp of (act.inputs || [])) {
+      const wrap = el('label', 'mrw-inputlabel', inp.title);
+      const input = document.createElement('input');
+      input.className = 'mrw-input'; input.type = 'text';
+      input.placeholder = inp.placeholder || '';
+      if (inp.prefillField && row[inp.prefillField] != null) input.value = String(row[inp.prefillField]);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
+      fields[inp.name] = input;
+      wrap.append(input); form.append(wrap);
+    }
+    go.type = 'button'; go.textContent = act.label || 'Apply';
+    const cancel = el('button', 'mrw-rowbtn'); cancel.type = 'button'; cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => close());
+    go.addEventListener('click', () => {
+      const values = {};
+      for (const k of Object.keys(fields)) { values[k] = fields[k].value; }
+      close();
+      fire(values);
+    });
+    form.append(go, cancel);
+    return {
+      form,
+      focus: () => { const first = Object.values(fields)[0]; if (first) first.focus(); }
+    };
+  }
+
+  /* ════════ CARD state — one curated row rendered as an episode card ════════ */
+  // A lone object (e.g. "now playing") whose primary curated field is
+  // present gets the card treatment instead of the raw key/value tree.
+  function cardRowFrom(j, p) {
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+    if (!Array.isArray(p.columns) || !p.columns.length) return null;
+    const primary = p.columns.find(c => c.primary);
+    if (!primary || j[primary.key] == null || j[primary.key] === '') return null;
+    return j;
+  }
+
+  // One-line text for a card field. An object value has no honest flat form, so
+  // it gets the same short JSON slice a table cell gives it — never String(v)'s
+  // "[object Object]", which is the single most developer-facing thing a
+  // curated card can say.
+  function cardText(v) {
+    if (v !== null && typeof v === 'object') {
+      if (v.nodeType) return v.textContent || '—';
+      return '—';
+    }
+    return safeScalar(v) || '—';
+  }
+
+  function renderCard(p, row) {
+    const specs = columnSpecsFor(p, [row]);
+    const art = specs.find(s => s.tdClass === 'mrw-td-art');
+    const primary = specs.find(s => s.primary) || specs[0];
+    // A record with nothing renderable (an empty object reaching a card group)
+    // must not take the card path down with it.
+    if (!primary) return el('div', 'mrw-episode');
+    const rest = specs.filter(s => s !== art && s !== primary);
+
+    const card = el('div', 'mrw-episode');
+    if (art) {
+      const img = art.value(row);
+      if (img && img.nodeType) { img.classList.add('mrw-episode-art'); card.append(img); }
+    }
+    const main = el('div', 'mrw-episode-main');
+    const titles = el('div', null);
+    const rawTitle = primary.rawValue ? primary.rawValue(row) : primary.value(row);
+    titles.append(el('div', 'mrw-episode-title', rawTitle == null ? '—' : cardText(rawTitle)));
+    const sub = primary.subtitle && primary.subtitle(row);
+    const safeSub = safeScalar(sub);
+    if (safeSub) titles.append(el('div', 'mrw-episode-sub', safeSub));
+    main.append(titles);
+
+    const meta = el('div', 'mrw-episode-meta');
+    for (const spec of rest) {
+      const v = spec.value(row);
+      if (v == null || v === '') continue;
+      if (meta.childNodes.length) meta.append(el('span', 'mrw-episode-dot', '·'));
+      meta.append(v.nodeType ? v : document.createTextNode(cardText(v)));
+    }
+    if (meta.childNodes.length) main.append(meta);
+
+    const acts = (p.rowActions || []).filter(a => !p.actionApplies || p.actionApplies(a, row));
+    if (acts.length && p.onAction) {
+      const box = el('div', 'mrw-episode-actions');
+      box.append(renderActionGroup(acts, (act) => ({
+          run: (values) => Promise.resolve(p.onAction(act.id, { ...row }, values || {})),
+          requestInputs: (fire) => {
+            const existing = box.querySelector('.mrw-inputform');
+            if (existing) { existing.remove(); return; }
+            const built = buildInputForm(act, row, fire, () => built.form.remove());
+            box.append(built.form);
+            built.focus();
+          }
+        }), 2));
+      main.append(box);
+    }
+    card.append(main);
+    return card;
+  }
+
+  /* ════════ DOCUMENT state — readable Markdown-like text, safely escaped ════════ */
+  function renderDocument(p, document) {
+    const scroll = el('div', 'mrw-scroll');
+    const article = el('article', 'mrw-document');
+    if (document.title) article.append(el('div', 'mrw-document-title', document.title));
+    const body = el('div', 'mrw-document-body');
+    const lines = document.body.replace(/\r\n?/g, '\n').split('\n');
+    let paragraph = [];
+    let list = null;
+    let code = null;
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      body.append(el('p', null, paragraph.join(' ').trim()));
+      paragraph = [];
+    };
+    const flushList = () => { if (list) { body.append(list); list = null; } };
+    const flushCode = () => {
+      if (!code) return;
+      body.append(el('pre', 'mrw-document-code', code.join('\n')));
+      code = null;
+    };
+    for (const line of lines) {
+      if (/^\s*```/.test(line)) {
+        flushParagraph(); flushList();
+        if (code) flushCode(); else code = [];
+        continue;
+      }
+      if (code) { code.push(line); continue; }
+      if (!line.trim()) { flushParagraph(); flushList(); continue; }
+      const heading = line.match(/^#{1,6}\s+(.+)$/);
+      if (heading) {
+        flushParagraph(); flushList();
+        body.append(el('h3', null, heading[1].trim()));
+        continue;
+      }
+      const quote = line.match(/^>\s?(.*)$/);
+      if (quote) {
+        flushParagraph(); flushList();
+        body.append(el('blockquote', null, quote[1]));
+        continue;
+      }
+      const bullet = line.match(/^\s*[-*+]\s+(?:\[[ xX]\]\s*)?(.*)$/);
+      if (bullet) {
+        flushParagraph();
+        if (!list) list = el('ul');
+        list.append(el('li', null, bullet[1]));
+        continue;
+      }
+      flushList();
+      paragraph.push(line.trim());
+    }
+    flushParagraph(); flushList(); flushCode();
+    article.append(body);
+    scroll.append(article);
+    return scroll;
+  }
+
+  /* ════════ GROUPED SECTIONS state ════════ */
+  // One section: a small uppercase label + count, then either the first row as
+  // an episode card (`style: "card"`) or the ordinary curated table.
+  function sectionNode(p, section) {
+    const node = el('section', 'mrw-section');
+    const head = el('div', 'mrw-section-head', el('span', 'mrw-section-title', section.title));
+    if (section.style !== 'card' || section.rows.length > 1) {
+      head.append(el('span', 'mrw-section-count', String(section.rows.length)));
+    }
+    node.append(head);
+    if (section.style === 'card') {
+      node.append(renderCard(p, section.rows[0]));
+    } else if (section.style === 'documentList') {
+      node.append(renderDocumentList(section.rows, section.documentList));
+    } else {
+      node.append(renderTable(p, section.rows, {
+        wrapClass: 'mrw-section-body',
+        sortable: false,
+        numbered: section.numbered === true,
+        marked: section.marked || null
+      }));
+    }
+    return node;
+  }
+
+  function renderDocumentList(rows, hint) {
+    const list = el('div', 'mrw-document-list');
+    const spec = isObject(hint) ? hint : {};
+    rows.forEach((row, index) => {
+      const item = el('article', 'mrw-document-item');
+      const titleValue = firstFieldValue(row, spec.titleKey);
+      const baseTitle = typeof spec.fallbackRowTitle === 'string'
+        ? spec.fallbackRowTitle : 'Item';
+      const title = typeof titleValue === 'string' && safeDisplayText(titleValue, { singleLine: true, maximum: 200 })
+        ? safeDisplayText(titleValue, { singleLine: true, maximum: 200 }) : baseTitle + ' ' + (index + 1);
+      let statusValue = firstFieldValue(row, spec.statusKey);
+      if (spec.pendingKey && fieldValue(row, spec.pendingKey) === true &&
+          typeof spec.pendingTitle === 'string') {
+        statusValue = spec.pendingTitle;
+      } else if (statusValue != null && isObject(spec.statusTitles) &&
+                 typeof spec.statusTitles[String(statusValue)] === 'string') {
+        statusValue = spec.statusTitles[String(statusValue)];
+      }
+      const head = el('div', 'mrw-document-item-head',
+        el('div', 'mrw-document-item-title', title));
+      const safeStatus = safeScalar(statusValue);
+      if (safeStatus) {
+        head.append(el('span', 'mrw-document-item-status', safeStatus));
+      }
+      item.append(head);
+      const bodyValue = firstFieldValue(row, spec.bodyKey);
+      const safeBody = safeDisplayText(bodyValue, { maximum: 12_000 });
+      if (safeBody) {
+        item.append(el('div', 'mrw-document-item-body', safeBody));
+      }
+      list.append(item);
+    });
+    return list;
+  }
+
+  function renderMetaChips(chips) {
+    const box = el('div', 'mrw-meta-chips');
+    for (const chip of chips) {
+      box.append(el('span', 'mrw-meta-chip', el('span', null, chip.label), el('b', null, chip.value)));
+    }
+    return box;
+  }
+
+  function contextChipsFrom(j, p) {
+    if (!isObject(j) || !Array.isArray(p.context)) return [];
+    const chips = [];
+    for (const spec of p.context) {
+      if (!isObject(spec) || typeof spec.path !== 'string') continue;
+      const value = fieldValue(j, spec.path);
+      if (!isChipValue(value)) continue;
+      const safeValue = safeScalar(value);
+      if (!safeValue) continue;
+      chips.push({
+        label: typeof spec.title === 'string'
+          ? (safeDisplayText(spec.title, { singleLine: true, maximum: 80 }) || 'Value')
+          : (safeKeyLabel(spec.path) || 'Value'),
+        value: safeValue
+      });
+    }
+    return chips;
+  }
+
+  function renderSections(p, grouped) {
+    if (!grouped.sections.length) return renderEmptyGroups(p, grouped);
+    const scroll = el('div', 'mrw-scroll');
+    for (const section of grouped.sections) scroll.append(sectionNode(p, section));
+    if (grouped.chips.length) scroll.append(renderMetaChips(grouped.chips));
+    return scroll;
+  }
+
+  // Every curated group came back empty: the same friendly, accent-tinted empty
+  // language as a command with no output, on one line, naming the sections that
+  // are empty. Never the raw key/value tree.
+  function renderEmptyGroups(p, grouped) {
+    const box = el('div', 'mrw-empty mrw-empty-groups');
+    const icon = el('div', 'mrw-empty-icon'); icon.append(I.emptyCheck());
+    box.append(icon, el('div', 'mrw-empty-title',
+      'Nothing to show — ' + emptyGroupsSentence(grouped.empty)));
+    if (grouped.chips.length) box.append(renderMetaChips(grouped.chips));
+    return box;
+  }
+
+  /* ════════ CHANGE state ════════ */
+  // A queue-changing command answers with a confirmation, not rows: an
+  // accent-tinted headline (plus a Preview chip when nothing was applied yet),
+  // the acted-on episode as a card, and the resulting queue numbered 1…N.
+  function renderChange(p, info) {
+    const scroll = el('div', 'mrw-scroll');
+    const box = el('div', 'mrw-change');
+    const icon = el('div', 'mrw-change-icon');
+    icon.append(I.checkTint());
+    const head = el('div', 'mrw-change-head', icon, el('div', 'mrw-change-title', info.headline));
+    if (info.dryRun) {
+      const chip = el('span', 'mrw-preview', 'Preview');
+      chip.title = 'Nothing changed yet — this is what the command would do.';
+      head.append(chip);
+    }
+    box.append(head);
+    // "Reminder updated" alone is a confirmation of nothing in particular. When
+    // no record card will carry the name, the hinted scalar title does.
+    if (info.title && !(info.episode && cardRowFrom(info.episode, p))) {
+      box.append(el('div', 'mrw-change-sub', info.title));
+    }
+    // Whenever no queue section will render — an older CLI build that answers
+    // with only a count, a queue the command could not read back, or a genuinely
+    // emptied queue (removing the last item) — state the count plainly rather
+    // than leaving the result silent about the queue.
+    if (!info.queue && info.count != null) {
+      box.append(el('div', 'mrw-change-summary',
+        info.count + ' ' + (info.count === 1 ? info.countNoun : info.countNounPlural) +
+        ' in ' + info.queueTitle));
+    }
+    if (info.details.length) box.append(el('div', 'mrw-change-sub', [...new Set(info.details)].join(' · ')));
+    if (info.warnings.length) box.append(renderWarnings(info.warnings));
+    scroll.append(box);
+    if (info.episode) scroll.append(renderCard(p, info.episode));
+    if (info.queue) {
+      scroll.append(sectionNode(p, {
+        title: info.queueTitle,
+        rows: info.queue,
+        style: 'table',
+        numbered: true,
+        marked: info.marked
+      }));
+    }
+    return scroll;
+  }
+
+  // Batch rendering is declared by catalog hints. Successful, uncertain, and
+  // unchanged rows remain separate even when the outer call reports an error.
+  function batchPayloadFrom(value, p) {
+    const hint = p.change && p.change.batch;
+    if (!isObject(hint) || !isObject(value)) return null;
+    const rows = fieldValue(value, hint.rowsKey);
+    if (!Array.isArray(rows) || !rows.length || !rows.every(isObject)) return null;
+    const doneIDs = fieldValue(value, hint.succeededKey);
+    const uncertainIDs = fieldValue(value, hint.uncertainKey);
+    if (!Array.isArray(doneIDs) || !Array.isArray(uncertainIDs)) return null;
+    const done = new Set(doneIDs.map(String));
+    const uncertain = new Set(uncertainIDs.map(String));
+    return {
+      title: safeDisplayText((hint.titles || {})[fieldValue(value, hint.operationKey)] || 'Changed'),
+      rows: rows.map(row => {
+        const id = fieldValue(row, hint.idKey);
+        const name = safeScalar(fieldValue(row, hint.titleKey));
+        return { name: name || (typeof id === 'number' ? 'Item ' + id : 'Item'),
+          state: uncertain.has(String(id)) ? 'uncertain' : done.has(String(id)) ? 'done' : 'unchanged',
+          message: safeScalar(fieldValue(row, hint.messageKey)) };
+      })
+    };
+  }
+
+  function renderBatch(p, batch) {
+    const box = el('div', 'mrw-change');
+    const done = batch.rows.filter(row => row.state === 'done').length;
+    box.append(el('div', 'mrw-change-title', batch.title + ': ' + done + ' of ' + batch.rows.length));
+    for (const [state, title] of [['done', 'Changed'], ['uncertain', 'May have changed — check before retrying'], ['unchanged', 'Not changed']]) {
+      const rows = batch.rows.filter(row => row.state === state);
+      if (!rows.length) continue;
+      const section = el('section', 'mrw-summary-section', el('div', 'mrw-summary-title', title));
+      for (const row of rows) section.append(el('div', 'mrw-change-sub', row.name + (state !== 'done' && row.message ? ' · ' + row.message : '')));
+      box.append(section);
+    }
+    return el('div', 'mrw-scroll', box);
+  }
+
+  function renderWarnings(warnings) {
+    const box = el('aside', 'mrw-warning');
+    box.setAttribute('role', 'status');
+    const icon = el('div', 'mrw-warning-icon');
+    icon.append(I.alert());
+    const body = el('div', 'mrw-warning-body');
+    body.append(el('div', 'mrw-warning-title',
+      warnings.length === 1 ? 'Completed with a warning' : 'Completed with warnings'));
+    const list = el('ul', 'mrw-warning-list');
+    for (const warning of warnings) list.append(el('li', null, warning));
+    body.append(list);
+    box.append(icon, body);
+    return box;
+  }
+
+  /* ════════ TREE state ════════ */
+  /* Unknown structured results keep useful scalar facts without exposing the
+     wire encoding, nested implementation objects, or local paths. */
+  function summarySections(value) {
+    const sections = [];
+    let lead = null;
+    if (value === null) return { lead, sections };
+    if (typeof value !== 'object') return { lead: safeScalar(value), sections };
+    if (Array.isArray(value)) {
+      const values = value.map(safeScalar).filter(Boolean).slice(0, 12);
+      return { lead: values.join('\n') || null, sections };
+    }
+
+    function visit(object, title, depth) {
+      if (!isObject(object) || depth > 2) return;
+      const facts = [];
+      const nested = [];
+      for (const [key, raw] of Object.entries(object)) {
+        const label = safeKeyLabel(key);
+        if (!label) continue;
+        const scalar = safeScalar(raw);
+        if (scalar) {
+          facts.push({ label, value: scalar });
+        } else if (Array.isArray(raw)) {
+          const safeValues = raw.map(safeScalar).filter(Boolean).slice(0, 8);
+          if (safeValues.length) {
+            facts.push({ label, value: safeValues.join(', ') });
+          } else if (raw.length && raw.every(item => isObject(item))) {
+            facts.push({
+              label,
+              value: raw.length + (raw.length === 1 ? ' item' : ' items')
+            });
+          }
+        } else if (isObject(raw)) {
+          nested.push([label, raw]);
+        }
+      }
+      if (facts.length) sections.push({ title: title || 'Summary', facts: facts.slice(0, 16) });
+      for (const [label, child] of nested.slice(0, 8)) visit(child, label, depth + 1);
+    }
+
+    visit(value, null, 0);
+    return { lead, sections };
+  }
+
+  function renderSummary(p, value) {
+    const wrap = el('div', 'mrw-scroll');
+    const summary = el('div', 'mrw-summary');
+    const data = summarySections(value);
+    if (data.lead) summary.append(el('div', 'mrw-summary-lead', data.lead));
+    for (const section of data.sections) {
+      const node = el('section', 'mrw-summary-section');
+      node.append(el('div', 'mrw-summary-title', section.title));
+      const facts = el('div', 'mrw-facts');
+      for (const fact of section.facts) {
+        facts.append(el('div', 'mrw-fact',
+          el('span', 'mrw-fact-label', fact.label),
+          el('span', 'mrw-fact-value', fact.value)));
+      }
+      node.append(facts);
+      summary.append(node);
+    }
+    if (!data.lead && !data.sections.length) {
+      summary.append(
+        el('div', 'mrw-empty-title', 'Completed'),
+        el('div', 'mrw-empty-sub', 'MacRemote kept technical result details out of this view.')
+      );
+    }
+    wrap.append(summary);
+    return wrap;
+  }
+
+  /* The generic profile is deliberately fail-closed. It can acknowledge the
+     outcome and show harmless aggregate facts, but it never projects arbitrary
+     strings from stdout or assistant content into the person-facing view. */
+  function semanticMetricsFrom(text) {
+    const metrics = [];
+    let value;
+    try { value = JSON.parse(String(text || '').trim()); } catch (_) { return metrics; }
+    if (Array.isArray(value)) {
+      metrics.push({ label: 'Items', value: String(value.length) });
+      return metrics;
+    }
+    if (!isObject(value)) return metrics;
+    for (const [key, raw] of Object.entries(value)) {
+      const label = safeKeyLabel(key);
+      if (!label) continue;
+      const normalized = normalizeKey(key);
+      if (typeof raw === 'boolean') {
+        metrics.push({ label, value: raw ? 'Yes' : 'No' });
+      } else if (typeof raw === 'number' && Number.isFinite(raw) &&
+                 /(?:count|total|quantity|number|size)$/.test(normalized)) {
+        metrics.push({ label, value: String(raw) });
+      } else if (Array.isArray(raw)) {
+        metrics.push({ label, value: String(raw.length) });
+      }
+      if (metrics.length >= 8) break;
+    }
+    return metrics;
+  }
+
+  function renderSemanticResult(p) {
+    const box = el('div', 'mrw-empty mrw-semantic');
+    const icon = el('div', 'mrw-empty-icon'); icon.append(I.checkTint());
+    box.append(
+      icon,
+      el('div', 'mrw-empty-title', 'Completed'),
+      el('div', 'mrw-empty-sub', 'MacRemote kept technical result details out of this view.')
+    );
+    const metrics = semanticMetricsFrom(p.stdout);
+    if (metrics.length) box.append(renderMetaChips(metrics));
+    return box;
+  }
+
+  function renderText(p, text) {
+    const safe = safeDisplayText(text, { maximum: 32_000 });
+    return safe ? renderDocument(p, { title: null, body: safe }) : renderSummary(p, null);
+  }
+
+  function renderTask(p) {
+    const box = el('div', 'mrw-empty mrw-task');
+    const icon = el('div', 'mrw-empty-icon'); icon.append(I.checkTint());
+    const status = safeDisplayText(p.task && p.task.status, { singleLine: true, maximum: 80 });
+    box.append(icon,
+      el('div', 'mrw-empty-title', 'Running in the background'),
+      el('div', 'mrw-empty-sub', status && status !== 'working'
+        ? 'Current status: ' + prettyKey(status) + '.'
+        : 'You can keep working while MacRemote finishes this task.'));
+    return box;
+  }
+
+  function renderContentOnly() {
+    const box = el('div', 'mrw-empty');
+    const icon = el('div', 'mrw-empty-icon'); icon.append(I.checkTint());
+    box.append(icon, el('div', 'mrw-empty-title', 'Completed'));
+    return box;
+  }
+
+  /* ════════ ERROR state ════════ */
+  function renderError(p) {
+    const box = el('div', 'mrw-error');
+    const timedOut = p.status === 'timeout';
+    const title = timedOut
+      ? p.tool.name + ' ran out of time'
+      : p.tool.name + ' couldn’t complete this request';
+    const messages = {
+      invalid_argument: 'Check the request and try again.',
+      not_approved: 'The request was not approved on the Mac.',
+      unavailable: 'This tool is not available on the Mac right now.',
+      killed: 'The tool stopped before it finished.',
+      timeout: 'The tool took too long and was stopped.',
+      output_limit: 'The result was larger than this tool allows.',
+      internal_error: 'MacRemote hit an internal problem while handling the result.',
+      nonzero_exit: 'The tool reported that it could not finish.'
+    };
+    const sub = messages[p.reason] || (timedOut
+      ? messages.timeout
+      : 'The tool reported that it could not finish.');
+
+    const icon = el('div', 'mrw-error-icon'); icon.append(I.alert());
+    box.append(el('div', 'mrw-error-head', icon,
+      el('div', null, el('div', 'mrw-error-title', title), el('div', 'mrw-error-sub', sub))));
+
+    return box;
+  }
+
+  /* ════════ EMPTY state ════════ */
+  // Two ways to arrive here: no output at all, or a result that parsed to an
+  // empty collection. The second is the ordinary answer to "what's due today?"
+  // on a clear day, so it says nothing came back — not that nothing ran.
+  function renderEmpty(p) {
+    const box = el('div', 'mrw-empty');
+    const icon = el('div', 'mrw-empty-icon'); icon.append(I.emptyCheck());
+    const emptyResult = !!(p.stdout || '').trim();
+    box.append(icon,
+      el('div', 'mrw-empty-title', 'Completed — nothing to report'),
+      el('div', 'mrw-empty-sub', p.tool.name + ' finished cleanly' +
+        (emptyResult ? ', with nothing to show.' : ', with no output.')));
+    return box;
+  }
+
+  /* ════════ OVERSIZED state ════════ */
+  // stdout came back clipped and what survived doesn't parse — a JSON body cut
+  // mid-object. Rendering the fragment shows a wall of half a record, so the
+  // pretty UI explains the limit and leaves partial wire data hidden.
+  function renderOversized(p, text) {
+    const box = el('div', 'mrw-empty mrw-oversized');
+    const icon = el('div', 'mrw-empty-icon'); icon.append(I.scissors());
+    box.append(icon,
+      el('div', 'mrw-empty-title', 'Output too large to display inline'),
+      el('div', 'mrw-empty-sub',
+        p.tool.name + ' returned more than fits in one result, so it was cut short; ' +
+        'the full output stayed on the Mac.'));
+    const t = p.truncated || {};
+    if (Number.isFinite(t.shown)) {
+      box.append(renderMetaChips([{
+        label: 'Received',
+        value: t.shown.toLocaleString() + ' ' + (t.unit || 'characters')
+      }]));
+    }
+    return box;
+  }
+
+  /* ════════ footer ════════ */
+  function attachmentTypeLabel(mimeType, kind) {
+    const mime = String(mimeType || '').toLowerCase();
+    if (mime.startsWith('image/')) return 'Image';
+    if (mime.startsWith('audio/')) return 'Audio';
+    if (mime.startsWith('video/')) return 'Video';
+    if (mime === 'application/pdf') return 'PDF';
+    if (mime.includes('json')) return 'Data file';
+    if (mime.startsWith('text/')) return 'Text file';
+    return kind === 'resource' ? 'File' : 'Attachment';
+  }
+
+  function readableBytes(value) {
+    if (!Number.isFinite(value) || value < 0) return null;
+    if (value < 1024) return Math.round(value) + ' B';
+    if (value < 1024 * 1024) return (value / 1024).toFixed(1).replace(/\.0$/, '') + ' KB';
+    return (value / (1024 * 1024)).toFixed(1).replace(/\.0$/, '') + ' MB';
+  }
+
+  function renderRichContent(p) {
+    const items = Array.isArray(p.richContent) ? p.richContent : [];
+    if (!items.length) return null;
+    const region = el('section', 'mrw-rich');
+    region.setAttribute('aria-label', 'Related content');
+    region.append(el('div', 'mrw-rich-title', 'Related content'));
+    const list = el('div', 'mrw-rich-list');
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      if (item.kind === 'text') {
+        const text = safeDisplayText(item.text, { maximum: 12_000 });
+        if (text) list.append(el('div', 'mrw-rich-text', text));
+        continue;
+      }
+      const type = attachmentTypeLabel(item.mimeType, item.kind);
+      const name = safeDisplayText(item.name, { singleLine: true, maximum: 180 }) || type;
+      const meta = [type, readableBytes(item.size)].filter(Boolean).join(' · ');
+      const hasWebURI = typeof item.uri === 'string' && /^https?:\/\//i.test(item.uri);
+      const protectedURI = hasWebURI && isCredentialBearingURL(item.uri);
+      let node;
+      if (hasWebURI && !protectedURI) {
+        if (p.onOpenLink) {
+          node = el('button', 'mrw-attachment');
+          node.type = 'button';
+          node.addEventListener('click', () => {
+            Promise.resolve(p.onOpenLink(item.uri)).catch(() => {
+              node.dataset.state = 'failed';
+              node.querySelector('.mrw-attachment-open').textContent = 'Couldn’t open';
+            });
+          });
+        } else {
+          node = el('a', 'mrw-attachment');
+          node.href = item.uri;
+          node.target = '_blank';
+          node.rel = 'noopener noreferrer';
+        }
+      } else {
+        node = el('div', 'mrw-attachment');
+      }
+      node.append(
+        el('span', 'mrw-attachment-icon', type.slice(0, 1)),
+        el('span', 'mrw-attachment-main',
+          el('span', 'mrw-attachment-name', name),
+          el('span', 'mrw-attachment-meta', meta)),
+        hasWebURI
+          ? el('span', 'mrw-attachment-open', protectedURI ? 'Protected link' : 'Open') : null
+      );
+      list.append(node);
+    }
+    if (!list.childNodes.length) return null;
+    region.append(list);
+    return region;
+  }
+
+  function renderFooter(p, displayText) {
+    const f = el('footer', 'mrw-footer');
+    f.append(el('span', 'mrw-footer-spacer'));
+
+    if (displayText) {
+      const copyBtn = el('button', 'mrw-btn');
+      copyBtn.type = 'button';
+      const setCopyLabel = (done) => {
+        copyBtn.textContent = '';
+        copyBtn.append(done ? I.checkTint() : I.copy(), done ? 'Copied' : 'Copy result');
+      };
+      setCopyLabel(false);
+      copyBtn.addEventListener('click', () => {
+        copyToClipboard(displayText).then(() => {
+          copyBtn.dataset.state = 'done'; setCopyLabel(true);
+          setTimeout(() => { delete copyBtn.dataset.state; setCopyLabel(false); }, 1400);
+        });
+      });
+      f.append(copyBtn);
+    }
+
+    if (p.onRunAgain && !(p.retryOnError === false &&
+        (p.status === 'failed' || p.status === 'timeout'))) {
+      const runBtn = el('button', 'mrw-btn mrw-btn-primary');
+      runBtn.type = 'button';
+      runBtn.dataset.mrwRunAgain = 'true';
+      const setRunLabel = (state) => {
+        runBtn.textContent = '';
+        if (state === 'pending') runBtn.append(I.spinner(), 'Running…');
+        else runBtn.append(I.rerun(), 'Run again');
+      };
+      setRunLabel('');
+      runBtn.addEventListener('click', () => {
+        if (runBtn.dataset.state === 'pending') return;
+        runBtn.dataset.state = 'pending'; setRunLabel('pending');
+        Promise.resolve(p.onRunAgain())
+          .catch((error) => {
+            runBtn.title = actionFailureTitle(error, 'Run again');
+          })
+          .finally(() => { delete runBtn.dataset.state; setRunLabel(''); });
+      });
+      f.append(runBtn);
+    }
+    return f;
+  }
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).catch(() => legacyCopy(text));
+    }
+    return legacyCopy(text);
+  }
+  function legacyCopy(text) {
+    return new Promise((res) => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      ta.remove(); res();
+    });
+  }
+
+  /* ════════ mount ════════ */
+  function mount(container, payload) {
+    const p = Object.assign({ stdout: '', status: 'success', tool: { name: 'tool' } }, payload);
+    p.tool = Object.assign({}, p.tool, {
+      name: safeDisplayText(p.tool && p.tool.name, { singleLine: true, maximum: 160 }) || 'Tool'
+    });
+    p.warnings = warningMessagesFromPayload(p);
+    if (p.status === 'success' && p.warnings.length) p.status = 'warning';
+    const state = detectState(p);
+    if (state === 'change' && p.status === 'failed') p.status = 'warning';
+    if (state === 'batch') {
+      const batch = batchPayloadFrom(presentationValueFrom(JSON.parse(p.stdout), p), p);
+      if (batch.rows.every(row => row.state === 'unchanged')) p.status = 'failed';
+      else if (batch.rows.some(row => row.state !== 'done')) p.status = 'warning';
+    }
+    const root = el('div', 'mrw');
+    // Per-tool accent (e.g. RemCTL purple): recolor the accent AND the success
+    // status line/chip so the whole card reads in the tool's color.
+    if (p.accent) {
+      root.style.setProperty('--accent', p.accent);
+      root.style.setProperty('--accent-tint', 'color-mix(in srgb, ' + p.accent + ' 14%, transparent)');
+      root.style.setProperty('--ok', p.accent);
+      root.style.setProperty('--ok-line', p.accent);
+      root.style.setProperty('--ok-tint', 'color-mix(in srgb, ' + p.accent + ' 16%, transparent)');
+    }
+    const card = el('article', 'mrw-card');
+    card.dataset.status = p.status;
+    card.setAttribute('aria-label', p.tool.name + ' — ' + (STATUS[p.status] || STATUS.success).label);
+
+    card.append(el('div', 'mrw-accent'), renderHeader(p));
+    // The oversized state states the truncation itself — the banner would say
+    // the same thing twice.
+    if (p.truncated && state !== 'oversized') card.append(renderTruncated(p.truncated));
+
+    let completeJSON = null;
+    let presentedJSON = null;
+    try {
+      completeJSON = JSON.parse(p.stdout.trim());
+      presentedJSON = presentationValueFrom(completeJSON, p);
+    } catch (_) {}
+    let body;
+    if (state === 'change')     body = renderChange(p, changePayloadFrom(presentedJSON, p));
+    else if (state === 'batch') body = renderBatch(p, batchPayloadFrom(presentedJSON, p));
+    else if (state === 'groups')body = renderSections(p, groupSectionsFrom(presentedJSON, p));
+    else if (state === 'document') body = renderDocument(p, documentPayloadFrom(presentedJSON, p));
+    else if (state === 'table') body = renderTable(p, tableRowsFrom(presentedJSON));
+    else if (state === 'card')  body = renderCard(p, cardRowFrom(presentedJSON, p));
+    else if (state === 'summary') body = renderSummary(p, presentedJSON);
+    else if (state === 'semantic') body = renderSemanticResult(p);
+    else if (state === 'task') body = renderTask(p);
+    else if (state === 'content') body = renderContentOnly();
+    else if (state === 'error') body = renderError(p);
+    else if (state === 'empty') body = renderEmpty(p);
+    else if (state === 'oversized') body = renderOversized(p, p.stdout);
+    else                        body = renderText(p, p.stdout);
+    const context = contextChipsFrom(completeJSON, p);
+    if (context.length) body.append(renderMetaChips(context));
+    card.append(body);
+    if (p.warnings.length && p.status === 'warning' && state !== 'change') card.append(renderWarnings(p.warnings));
+    const rich = renderRichContent(p);
+    if (rich) card.append(rich);
+
+    root.append(card);
+    container.textContent = '';
+    container.append(root);
+
+    // Copy exactly what the person can see. The raw envelope, stderr, and
+    // hidden content never enter the clipboard through this pretty UI.
+    // innerText follows the layout only once the card is in the document;
+    // on a detached card it returns raw textContent, with no line breaks and
+    // with closed menus included.
+    card.classList.add('mrw-copy-read');
+    const visibleResult = safeDisplayText(card.innerText, { maximum: 32_000 });
+    card.classList.remove('mrw-copy-read');
+    card.append(renderFooter(p, visibleResult || null));
+    return { state };
+  }
+
+  return { mount, detectState };
+})();
+</script>
+<script id="macremote-transport">/* ════════════════════════════════════════════════════════════════════════
+   MACREMOTE TRANSPORT — MCP Apps (SEP-1865) host bridge.
+   Raw JSON-RPC 2.0 over postMessage with window.parent. The View initiates
+   ui/initialize; the host streams ui/notifications/tool-input and
+   ui/notifications/tool-result; widget-initiated tools/call rides the same
+   authenticated server connection (and MacRemote's approval gating) via the
+   host. Renders through MacRemoteWidget.mount above.
+   ════════════════════════════════════════════════════════════════════════ */
+(() => {
+"use strict";
+
+const PROTOCOL_VERSION = "2026-01-26";
+const UI_META_KEY = "net.viticci.macremote/ui";
+const rootEl = document.getElementById("mrw-root");
+const documentRoot = document.documentElement;
+const hostFontStyle = document.createElement("style");
+hostFontStyle.id = "mrw-host-fonts";
+document.head.append(hostFontStyle);
+
+let nextID = 1;
+const pending = new Map();
+const appliedStyleVariables = new Set();
+const state = {
+  result: null,
+  toolInput: {},
+  hostCapabilities: {},
+  hostContext: {},
+  hostColorVariables: {},
+  initialized: false,
+  tornDown: false
+};
+let resizeObserver = null;
+let lastReportedSize = null;
+
+// These are the standardized MCP Apps variables that this widget consumes.
+// Ignore arbitrary custom properties from an untrusted message.
+const HOST_STYLE_VARIABLES = new Set([
+  "--color-background-primary", "--color-background-secondary",
+  "--color-background-tertiary", "--color-background-inverse",
+  "--color-background-ghost", "--color-background-info",
+  "--color-background-danger", "--color-background-success",
+  "--color-background-warning", "--color-background-disabled",
+  "--color-text-primary", "--color-text-secondary", "--color-text-tertiary",
+  "--color-text-inverse", "--color-text-ghost", "--color-text-info",
+  "--color-text-danger", "--color-text-success", "--color-text-warning",
+  "--color-text-disabled",
+  "--color-border-primary", "--color-border-secondary", "--color-border-tertiary",
+  "--color-border-inverse", "--color-border-ghost", "--color-border-info",
+  "--color-border-danger", "--color-border-success", "--color-border-warning",
+  "--color-border-disabled",
+  "--color-ring-primary", "--color-ring-secondary", "--color-ring-inverse",
+  "--color-ring-info", "--color-ring-danger", "--color-ring-success",
+  "--color-ring-warning",
+  "--font-sans", "--font-mono", "--font-weight-normal",
+  "--font-weight-medium", "--font-weight-semibold", "--font-weight-bold",
+  "--font-text-xs-size", "--font-text-sm-size", "--font-text-md-size",
+  "--font-text-lg-size", "--font-text-xs-line-height",
+  "--font-text-sm-line-height", "--font-text-md-line-height",
+  "--font-text-lg-line-height",
+  "--border-radius-xs", "--border-radius-sm", "--border-radius-md",
+  "--border-radius-lg", "--border-radius-xl", "--border-radius-full",
+  "--border-width-regular", "--shadow-hairline", "--shadow-sm",
+  "--shadow-md", "--shadow-lg"
+]);
+
+function isPlainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isValidRPCID(value) {
+  return typeof value === "string" ||
+    (typeof value === "number" && Number.isSafeInteger(value));
+}
+
+function isJSONValue(value, ancestors = new Set()) {
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+  if (!Array.isArray(value) && !isPlainObject(value)) return false;
+  if (ancestors.has(value)) return false;
+
+  ancestors.add(value);
+  try {
+    const values = Array.isArray(value) ? value : Object.values(value);
+    return values.every(item => isJSONValue(item, ancestors));
+  } catch (_) {
+    return false;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+const post = (message) => {
+  if (state.tornDown) return false;
+  window.parent.postMessage(message, "*");
+  return true;
+};
+function request(method, params, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (state.tornDown) {
+      reject(new Error("view torn down"));
+      return;
+    }
+    const id = nextID++;
+    // Time out if the host never answers: otherwise the pending Map leaks and
+    // the row's action button stays stuck in its spinner forever.
+    const timer = setTimeout(() => {
+      if (pending.delete(id)) { reject(new Error("timeout")); }
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); }
+    });
+    if (!post({ jsonrpc: "2.0", id, method, params })) {
+      pending.delete(id);
+      clearTimeout(timer);
+      reject(new Error("view torn down"));
+    }
+  });
+}
+const notify = (method, params) => post({ jsonrpc: "2.0", method, params: params || {} });
+
+function rejectPending(reason) {
+  for (const [id, waiter] of pending) {
+    pending.delete(id);
+    waiter.reject(reason);
+  }
+}
+
+function jsonRPCError(id, code, message) {
+  post({ jsonrpc: "2.0", id, error: { code, message } });
+}
+
+function validToolResult(result) {
+  if (!isPlainObject(result)) return false;
+  const has = (key) => Object.prototype.hasOwnProperty.call(result, key);
+  if (result.resultType === "task") {
+    return typeof result.taskId === "string" && result.taskId.length > 0 &&
+      typeof result.status === "string" &&
+      (!has("_meta") || (isPlainObject(result._meta) && isJSONValue(result._meta)));
+  }
+  if (!has("content") || !Array.isArray(result.content) || !isJSONValue(result.content)) return false;
+  if (has("structuredContent") && !isJSONValue(result.structuredContent)) return false;
+  if (has("_meta") && (!isPlainObject(result._meta) || !isJSONValue(result._meta))) return false;
+  if (has("isError") && typeof result.isError !== "boolean") return false;
+  return true;
+}
+
+function handleHostMessage(event) {
+  if (event.source !== window.parent) { return; }
+  const msg = event.data;
+  if (!isPlainObject(msg) || msg.jsonrpc !== "2.0") { return; }
+
+  const hasResult = Object.prototype.hasOwnProperty.call(msg, "result");
+  const hasError = Object.prototype.hasOwnProperty.call(msg, "error");
+  if (isValidRPCID(msg.id) && hasResult !== hasError) {
+    const waiter = pending.get(msg.id);
+    if (waiter) {
+      pending.delete(msg.id);
+      if (hasError) {
+        const detail = isPlainObject(msg.error) && typeof msg.error.message === "string"
+          ? msg.error.message : "Host request failed";
+        waiter.reject(new Error(detail));
+      } else {
+        waiter.resolve(msg.result);
+      }
+    }
+    return;
+  }
+  if (typeof msg.method !== "string") return;
+
+  switch (msg.method) {
+    case "ui/notifications/tool-input":
+      if (!isPlainObject(msg.params) || !isPlainObject(msg.params.arguments)) return;
+      state.toolInput = msg.params.arguments;
+      break;
+    case "ui/notifications/tool-result":
+      if (!validToolResult(msg.params)) return;
+      state.standardResult = true;
+      state.result = msg.params;
+      renderResult();
+      break;
+    case "ui/notifications/tool-cancelled": {
+      if (msg.params !== undefined && !isPlainObject(msg.params)) return;
+      const waiting = document.createElement("div");
+      waiting.className = "mrw-waiting";
+      // A host-supplied cancellation reason can contain a command or path.
+      // The pretty UI needs only the truthful terminal state.
+      waiting.textContent = "Cancelled";
+      rootEl.replaceChildren(waiting);
+      break;
+    }
+    case "ui/notifications/host-context-changed":
+      if (!isPlainObject(msg.params)) return;
+      // The final schema sends the Partial<HostContext> directly. Accept the
+      // older wrapper too while hosts finish migrating.
+      applyHostContext(isPlainObject(msg.params.hostContext) ? msg.params.hostContext : msg.params);
+      break;
+    case "ui/resource-teardown":
+      if (!isValidRPCID(msg.id)) return;
+      post({ jsonrpc: "2.0", id: msg.id, result: {} });
+      state.tornDown = true;
+      rejectPending(new Error("view torn down"));
+      if (resizeObserver) resizeObserver.disconnect();
+      window.removeEventListener("message", handleHostMessage);
+      window.removeEventListener("openai:set_globals", receiveCompatibilityResult);
+      break;
+    case "ping":
+      if (isValidRPCID(msg.id)) post({ jsonrpc: "2.0", id: msg.id, result: {} });
+      break;
+    default:
+      if (isValidRPCID(msg.id)) jsonRPCError(msg.id, -32601, "Method not found.");
+  }
+}
+window.addEventListener("message", handleHostMessage);
+
+function receiveCompatibilityResult() {
+  if (state.tornDown) return;
+  if (state.standardResult) { renderResult(); return; }
+  const host = window.openai;
+  if (!host || host.toolOutput == null || !isJSONValue(host.toolOutput)) return;
+  const output = host.toolOutput;
+  state.result = validToolResult(output) ? output : {
+    structuredContent: output, content: [],
+    _meta: isPlainObject(host.toolResponseMetadata) ? host.toolResponseMetadata : {}
+  };
+  if (isPlainObject(host.toolInput)) state.toolInput = host.toolInput;
+  renderResult();
+}
+window.addEventListener("openai:set_globals", receiveCompatibilityResult);
+queueMicrotask(receiveCompatibilityResult);
+
+function mergeContext(base, patch) {
+  const merged = isPlainObject(base) ? { ...base } : {};
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (isPlainObject(value) && isPlainObject(merged[key])) {
+      merged[key] = mergeContext(merged[key], value);
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function finitePixels(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.min(value, 100000) + "px" : "";
+}
+
+// ——— color scheme and host colors ———
+// The frame's backdrop comes from the widget's own color scheme whenever it
+// differs from the page around the frame, so the scheme must follow the app's
+// theme, and host text colors are used only when they belong to that theme.
+const colorProbe = (() => {
+  try { return document.createElement("canvas").getContext("2d", { willReadFrequently: true }); }
+  catch (_) { return null; }
+})();
+const prefersDarkQuery = typeof matchMedia === "function"
+  ? matchMedia("(prefers-color-scheme: dark)") : null;
+// Above this relative luminance a color reads as light: it has more contrast
+// with black than with white.
+const LIGHT_LUMINANCE = 0.179;
+
+// WCAG relative luminance of any CSS color the canvas understands, or null
+// when it can't tell (unsupported syntax, mostly transparent).
+function colorLuminance(value) {
+  if (!colorProbe || typeof value !== "string" || !value.trim()) return null;
+  const sentinel = "#010203";
+  colorProbe.fillStyle = sentinel;
+  colorProbe.fillStyle = value;
+  if (String(colorProbe.fillStyle).toLowerCase() === sentinel &&
+      value.trim().toLowerCase() !== sentinel) return null;
+  colorProbe.clearRect(0, 0, 1, 1);
+  colorProbe.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = colorProbe.getImageData(0, 0, 1, 1).data;
+  if (a < 128) return null;
+  const linear = (channel) => {
+    const c = channel / 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+function contrastRatio(a, b) {
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+// The app's declared theme wins. A host that sends colors but no theme gets
+// the theme its primary text color implies.
+function resolvedTheme(ctx, colors) {
+  if (ctx.theme === "dark" || ctx.theme === "light") return ctx.theme;
+  const text = colorLuminance(colors["--color-text-primary"]);
+  if (text !== null) return text > LIGHT_LUMINANCE ? "dark" : "light";
+  const background = colorLuminance(colors["--color-background-primary"]);
+  if (background !== null) return background > LIGHT_LUMINANCE ? "light" : "dark";
+  return null;
+}
+
+// The widget's own fallbacks for the host colors hostColorsFit checks, the
+// same values as the .mrw tokens' light-dark() pairs.
+const WIDGET_COLORS = {
+  light: {
+    "--color-text-primary": "#1d1d1f", "--color-text-secondary": "#6e6e73",
+    "--color-text-tertiary": "#6e6e73",
+    "--color-background-primary": "#ffffff", "--color-background-secondary": "#f6f6f8"
+  },
+  dark: {
+    "--color-text-primary": "#f5f5f7", "--color-text-secondary": "#a1a1a6",
+    "--color-text-tertiary": "#8e8e93",
+    "--color-background-primary": "#1d1d20", "--color-background-secondary": "#161619"
+  }
+};
+const CHECKED_TEXT_COLORS = ["--color-text-primary", "--color-text-secondary", "--color-text-tertiary"];
+const CHECKED_BACKGROUND_COLORS = ["--color-background-primary", "--color-background-secondary"];
+
+// Host colors fit when their text is light on a dark theme (dark on a light
+// one), their backgrounds are the reverse, and every text color reaches WCAG
+// AA (4.5:1) on every background, as rendered: a color the host leaves out
+// is the widget's own. A color the host sends but the widget can't measure
+// fails, so nothing unchecked reaches the card.
+function hostColorsFit(theme, colors) {
+  const dark = theme ? theme === "dark" : !!(prefersDarkQuery && prefersDarkQuery.matches);
+  const own = WIDGET_COLORS[dark ? "dark" : "light"];
+  const isLight = (value) => value > LIGHT_LUMINANCE;
+  const rendered = (key) => {
+    const sent = typeof colors[key] === "string" && colors[key].trim() !== "";
+    return { sent, luminance: colorLuminance(sent ? colors[key] : own[key]) };
+  };
+  const texts = CHECKED_TEXT_COLORS.map(rendered);
+  const backgrounds = CHECKED_BACKGROUND_COLORS.map(rendered);
+  for (const color of texts.concat(backgrounds)) {
+    if (color.luminance === null) return false;
+  }
+  if (texts.some(text => text.sent && isLight(text.luminance) !== dark)) return false;
+  if (backgrounds.some(background => background.sent && isLight(background.luminance) === dark)) return false;
+  return texts.every(text => backgrounds.every(background =>
+    contrastRatio(text.luminance, background.luminance) >= 4.5));
+}
+
+function applyColorScheme() {
+  const colors = state.hostColorVariables || {};
+  const theme = resolvedTheme(state.hostContext, colors);
+  if (theme) documentRoot.dataset.mrwTheme = theme;
+  documentRoot.dataset.mrwHostColors = hostColorsFit(theme, colors) ? "used" : "ignored";
+}
+
+if (prefersDarkQuery && typeof prefersDarkQuery.addEventListener === "function") {
+  prefersDarkQuery.addEventListener("change", applyColorScheme);
+}
+
+function applyHostContext(patch) {
+  if (!isPlainObject(patch)) return;
+  state.hostContext = mergeContext(state.hostContext, patch);
+  const ctx = state.hostContext;
+
+  const variables = isPlainObject(ctx.styles) && isPlainObject(ctx.styles.variables)
+    ? ctx.styles.variables : {};
+  const applied = {};
+  for (const key of appliedStyleVariables) documentRoot.style.removeProperty(key);
+  appliedStyleVariables.clear();
+  for (const [key, value] of Object.entries(variables)) {
+    if (!HOST_STYLE_VARIABLES.has(key) || typeof value !== "string" || value.length > 4096) continue;
+    documentRoot.style.setProperty(key, value);
+    appliedStyleVariables.add(key);
+    applied[key] = value;
+  }
+  state.hostColorVariables = applied;
+  applyColorScheme();
+
+  const css = isPlainObject(ctx.styles) && isPlainObject(ctx.styles.css)
+    ? ctx.styles.css : {};
+  hostFontStyle.textContent = typeof css.fonts === "string" && css.fonts.length <= 20000
+    ? css.fonts : "";
+
+  const dimensions = isPlainObject(ctx.containerDimensions) ? ctx.containerDimensions : {};
+  documentRoot.style.width = finitePixels(dimensions.width) ? "100%" : "";
+  documentRoot.style.maxWidth = finitePixels(dimensions.maxWidth);
+  documentRoot.style.height = finitePixels(dimensions.height) ? "100%" : "";
+  documentRoot.style.maxHeight = finitePixels(dimensions.maxHeight);
+  documentRoot.dataset.mrwWidthMode = finitePixels(dimensions.width) ? "fixed" : "flexible";
+  documentRoot.dataset.mrwHeightMode = finitePixels(dimensions.height) ? "fixed" : "flexible";
+
+  const safeArea = isPlainObject(ctx.safeAreaInsets) ? ctx.safeAreaInsets : {};
+  for (const edge of ["top", "right", "bottom", "left"]) {
+    const value = finitePixels(safeArea[edge]) || "0px";
+    documentRoot.style.setProperty("--mrw-safe-" + edge, value);
+  }
+
+  if (typeof ctx.displayMode === "string") {
+    documentRoot.dataset.mrwDisplayMode = ctx.displayMode;
+  }
+  if (typeof ctx.platform === "string") {
+    documentRoot.dataset.mrwPlatform = ctx.platform;
+  }
+}
+
+function canCallServerTools() {
+  return isPlainObject(state.hostCapabilities.serverTools);
+}
+
+function canOpenLinks() {
+  return isPlainObject(state.hostCapabilities.openLinks);
+}
+
+(function boot() {
+  pending.set(0, {
+    resolve: (result) => {
+      if (!isPlainObject(result)) return;
+      state.hostCapabilities = isPlainObject(result.hostCapabilities)
+        ? result.hostCapabilities : {};
+      applyHostContext(result.hostContext);
+      state.initialized = true;
+      notify("ui/notifications/initialized");
+    },
+    reject: () => { /* standalone preview: no host, stay quiet */ }
+  });
+  post({
+    jsonrpc: "2.0", id: 0, method: "ui/initialize",
+    params: {
+      appInfo: { name: "MacRemote Output", version: "1.0.1" },
+      appCapabilities: {},
+      protocolVersion: PROTOCOL_VERSION
+    }
+  });
+})();
+
+function reportSize() {
+  if (!state.initialized || state.tornDown) return;
+  const rect = documentRoot.getBoundingClientRect();
+  const width = Math.ceil(rect.width);
+  // A card the owner turned off asks the host for no height at all.
+  const cardOff = documentRoot.dataset.mrwCard === "off";
+  const height = cardOff ? 0 : Math.ceil(rect.height);
+  if (!Number.isFinite(width) || width <= 0 ||
+      !Number.isFinite(height) || (height <= 0 && !cardOff)) return;
+  const size = width + "x" + height;
+  if (size === lastReportedSize) return;
+  lastReportedSize = size;
+  notify("ui/notifications/size-changed", { width, height });
+}
+
+resizeObserver = new ResizeObserver(reportSize);
+resizeObserver.observe(document.body);
+
+/* Resolve {input.name} (collected inputs) then {field} (row) placeholders. */
+function substitute(value, row, inputs, typed) {
+  // Only substitute primitives; an array/object field would String()-coerce
+  // to "a,b" / "[object Object]" and silently corrupt the argv. Leave the
+  // placeholder untouched instead so a misconfigured action fails loudly.
+  const primitive = (v) => v !== undefined && v !== null && typeof v !== "object";
+  if (typeof value === "string") {
+    // An object property that is exactly one row placeholder keeps the row
+    // value's type, so a numeric id reaches a typed tool schema as a number.
+    // Array items are argv-style and always stay strings.
+    const whole = typed ? /^\{([A-Za-z0-9_]+)\}$/.exec(value) : null;
+    if (whole && primitive(row[whole[1]])) { return row[whole[1]]; }
+    return value.replace(/\{([A-Za-z0-9_.]+)\}/g, (m, field) => {
+      if (field.startsWith("input.")) {
+        const v = (inputs || {})[field.slice(6)];
+        return primitive(v) ? String(v) : m;
+      }
+      return primitive(row[field]) ? String(row[field]) : m;
+    });
+  }
+  if (Array.isArray(value)) { return value.map(v => substitute(v, row, inputs, false)); }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value)) { out[k] = substitute(value[k], row, inputs, true); }
+    return out;
+  }
+  return value;
+}
+
+function isExecutionEnvelope(value) {
+  return isPlainObject(value) &&
+    typeof value.succeeded === "boolean" &&
+    typeof value.stdout === "string" &&
+    typeof value.stderr === "string" &&
+    typeof value.timedOut === "boolean";
+}
+
+function firstTextContent(result) {
+  if (!Array.isArray(result.content)) return "";
+  const block = result.content.find(item =>
+    isPlainObject(item) &&
+    item.type === "text" &&
+    typeof item.text === "string" &&
+    isAssistantVisible(item)
+  );
+  return block ? block.text : "";
+}
+
+function isAssistantVisible(block) {
+  const annotations = isPlainObject(block && block.annotations) ? block.annotations : {};
+  if (!Array.isArray(annotations.audience)) return true;
+  return annotations.audience.includes("assistant");
+}
+
+function isExplicitAssistantContent(block) {
+  const annotations = isPlainObject(block && block.annotations) ? block.annotations : {};
+  return Array.isArray(annotations.audience) && annotations.audience.includes("assistant");
+}
+
+function structuredTextMatches(text, structuredContent) {
+  if (typeof text !== "string" || structuredContent === undefined) return false;
+  try {
+    return JSON.stringify(JSON.parse(text)) === JSON.stringify(structuredContent);
+  } catch (_) {
+    return typeof structuredContent === "string" && text.trim() === structuredContent.trim();
+  }
+}
+
+function richContentFrom(result, structuredContent, env, includeText) {
+  if (!Array.isArray(result.content)) return [];
+  const rich = [];
+  const primaryFallback = firstTextContent(result).trim();
+  for (const block of result.content) {
+    if (!isPlainObject(block) || !isAssistantVisible(block)) continue;
+    if (block.type === "text" && typeof block.text === "string") {
+      if (!includeText) continue;
+      const text = block.text.trim();
+      // An unannotated text block next to structured content is normally the
+      // model fallback serialization. Only an explicit assistant-audience
+      // block is additional prose that belongs in this visual result.
+      if (!text || (structuredContent !== undefined && !isExplicitAssistantContent(block)) ||
+          (structuredContent === undefined && text === primaryFallback) ||
+          structuredTextMatches(text, structuredContent) ||
+          (env && text === env.stdout.trim())) continue;
+      rich.push({ kind: "text", text });
+      continue;
+    }
+    if (block.type === "resource_link" && typeof block.uri === "string") {
+      rich.push({
+        kind: "resource", uri: block.uri,
+        name: typeof block.title === "string" ? block.title : block.name,
+        mimeType: typeof block.mimeType === "string" ? block.mimeType : null,
+        size: Number.isFinite(block.size) ? block.size : null
+      });
+      continue;
+    }
+    if (block.type === "image" || block.type === "audio") {
+      rich.push({
+        kind: block.type,
+        name: block.type === "image" ? "Image result" : "Audio result",
+        mimeType: typeof block.mimeType === "string" ? block.mimeType : null
+      });
+      continue;
+    }
+    if (block.type === "resource" && isPlainObject(block.resource)) {
+      const resource = block.resource;
+      if (typeof resource.text === "string" && includeText) {
+        rich.push({ kind: "text", text: resource.text });
+      } else if (typeof resource.text !== "string") {
+        rich.push({
+          kind: "resource",
+          name: typeof resource.title === "string" ? resource.title : resource.name,
+          mimeType: typeof resource.mimeType === "string" ? resource.mimeType : null
+        });
+      }
+    }
+  }
+  return rich;
+}
+
+function structuredContentText(value) {
+  if (typeof value === "string") return value;
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function renderResult() {
+  const result = state.result || {};
+  const hasStructuredContent = Object.prototype.hasOwnProperty.call(result, "structuredContent");
+  const structuredContent = hasStructuredContent ? result.structuredContent : undefined;
+  let env = isExecutionEnvelope(structuredContent) ? structuredContent : null;
+  if (!hasStructuredContent) {
+    try {
+      const fallback = JSON.parse(firstTextContent(result));
+      if (isExecutionEnvelope(fallback)) env = fallback;
+    } catch (_) {}
+  }
+  const task = result.resultType === "task" ? result : null;
+  const resultMeta = isPlainObject(result._meta) ? result._meta : {};
+  // Some hosts deliver the widget-only metadata through their compatibility
+  // bridge. Standard result metadata always wins when both are present.
+  const compatMeta = isPlainObject(window.openai && window.openai.toolResponseMetadata)
+    ? window.openai.toolResponseMetadata : {};
+  const candidateMeta = resultMeta[UI_META_KEY] || compatMeta[UI_META_KEY];
+  // MacRemote attaches this metadata to every result whose card the owner
+  // allows (SPEC D77). A host can still show the card from a tool list it
+  // cached before the owner turned cards off; ChatGPT keeps one until the
+  // connector is refreshed. Such a result arrives without the metadata, so
+  // the card draws nothing and collapses. A later delivery that carries the
+  // metadata renders normally again.
+  if (!isPlainObject(candidateMeta)) {
+    documentRoot.dataset.mrwCard = "off";
+    rootEl.replaceChildren();
+    reportSize();
+    return;
+  }
+  delete documentRoot.dataset.mrwCard;
+  const meta = candidateMeta;
+  const profile = ["reminderRows", "noteRows"].includes(meta.profile)
+    ? meta.profile : "semanticResult";
+  const actions = canCallServerTools() && Array.isArray(meta.actions)
+    ? meta.actions.filter(isPlainObject) : [];
+  const byId = {};
+  for (const a of actions) { byId[a.id] = a; }
+  const check = actions.find(a => a.kind === "checkOff") || null;
+
+  const table = isPlainObject(meta.table) ? meta.table : {};
+  const stdout = env
+    ? env.stdout
+    : (task ? "" : (hasStructuredContent ? structuredContentText(structuredContent) : firstTextContent(result)));
+  MacRemoteWidget.mount(rootEl, {
+    tool: { name: typeof meta.toolTitle === "string"
+      ? meta.toolTitle
+      : (env && typeof env.toolName === "string" ? env.toolName : "Tool") },
+    status: env
+      ? (env.timedOut ? "timeout" : (env.succeeded ? "success" : "failed"))
+      : (result.isError === true ? "failed" : "success"),
+    profile,
+    accent: typeof meta.accent === "string" ? meta.accent : null,
+    columns: Array.isArray(table.columns) ? table.columns : null,
+    hiddenColumns: Array.isArray(table.hiddenColumns) ? table.hiddenColumns : null,
+    rootPath: typeof table.rootPath === "string" ? table.rootPath : null,
+    document: isPlainObject(table.document) ? table.document : null,
+    context: Array.isArray(table.context) ? table.context.filter(isPlainObject) : null,
+    retryOnError: table.retryOnError !== false,
+    // Curated multi-value presentation: ordered sections for a payload with
+    // several row arrays, and the confirmation shape for a change command.
+    groups: Array.isArray(table.groups) ? table.groups.filter(isPlainObject) : null,
+    change: isPlainObject(table.change) ? table.change : null,
+    stdout,
+    reason: env && typeof env.reason === "string" ? env.reason : null,
+    task,
+    richContent: richContentFrom(result, structuredContent, env, profile !== "semanticResult"),
+    truncated: env && env.truncatedStdout
+      ? { shown: env.stdout.length, total: null, unit: "characters" }
+      : null,
+    rowActions: actions.map(a => ({
+      id: a.id,
+      kind: a.kind === "checkOff" ? "check" : "button",
+      label: a.title,
+      doneLabel: "Done",
+      title: a.title,
+      style: a.style || "normal",
+      inputs: a.inputs || null
+    })),
+    isRowCompleted: check ? (row) => {
+      const v = row[check.completedWhenField];
+      return check.completedWhenEquals != null ? String(v) === check.completedWhenEquals : !!v;
+    } : null,
+    actionApplies: (act, row) => {
+      const raw = byId[act.id];
+      const requiredFields = raw && Array.isArray(raw.requiredRowFields)
+        ? raw.requiredRowFields.filter(field => typeof field === "string")
+        : [];
+      if (row.deleted === true || row.isDeleted === true) return false;
+      return !raw || requiredFields.every(f => row[f] !== undefined && row[f] !== null);
+    },
+    onAction: canCallServerTools() ? (actionId, row, inputValues) => {
+      const raw = byId[actionId];
+      if (!raw) { return Promise.reject(new Error("unknown action")); }
+      return request("tools/call", {
+        name: raw.toolName,
+        arguments: substitute(raw.arguments, row, inputValues)
+      }).then(r => {
+        if (r && r.isError === true) {
+          // Do not copy subprocess output into a tooltip. The action remains
+          // visibly failed while implementation details stay on the Mac.
+          throw new Error("The action could not be completed.");
+        }
+      });
+    } : null,
+    onRunAgain: canCallServerTools() && meta.toolName && meta.capability === "readOnly"
+      ? () => request("tools/call", { name: meta.toolName, arguments: state.toolInput || {} })
+          .then(r => { state.result = r; renderResult(); })
+      : null,
+    onOpenLink: canOpenLinks()
+      ? (url) => request("ui/open-link", { url })
+      : null
+  });
+  // ResizeObserver is the steady-state path. Report synchronously after the
+  // initial render too; otherwise a compact result can fit inside the host's
+  // placeholder frame without producing an observer transition.
+  reportSize();
+}
+})();
+</script>
+</body>
+</html>
