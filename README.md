@@ -88,7 +88,7 @@ helper it needs by itself.
 3. **Pick a tool.** For your first test, select **Current Date** in the
    Welcome window. It's read-only and built into macOS.
 4. **Go public.** Choose **Instant Link**, install the helper if asked, and
-   choose **Start Instant Link**.
+   choose **Start Instant Link**. If you want to run it at your stable domain name, read [Your Domain](INSTALL.md#your-domain).
 5. **Connect your app.** Paste the public URL, which ends in `/mcp`, into
    ChatGPT, Claude, or another MCP app. Your browser and MacRemote both show a
    six-digit code. Approve the request in MacRemote only when they match.
@@ -98,6 +98,7 @@ That's it. Ask your AI app what day it is, and the answer comes from your Mac.
 [INSTALL.md](INSTALL.md) covers the first run in detail, including how to
 check that the app is the notarized one and how to set up a permanent address
 with [Your Domain](INSTALL.md#your-domain).
+
 ChatGPT users should also read
 [Connect ChatGPT](docs/CHATGPT.md).
 
