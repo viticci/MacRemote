@@ -22,13 +22,9 @@ I use AI agents every day, on every device I own. Most of them run in isolated c
 
 A lot of the stuff I care about lives on my Mac: my reminders and notes, my files, assets for articles I'm researching, and a pile of command-line tools I've built over the years. I wanted my AI apps to use those things, from my iPhone or anywhere else, without jumping through the hoops of serving a Cloudflare Tunnel myself and dealing with a terminal.
 
-So I made MacRemote. It's a native Mac app that shares the tools you pick with ChatGPT, Claude, Muse, Grok Bot, and other AI apps over MCP.
+So I made MacRemote. It's a native Mac app that shares the tools you pick with ChatGPT, Claude, Muse, Grok Bot, and other AI apps over MCP. MacRemote is based on the latest MCP spec ([2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)) and comes with initial support for new features such as [Skills](https://modelcontextprotocol.io/extensions/skills/overview), [Tasks](https://modelcontextprotocol.io/extensions/tasks/overview), and [File Uploads](https://modelcontextprotocol.io/community/working-groups/file-uploads) over MCP. It also supports [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) and is backwards-compatible with earlier MCP versions.
 
-The idea is simple: your Mac, your rules. You choose every tool an app can
-see. You approve every new app on the Mac. Anything that can change something
-asks you first and shows you exactly what it's about to run.
-
-— Federico
+The idea is simple: your Mac, your rules. You choose every tool an app can see. You approve every new AI app that wants to connect to your Mac. Anything that can change something asks you first and shows you exactly what it's about to run.
 
 ## What It Does
 
