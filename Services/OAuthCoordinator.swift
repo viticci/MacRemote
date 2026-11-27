@@ -1890,27 +1890,44 @@ final class OAuthCoordinator: @unchecked Sendable {
     }
 
     private func redirectURI(for authorization: PendingAuthorization, code: String) -> String {
-        var components = URLComponents(string: authorization.redirectURI)
-        var items = components?.queryItems ?? []
-        items.append(URLQueryItem(name: "code", value: code))
-        items.append(URLQueryItem(name: "iss", value: authorization.issuer))
+        var items = [
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "iss", value: authorization.issuer)
+        ]
         if let state = authorization.state {
             items.append(URLQueryItem(name: "state", value: state))
         }
-        components?.queryItems = items
-        return components?.string ?? authorization.redirectURI
+        return Self.appendingQueryItems(items, to: authorization.redirectURI)
     }
 
     private func errorRedirectURI(for authorization: PendingAuthorization, error: String) -> String {
-        var components = URLComponents(string: authorization.redirectURI)
-        var items = components?.queryItems ?? []
-        items.append(URLQueryItem(name: "error", value: error))
-        items.append(URLQueryItem(name: "iss", value: authorization.issuer))
+        var items = [
+            URLQueryItem(name: "error", value: error),
+            URLQueryItem(name: "iss", value: authorization.issuer)
+        ]
         if let state = authorization.state {
             items.append(URLQueryItem(name: "state", value: state))
         }
-        components?.queryItems = items
-        return components?.string ?? authorization.redirectURI
+        return Self.appendingQueryItems(items, to: authorization.redirectURI)
+    }
+
+    /// Adds MacRemote's values to a client's callback address and leaves the
+    /// client's own query exactly as registered. Values are encoded the way
+    /// URLComponents encodes them, except `+` becomes `%2B`: URLComponents
+    /// leaves `+` alone, and web servers read a bare `+` as a space, which
+    /// would corrupt a base64 `state` such as `k9F+2x==`.
+    static func appendingQueryItems(_ items: [URLQueryItem], to redirectURI: String) -> String {
+        guard var components = URLComponents(string: redirectURI) else { return redirectURI }
+        var encoder = URLComponents()
+        encoder.queryItems = items
+        // After URLComponents encoding, a `+` can only be a literal one.
+        let added = (encoder.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B")
+        if let existing = components.percentEncodedQuery, !existing.isEmpty {
+            components.percentEncodedQuery = existing + "&" + added
+        } else {
+            components.percentEncodedQuery = added
+        }
+        return components.string ?? redirectURI
     }
 
     static func pkceChallenge(for verifier: String) -> String {

@@ -967,6 +967,50 @@ struct OAuthCoordinatorTests {
         #expect(reloaded.connectedClientSnapshot().first?.name == "Notion")
     }
 
+    /// Issue #13: a base64 `state` with `+` must reach the client intact.
+    /// Servers read a bare `+` in a query as a space, so it must go out as `%2B`.
+    @Test func callbackKeepsPlusSignsInState() throws {
+        let coordinator = OAuthCoordinator(grantStore: OAuthGrantStore(userDefaults: try isolatedOAuthDefaults()))
+        let issuer = "https://macremote.example.com"
+        let resource = "\(issuer)/mcp/b06386fec5a37604c776b341e89f53aa"
+        let state = "k9F+2x/c=d=="
+        let requestID = try coordinator.beginAuthorization(
+            queryItems: [
+                "response_type": "code",
+                "client_id": "https://claude.ai/oauth/mcp-oauth-client-metadata",
+                "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+                "scope": "mcp:tools",
+                "state": state,
+                "code_challenge": OAuthCoordinator.pkceChallenge(for: validPKCEVerifier("plus-state")),
+                "code_challenge_method": "S256",
+                "resource": resource
+            ],
+            issuer: issuer,
+            resource: resource
+        )
+        #expect(coordinator.approve(requestID: requestID))
+        let redirect = try #require(coordinator.authorizationStatus(requestID: requestID)["redirect_uri"] as? String)
+
+        // Decode the way a web server does: `+` is a space, then %XX.
+        let query = try #require(URLComponents(string: redirect)?.percentEncodedQuery)
+        let fields = Dictionary(uniqueKeysWithValues: query.split(separator: "&").map { pair in
+            let parts = pair.split(separator: "=", maxSplits: 1).map {
+                $0.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? ""
+            }
+            return (parts[0], parts.count > 1 ? parts[1] : "")
+        })
+        #expect(fields["state"] == state)
+        #expect(fields["iss"] == issuer)
+        #expect(fields["code"]?.isEmpty == false)
+
+        // The client's own query stays exactly as registered.
+        let withQuery = OAuthCoordinator.appendingQueryItems(
+            [URLQueryItem(name: "state", value: "a+b")],
+            to: "https://example.com/cb?tenant=x%2By&n=1+2"
+        )
+        #expect(withQuery == "https://example.com/cb?tenant=x%2By&n=1+2&state=a%2Bb")
+    }
+
     /// Claude's "Use Claude's published identity" option: the client ID is a
     /// web address, and nothing was registered first.
     @Test func claudeSignsInWithItsPublishedIdentity() throws {
