@@ -96,7 +96,71 @@ enum ExecutableLocator {
             "\(homeDirectory)/.bun/bin",
             "\(homeDirectory)/.deno/bin",
             "\(homeDirectory)/.grok/bin",
-        ]
+            // JavaScript package managers' global install folders. An app
+            // opened from Finder never sees the PATH a shell profile adds for
+            // these, so a CLI installed with `npm -g` would look missing.
+            "\(homeDirectory)/.npm-global/bin",
+            "\(homeDirectory)/.volta/bin",
+            "\(homeDirectory)/Library/pnpm",
+            "\(homeDirectory)/.yarn/bin",
+        ] + npmPrefixBinDirectories(homeDirectory: homeDirectory)
+    }
+
+    /// The largest `~/.npmrc` MacRemote reads. A real one is a few lines.
+    private static let maximumNPMRCBytes = 64 * 1024
+
+    /// The `bin` folder of the global npm prefix set in `~/.npmrc`, so a CLI
+    /// installed with `npm -g` under any custom prefix is found. This reads
+    /// the file only; it never runs npm or a shell.
+    static func npmPrefixBinDirectories(homeDirectory: String) -> [String] {
+        let url = URL(fileURLWithPath: homeDirectory).appendingPathComponent(".npmrc")
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return []
+        }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maximumNPMRCBytes),
+              let contents = String(data: data, encoding: .utf8),
+              let prefix = npmPrefix(fromNPMRC: contents, homeDirectory: homeDirectory) else {
+            return []
+        }
+        return [URL(fileURLWithPath: prefix).appendingPathComponent("bin").standardizedFileURL.path]
+    }
+
+    /// The `prefix` an npmrc sets, as an absolute path, or nil when it sets
+    /// none or sets one that isn't an absolute path. Like npm, the last
+    /// `prefix` line wins. `~` and `$HOME`/`${HOME}` expand to the home
+    /// folder; any other variable makes the value unusable.
+    static func npmPrefix(fromNPMRC contents: String, homeDirectory: String) -> String? {
+        var prefix: String?
+        for rawLine in contents.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("#"), !line.hasPrefix(";"),
+                  let equals = line.firstIndex(of: "=") else {
+                continue
+            }
+            let key = line[..<equals].trimmingCharacters(in: .whitespaces)
+            guard key == "prefix" else {
+                continue
+            }
+            var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            if value.count >= 2,
+               let first = value.first, first == "\"" || first == "'",
+               value.last == first {
+                value = String(value.dropFirst().dropLast())
+            }
+            prefix = value
+        }
+        guard var value = prefix, !value.isEmpty else {
+            return nil
+        }
+        for home in ["~", "${HOME}", "$HOME"] where value == home || value.hasPrefix(home + "/") {
+            value = homeDirectory + value.dropFirst(home.count)
+            break
+        }
+        guard value.hasPrefix("/"), !value.contains("$") else {
+            return nil
+        }
+        return value
     }
 
     private static func uniqued(_ values: [String]) -> [String] {

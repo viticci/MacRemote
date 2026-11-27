@@ -98,6 +98,8 @@ enum CLIScanState: Equatable, Sendable {
 ```
 /opt/homebrew/bin  /opt/homebrew/sbin  /usr/local/bin  /usr/local/sbin
 ~/.local/bin  ~/bin  ~/.cargo/bin  ~/.bun/bin  ~/.deno/bin  ~/.grok/bin
+~/.npm-global/bin  ~/.volta/bin  ~/Library/pnpm  ~/.yarn/bin
+<prefix>/bin                  ← `prefix=` in ~/.npmrc (read only; npm never runs)
 ~/go/bin                      ← ADD to ExecutableLocator.userBinDirectories (standard Go target, missing today)
 ~/Library/Python/*/bin        ← ADD as a glob (pip --user scripts; scan every version dir)
 ```

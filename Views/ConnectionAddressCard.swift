@@ -384,7 +384,7 @@ struct ConnectionAddressCard: View {
         if appModel.hasWranglerForCloudflareSetup {
             return "No token pasted. Load Domains and Deploy use Wrangler if it is signed in on this Mac."
         }
-        return "Paste an API token before loading domains. Wrangler isn't installed on this Mac."
+        return "Paste an API token before loading domains. MacRemote couldn't find Wrangler on this Mac."
     }
 
     private var deployHintRow: some View {
