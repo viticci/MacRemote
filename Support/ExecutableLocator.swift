@@ -96,7 +96,64 @@ enum ExecutableLocator {
             "\(homeDirectory)/.bun/bin",
             "\(homeDirectory)/.deno/bin",
             "\(homeDirectory)/.grok/bin",
-        ]
+            // Global folders of JavaScript package managers: npm's usual
+            // custom prefix, Volta, pnpm, and Yarn. An app opened from Finder
+            // never gets the PATH a shell profile adds for them.
+            "\(homeDirectory)/.npm-global/bin",
+            "\(homeDirectory)/.volta/bin",
+            "\(homeDirectory)/Library/pnpm",
+            "\(homeDirectory)/.yarn/bin",
+        ] + npmPrefixBinDirectories(homeDirectory: homeDirectory)
+    }
+
+    /// The `bin` folder of a custom npm prefix set in `~/.npmrc`, where
+    /// `npm install -g` puts commands. MacRemote only reads the file; it never
+    /// runs npm. A prefix inside a system folder adds nothing, so it can't move
+    /// that folder ahead of Homebrew.
+    static func npmPrefixBinDirectories(homeDirectory: String) -> [String] {
+        let path = homeDirectory + "/.npmrc"
+        let maximumBytes = 64 * 1024
+        // Only a regular file: opening a named pipe would block.
+        var status = stat()
+        guard stat(path, &status) == 0, status.st_mode & S_IFMT == S_IFREG,
+              let data = DefaultFileReader().contents(atPath: path, maxBytes: maximumBytes + 1),
+              data.count <= maximumBytes,
+              let prefix = npmPrefix(fromNPMRC: String(decoding: data, as: UTF8.self), homeDirectory: homeDirectory) else {
+            return []
+        }
+        let directory = URL(fileURLWithPath: prefix).appendingPathComponent("bin").standardizedFileURL.path
+        return systemBinDirectories.contains(directory) ? [] : [directory]
+    }
+
+    /// The global prefix an npmrc sets, for the common forms: the last
+    /// top-level `prefix =` line wins, `;` or `#` starts a comment, quotes
+    /// are removed, and `~/` and `${HOME}` mean the home folder. Nil when
+    /// there is none, or when the result isn't a plain absolute path (other
+    /// variables, or a `:` that would split the tools' PATH).
+    static func npmPrefix(fromNPMRC contents: String, homeDirectory: String) -> String? {
+        var prefix: String?
+        for rawLine in contents.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") { break } // keys below a [section] aren't npm's own
+            guard let equals = line.firstIndex(of: "="),
+                  line[..<equals].trimmingCharacters(in: .whitespaces) == "prefix" else {
+                continue
+            }
+            var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            if value.count >= 2, let quote = value.first, quote == "\"" || quote == "'", value.last == quote {
+                value = String(value.dropFirst().dropLast())
+            } else if let comment = value.firstIndex(where: { $0 == ";" || $0 == "#" }) {
+                value = value[..<comment].trimmingCharacters(in: .whitespaces)
+            }
+            prefix = value
+        }
+        guard var path = prefix else { return nil }
+        if path.hasPrefix("~/") {
+            path = homeDirectory + path.dropFirst()
+        }
+        path = path.replacingOccurrences(of: "${HOME}", with: homeDirectory)
+        guard path.hasPrefix("/"), !path.contains("$"), !path.contains(":") else { return nil }
+        return path
     }
 
     private static func uniqued(_ values: [String]) -> [String] {

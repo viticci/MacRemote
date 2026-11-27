@@ -69,7 +69,7 @@ enum CloudflareServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .wranglerUnavailable:
-            "Wrangler isn't installed on this Mac. Install it, or paste a Cloudflare API token instead."
+            "MacRemote couldn't find Wrangler on this Mac. Install it, or paste a Cloudflare API token instead."
         case .cloudflaredUnavailable:
             "Cloudflare's helper isn't installed yet. Install it from Connection ▸ Address."
         case .wranglerNotAuthenticated:

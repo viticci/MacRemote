@@ -41,6 +41,55 @@ struct ToolRegistryTests {
         #expect(directories.contains("\(home)/bin"))
     }
 
+    /// #11: an app opened from Finder never gets the shell's PATH, so a CLI
+    /// installed with `npm -g` into `~/.npm-global` (like Wrangler) looked
+    /// missing.
+    @Test func javaScriptGlobalFoldersAreSearched() {
+        let directories = ExecutableLocator.searchDirectories
+        let home = ExecutableLocator.homeDirectory
+        for folder in [".npm-global/bin", ".volta/bin", "Library/pnpm", ".yarn/bin"] {
+            #expect(directories.contains("\(home)/\(folder)"))
+        }
+    }
+
+    @Test func npmPrefixIsReadFromCommonNPMRCForms() {
+        func prefix(_ npmrc: String) -> String? {
+            ExecutableLocator.npmPrefix(fromNPMRC: npmrc, homeDirectory: "/Users/example")
+        }
+        #expect(prefix("prefix=~/.npm-packages\n") == "/Users/example/.npm-packages")
+        #expect(prefix("prefix = \"${HOME}/npm\"") == "/Users/example/npm")
+        #expect(prefix("prefix=/opt/npm ; set by hand") == "/opt/npm")
+        #expect(prefix("prefix=/opt/one\r\nprefix=/opt/two") == "/opt/two")
+        #expect(prefix("registry=https://registry.npmjs.org/\n; prefix=/a\n#prefix=/b") == nil)
+        #expect(prefix("[scope]\nprefix=/opt/npm") == nil)
+        #expect(prefix("prefix=relative/npm") == nil)
+        #expect(prefix("prefix=${NPM_ROOT}/npm") == nil)
+        #expect(prefix("prefix=/tmp/npm:/opt/npm") == nil)
+    }
+
+    @Test func npmPrefixBinFolderComesFromTheHomeNPMRC() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacRemoteNPMRCTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let npmrc = home.appendingPathComponent(".npmrc")
+
+        #expect(ExecutableLocator.npmPrefixBinDirectories(homeDirectory: home.path).isEmpty)
+
+        try Data("prefix=~/custom-npm/\n".utf8).write(to: npmrc)
+        #expect(ExecutableLocator.npmPrefixBinDirectories(homeDirectory: home.path)
+            == [home.appendingPathComponent("custom-npm/bin").standardizedFileURL.path])
+
+        // A prefix in a system folder must not move it ahead of Homebrew.
+        try Data("prefix=/usr/local\n".utf8).write(to: npmrc)
+        #expect(ExecutableLocator.npmPrefixBinDirectories(homeDirectory: home.path).isEmpty)
+
+        // A named pipe is skipped instead of blocking the read.
+        try FileManager.default.removeItem(at: npmrc)
+        #expect(mkfifo(npmrc.path, 0o600) == 0)
+        #expect(ExecutableLocator.npmPrefixBinDirectories(homeDirectory: home.path).isEmpty)
+    }
+
     @Test func executableLookupReturnsTheFirstFolderThatHasTheName() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MacRemoteLocatorTests-\(UUID().uuidString)", isDirectory: true)

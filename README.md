@@ -10,7 +10,7 @@
 <p align="center">
   <a href="INSTALL.md">Install</a> ·
   <a href="docs/GUIDE.md">Guide</a> ·
-  <a href="docs/releases/1.1.md">Release Notes</a> ·
+  <a href="docs/releases/1.1.1.md">Release Notes</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
 
@@ -81,7 +81,7 @@ ChatGPT or Claude), and at least one tool to share. You don't need Xcode,
 Homebrew, or a Cloudflare account. MacRemote installs and verifies the one
 helper it needs by itself.
 
-1. **Download it.** Get `MacRemote-1.1-macos-universal2.zip` from the
+1. **Download it.** Get `MacRemote-1.1.1-macos-universal2.zip` from the
    [latest release](https://github.com/viticci/MacRemote/releases) on GitHub.
 2. **Install it.** Unzip it, move **MacRemote** to Applications, and open it.
    It's signed and notarized by Apple, so it opens like any other app.
@@ -110,7 +110,7 @@ ChatGPT users should also read
 | [Guide](docs/GUIDE.md) | Everything else: sign-in methods, Cloudflare, approvals, File Transfer, permissions, and troubleshooting |
 | [Connect ChatGPT](docs/CHATGPT.md) | Adding MacRemote to ChatGPT, and what has not been checked yet |
 | [Federico Viticci tools](docs/FEDERICO_CLI_TOOLS.md) | What MacRemote shares from my command-line apps |
-| [Release notes for 1.1](docs/releases/1.1.md) · [1.0](docs/releases/1.0.md) | What changed in 1.1, and what MacRemote 1.0 does and its known limits |
+| [Release notes for 1.1.1](docs/releases/1.1.1.md) · [1.1](docs/releases/1.1.md) · [1.0](docs/releases/1.0.md) | What changed in 1.1.1 and 1.1, and what MacRemote 1.0 does and its known limits |
 | [Security](SECURITY.md) | The rules, and how to report a problem |
 | [Architecture and Security](docs/ARCHITECTURE_SECURITY.md) · [Threat Model](docs/THREAT_MODEL.md) | How it all works, and why |
 

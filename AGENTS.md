@@ -574,6 +574,10 @@ https://github.com/viticci/MacRemote/releases, with
 download the ZIP from there. Each release's build number must be higher than
 the last one people installed.
 
+Write each paragraph and list item in `docs/releases/<version>.md` on one
+line. A GitHub release body keeps every line break, so hard-wrapped notes show
+as a narrow column.
+
 ## Docs describe the latest release
 
 README.md, docs/GUIDE.md, and INSTALL.md's "Install the app" part describe the

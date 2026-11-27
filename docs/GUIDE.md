@@ -280,6 +280,11 @@ but cannot be guessed and expires; see
 
 - **Deploy button is disabled**: choose a domain, enter a valid subdomain,
   paste an API token or install Wrangler, and stop any running public link.
+- **MacRemote couldn't find Wrangler**: an app opened from Finder doesn't get
+  your shell's `PATH`, so MacRemote looks in fixed folders: Homebrew's,
+  `~/.local/bin`, `~/bin`, `~/.npm-global/bin`, the `bin` folder of the
+  `prefix` in `~/.npmrc`, and the Volta, pnpm, and Yarn folders. If Wrangler
+  is somewhere else, for example under nvm, paste an API token instead.
 - **Cloudflare rejected the API token**: compare the token with the four
   permissions and two resource scopes above. `Zone -> DNS Settings` is not
   `Zone -> DNS`.
