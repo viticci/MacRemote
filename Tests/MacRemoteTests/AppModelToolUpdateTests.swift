@@ -433,7 +433,7 @@ struct AppModelToolUpdateTests {
             toolStore: ToolRegistryStore(fileURL: storeURL)
         )
         connectTestClient(model)
-        model.provenanceIdentityChangedToolIDs.insert(invalid.id)
+        model.provenanceIdentityChanges[invalid.id] = "unsigned"
         let updateDate = Date(timeIntervalSince1970: 1234)
         model.provenanceContentUpdates[invalid.id] = updateDate
         model.setToolAlwaysAllowed(true, toolID: invalid.id, clientID: "client-1")
@@ -444,7 +444,7 @@ struct AppModelToolUpdateTests {
 
         #expect(model.tools.map(\.id) == [first.id, invalid.id, third.id])
         #expect(model.disabledToolIDs == originalDisabled)
-        #expect(model.provenanceIdentityChangedToolIDs.contains(invalid.id))
+        #expect(model.provenanceIdentityChanges[invalid.id] != nil)
         #expect(model.provenanceContentUpdates[invalid.id] == updateDate)
         #expect(model.invalidSavedToolIDs == originalInvalid)
         #expect(model.isToolAlwaysAllowed(toolID: invalid.id, clientID: "client-1"))

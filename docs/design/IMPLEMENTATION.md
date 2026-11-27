@@ -48,7 +48,7 @@ Window IDs are centralized in `MacRemoteWindowID` (`Models/NavigationSection.swi
 | Approval window | `MacRemoteWindowID.approval` | Floating, `.windowLevel(.floating)`, hidden title bar, `.contentSize`. **Non-activating** — presented via `AppModel.presentApprovalWindow()` (decision D4). `ApprovalWindowConfigurator` (NSViewRepresentable) adds all-Spaces + full-screen-auxiliary collection behavior and `hidesOnDeactivate = false`. |
 | Welcome window | `MacRemoteWindowID.welcome` | Fixed 760×560, first run only (gated on `hasCompletedWelcome`), reopenable from Help. |
 | Settings | `Settings` scene (⌘,) | The **only** settings surface (no sidebar Settings section). Toolbar-tab `TabView`: General / Notifications / Security. Notifications holds only the macOS notifications status (D65). Security also hosts the File Transfer Folders list (D67) and the D24 token-lifetime pickers (access / refresh). |
-| MenuBarExtra | — | `.menuBarExtraStyle(.menu)`, toggled by `appModel.isMenuBarExtraEnabled`. Status line + Copy URL + server verbs + "N requests waiting…" (opens the Approval window, never resolves inline — D3). Glyph rendered by `MenuBarIconRenderer` as a template `NSImage` so the badge dot survives menu-bar tinting. Its label also installs `appModel.windowOpener`, because after a windowless launch it is the only view. |
+| MenuBarExtra | — | `.menuBarExtraStyle(.menu)`, toggled by `appModel.isMenuBarExtraEnabled`. Status line + Copy URL + server verbs + "N requests waiting…" (opens the Approval window, never resolves inline — D3) + Open MacRemote · Settings… · Quit. Glyph rendered by `MenuBarIconRenderer` as a template `NSImage` so the badge dot survives menu-bar tinting. Its label also installs `appModel.windowOpener`, because after a windowless launch it is the only view. |
 
 Menu commands live in `MacRemoteCommands` (same file): Server
 (⌘R/⌘./⇧⌘R/⇧⌘./⇧⌘C), File (⌘N/⇧⌘N/⇧⌘L), Edit ▸ Find (⌘F), View ▸ sections
@@ -204,7 +204,9 @@ Approval window, and onboarding alike.
   it would still be left out, plus the file list and its heading), and
   `refreshFoundSkills()` (the disk look, called by `startAutomaticDiscovery`,
   `scanLocalMCPServers`, and `scanInstalledCLIs`; returns its `Task`).
-- Menu bar: `isMenuBarExtraEnabled`, `menuBarStatusLine`.
+- Menu bar: `isMenuBarExtraEnabled`, `menuBarStatusLine`, `isDockIconEnabled` and
+  `applyActivationPolicy(activating:)` (D89: `.accessory` when the Dock icon is
+  hidden; the two icons are never both off).
 - Tools: `updateUserTool(id:draft:)` (**transactional**, D8 — preserves semantic
   ID and permission epoch, retains only grants whose security fingerprint still
   matches, and rolls back on failure; covered by `AppModelToolUpdateTests`),
@@ -1066,8 +1068,11 @@ rules). Spine: **FOUND ≠ ADDED ≠ SHARED ≠ TRUSTED.**
   retryCLIScanSource(_:)`, `addToolsFromScan(_:)` — forces Flexible Command +
   Destructive + Not Shared transactionally. R16: provenance identity change
   auto-unshares and blocks remote execution (`ToolSurfaceRuntime`
-  pre-execution gate). Known gap: no re-confirm verb yet — a flagged tool stays
-  off until re-added (fail-safe; needs a small re-baseline verb).
+  pre-execution gate). `provenanceIdentityChanges` maps each flagged tool to
+  the signer it has now; `trustNewPublisher(toolID:)` re-baselines the record
+  (Inspector ▸ Overview ▸ **Trust New Publisher**). Add and revalidation both
+  read `CLIBinaryInspector.executionTarget`, so a Homebrew wrapper script is
+  checked through the app it runs.
 - UI: the Library sheet's **Found on This Mac** tab is the scan home (invitation
   leads before first scan; consent copy; per-source progress ledger; grouped
   checkbox review; counted Add commit). Toolbar + menu gains "Scan for

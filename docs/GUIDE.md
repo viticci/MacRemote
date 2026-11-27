@@ -100,6 +100,16 @@ setting is tied to the address you confirmed: after you change the domain, turn
 it off and on again. New apps still need your approval, and tools that ask
 first still ask.
 
+### Menu bar only
+
+To keep MacRemote out of the Dock, turn off **Show Dock icon** in **Settings ›
+General ▸ App Behavior**. MacRemote then lives in the menu bar: its windows
+still open from the menu bar icon, and **Settings…** is in that menu too. The
+menu bar icon stays on while the Dock icon is hidden, because it is the way
+back to the app and it shows how many requests are waiting. If you remove the
+menu bar icon by Command-dragging it out of the menu bar, the Dock icon comes
+back.
+
 The public URL ends in `/mcp`:
 
 ```text
@@ -552,6 +562,18 @@ none of its tools are shared.
 - **Bundles**: groups you can add at once.
 - **Found on This Mac**: Flexible Commands for installed programs.
 - **Presets**: narrower Fixed Commands for common workflows.
+
+In **Found on This Mac**, **Quarantined** marks a program macOS has not let
+run yet: it was downloaded from the web and never opened. Once you open it and
+macOS approves it, the label goes away the next time you scan.
+
+A tool added from a scan remembers who signed its program. Before each run,
+and when you turn sharing on, MacRemote checks that signature again. For a
+Homebrew command that starts an app through a small launcher script, such as
+`vlc`, it checks the app. If the publisher changed, MacRemote stops sharing
+the tool and shows **Review…**. Review shows who signed it when you added it
+and who signs it now. **Trust New Publisher** accepts the change: Always Allow
+no longer applies to the tool, and you turn sharing back on yourself.
 
 The Library and Tools views split catalog tools into **Federico Viticci** and
 **Everything Else**. **Update from Catalog** refreshes catalog tools you already

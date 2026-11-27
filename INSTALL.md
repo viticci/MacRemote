@@ -28,7 +28,7 @@ the fastest setup.
 
 1. Open [MacRemote's releases on
    GitHub](https://github.com/viticci/MacRemote/releases) and download
-   `MacRemote-1.0-macos-universal2.zip` from the latest release.
+   `MacRemote-1.1-macos-universal2.zip` from the latest release.
 2. Double-click the ZIP. **MacRemote** appears next to it.
 3. Drag **MacRemote** into your Applications folder.
 4. Open Applications and double-click **MacRemote**.
@@ -482,7 +482,7 @@ script/package_release.sh --local-signing --allow-dirty
 
 ## Publication status
 
-MacRemote 1.0 is a public release: a Developer ID signed and notarized app,
+MacRemote 1.1 is a public release: a Developer ID signed and notarized app,
 published on GitHub, under the [MIT License](LICENSE).
 
 It is not listed in the ChatGPT or Claude directories, and it has not been

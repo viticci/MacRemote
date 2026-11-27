@@ -1119,7 +1119,7 @@ struct ToolsView: View {
                 missingExecutableRow(for: tool)
             }
 
-            if appModel.provenanceIdentityChangedToolIDs.contains(tool.id) {
+            if appModel.provenanceIdentityChanges[tool.id] != nil {
                 identityChangedRow(for: tool)
             }
 

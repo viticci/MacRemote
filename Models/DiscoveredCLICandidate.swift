@@ -143,7 +143,8 @@ struct DiscoveredCLICandidate: Identifiable, Hashable, Codable, Sendable {
 
     func replacing(
         aliases: [String]? = nil,
-        isNewSinceLastScan: Bool? = nil
+        isNewSinceLastScan: Bool? = nil,
+        isQuarantined: Bool? = nil
     ) -> DiscoveredCLICandidate {
         DiscoveredCLICandidate(
             id: id,
@@ -163,7 +164,7 @@ struct DiscoveredCLICandidate: Identifiable, Hashable, Codable, Sendable {
             installDate: installDate,
             fileKind: fileKind,
             signature: signature,
-            isQuarantined: isQuarantined,
+            isQuarantined: isQuarantined ?? self.isQuarantined,
             originDomain: originDomain,
             isInterpreter: isInterpreter,
             isDependencyOnly: isDependencyOnly,

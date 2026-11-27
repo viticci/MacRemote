@@ -24,7 +24,8 @@ protocol FileReading: Sendable {
     func contents(atPath path: String, offset: UInt64, maxBytes: Int) -> Data?
     func destinationOfSymbolicLink(atPath path: String) -> String?
     func realPath(_ path: String) -> String
-    func extendedAttributeNames(atPath path: String) -> [String]
+    /// The `com.apple.quarantine` value of the file (following symlinks), or nil.
+    func quarantineValue(atPath path: String) -> String?
     func isLocalVolume(atPath path: String) -> Bool
 }
 
@@ -80,16 +81,14 @@ struct DefaultFileReader: FileReading {
         URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
-    func extendedAttributeNames(atPath path: String) -> [String] {
-        let length = listxattr(path, nil, 0, 0)
-        guard length > 0 else { return [] }
-        var buffer = [CChar](repeating: 0, count: length)
-        let written = listxattr(path, &buffer, length, 0)
-        guard written > 0 else { return [] }
-        let bytes = buffer[0..<written].map { UInt8(bitPattern: $0) }
-        return bytes
-            .split(separator: 0)
-            .map { String(decoding: $0, as: UTF8.self) }
+    func quarantineValue(atPath path: String) -> String? {
+        let name = "com.apple.quarantine"
+        let length = getxattr(path, name, nil, 0, 0, 0)
+        guard length > 0 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: length)
+        let read = getxattr(path, name, &buffer, length, 0, 0)
+        guard read > 0 else { return nil }
+        return String(decoding: buffer[0..<read], as: UTF8.self)
     }
 
     func isLocalVolume(atPath path: String) -> Bool {
@@ -383,7 +382,20 @@ struct LocalCLIScanner: Sendable {
                previousFingerprint == currentFingerprint {
                 let reused = previousCache.candidates
                     .filter { $0.source.scanSource == source }
-                    .map { $0.replacing(isNewSinceLastScan: false) }
+                    .map {
+                        $0.replacing(
+                            isNewSinceLastScan: false,
+                            // A wrapper may point somewhere new without
+                            // changing any fingerprint, so resolve it again.
+                            isQuarantined: isQuarantined(
+                                stablePath: $0.stablePath,
+                                resolvedPath: CLIBinaryInspector.executionTarget(
+                                    ofExecutableAt: $0.stablePath,
+                                    fileReader: fileReader
+                                )
+                            )
+                        )
+                    }
                 context.registerMintedIDs(of: reused)
                 results.append(contentsOf: reused)
                 let progress = CLISourceProgress(source: source, phase: .done(count: reused.count))
@@ -653,6 +665,29 @@ struct LocalCLIScanner: Sendable {
         var isDependencyOnly = false
     }
 
+    /// True when the tool's file carries a quarantine flag macOS has not
+    /// approved. macOS keeps the flag after the owner first opens a
+    /// downloaded app and sets the user-approved bit (0x40) in it instead,
+    /// so only a flag without that bit means "not yet opened by macOS".
+    /// Read on every scan, including for reused results: removing or
+    /// approving the flag changes no timestamp the source fingerprints see.
+    func isQuarantined(stablePath: String, resolvedPath: String) -> Bool {
+        [resolvedPath, stablePath].contains { path in
+            Self.isUnapprovedQuarantine(fileReader.quarantineValue(atPath: path))
+        }
+    }
+
+    /// `value` is the flag's text, "<hex flags>;<date>;<agent>;<id>". An
+    /// unreadable flag counts as unapproved.
+    static func isUnapprovedQuarantine(_ value: String?) -> Bool {
+        guard let value else { return false }
+        guard let field = value.split(separator: ";", omittingEmptySubsequences: false).first,
+              let flags = UInt32(field, radix: 16) else {
+            return true
+        }
+        return flags & 0x40 == 0
+    }
+
     private func makeCandidate(_ seed: CandidateSeed, context: inout ScanContext) -> DiscoveredCLICandidate? {
         guard let binaryName = CLIHarvestedTextSanitizer.scrubbedDisplayText(seed.binaryName) else {
             return nil
@@ -705,10 +740,7 @@ struct LocalCLIScanner: Sendable {
         let packageName = CLIHarvestedTextSanitizer.sanitizedPackageName(seed.packageName)
         let homepage = CLIHarvestedTextSanitizer.sanitizedHomepage(seed.homepage)
 
-        let isQuarantined = fileReader.extendedAttributeNames(atPath: seed.resolvedPath)
-            .contains("com.apple.quarantine")
-            || fileReader.extendedAttributeNames(atPath: seed.stablePath)
-                .contains("com.apple.quarantine")
+        let isQuarantined = isQuarantined(stablePath: seed.stablePath, resolvedPath: seed.resolvedPath)
 
         let category = CLICategoryInference.inferredCategory(
             binaryName: binaryName,

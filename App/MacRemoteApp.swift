@@ -90,8 +90,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// no window, a pending activation would fire on the first window
     /// MacRemote opens, the Approval window, and make it key (breaking D4).
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        appModel.applyActivationPolicy(activating: false)
         appModel.startAutomaticDiscovery()
+    }
+
+    /// SwiftUI puts the app back in the Dock when it is opened again from
+    /// Finder or Spotlight, so a hidden Dock icon is applied again (D89),
+    /// after SwiftUI's own reopen handling has run.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        DispatchQueue.main.async { [appModel] in
+            appModel.applyActivationPolicy(activating: false)
+        }
+        return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -314,6 +324,7 @@ private struct MenuBarExtraLabel: View {
 
 private struct MenuBarExtraMenu: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Text(appModel.menuBarStatusLine)
@@ -365,6 +376,12 @@ private struct MenuBarExtraMenu: View {
         Button("Open MacRemote") {
             appModel.openMainWindow()
         }
+        // With the Dock icon hidden (D89) this is the way back to Settings.
+        Button("Settings…") {
+            NSApp.activate(ignoringOtherApps: true)
+            openSettings()
+        }
+        .keyboardShortcut(",", modifiers: [.command])
         Button("Quit MacRemote") {
             NSApp.terminate(nil)
         }

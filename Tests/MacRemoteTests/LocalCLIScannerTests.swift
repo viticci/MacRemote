@@ -43,7 +43,7 @@ private final class CatalogCountingFileReader: FileReading, @unchecked Sendable 
     }
     func destinationOfSymbolicLink(atPath path: String) -> String? { reader.destinationOfSymbolicLink(atPath: path) }
     func realPath(_ path: String) -> String { reader.realPath(path) }
-    func extendedAttributeNames(atPath path: String) -> [String] { reader.extendedAttributeNames(atPath: path) }
+    func quarantineValue(atPath path: String) -> String? { reader.quarantineValue(atPath: path) }
     func isLocalVolume(atPath path: String) -> Bool { reader.isLocalVolume(atPath: path) }
 }
 
@@ -998,18 +998,36 @@ struct LocalCLIScannerTests {
         #expect(ids.allSatisfy { !$0.hasPrefix("custom.") && !$0.hasPrefix("preset.") })
     }
 
-    @Test func quarantineXattrIsSurfaced() async throws {
+    /// Only a flag macOS has not approved counts, and a scan that reuses
+    /// saved results reads the flag again (GitHub #8): approving or removing
+    /// it changes no timestamp the source fingerprints see.
+    @Test func quarantineFollowsTheFlagAndItsApproval() async throws {
         let mac = try FakeMac()
         defer { mac.destroy() }
         let path = try mac.writeExecutable(mac.home + "/bin/downloaded-tool")
-        let quarantine = "0083;686c1a00;Safari;"
-        _ = quarantine.withCString { value in
-            setxattr(path, "com.apple.quarantine", value, strlen(value), 0, 0)
+        func setQuarantine(_ text: String) {
+            _ = text.withCString { value in
+                setxattr(path, "com.apple.quarantine", value, strlen(value), 0, 0)
+            }
         }
+        setQuarantine("0083;686c1a00;Safari;")
 
-        let outcome = await mac.scanner().scan()
-        let tool = try #require(outcome.candidates.first { $0.binaryName == "downloaded-tool" })
+        let scanner = mac.scanner()
+        let first = await scanner.scan()
+        let tool = try #require(first.candidates.first { $0.binaryName == "downloaded-tool" })
         #expect(tool.isQuarantined)
+
+        // The owner opened it: macOS sets the user-approved bit (0x40).
+        setQuarantine("00c3;686c1a00;Safari;")
+        let cache = CLIScanCache(
+            candidates: first.candidates,
+            lastScanDate: Date(),
+            seenStablePaths: first.seenStablePaths,
+            sourceFingerprints: first.sourceFingerprints
+        )
+        let again = await scanner.scan(previousCache: cache)
+        let rescanned = try #require(again.candidates.first { $0.binaryName == "downloaded-tool" })
+        #expect(!rescanned.isQuarantined)
     }
 
     @Test func seenSetDrivesNewSinceLastScan() async throws {

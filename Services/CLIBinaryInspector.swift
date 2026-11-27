@@ -78,6 +78,29 @@ enum CLIBinaryInspector {
         return execTarget
     }
 
+    /// The file that running `path` actually executes: the end of its
+    /// symlinks or, for a wrapper script whose only statement is
+    /// `exec /abs/path "$@"` (Homebrew's `command_wrapper`), the program it
+    /// hands off to (spec §2.4 step 3). Provenance records and rechecks the
+    /// signature of this file, so adding a tool and revalidating it (R16)
+    /// always read the same one. Any other script resolves to itself.
+    static func executionTarget(
+        ofExecutableAt path: String,
+        fileReader: any FileReading = DefaultFileReader()
+    ) -> String {
+        let resolved = fileReader.realPath(path)
+        guard let attributes = fileReader.attributes(atPath: resolved),
+              !attributes.isDirectory,
+              attributes.fileSize <= scriptSniffByteLimit,
+              let head = fileReader.contents(atPath: resolved, maxBytes: scriptSniffByteLimit),
+              case .script = inspect(headData: head),
+              let target = wrapperScriptTarget(inScriptData: head),
+              fileReader.fileExists(atPath: target) else {
+            return resolved
+        }
+        return fileReader.realPath(target)
+    }
+
     // MARK: Go buildinfo
 
     struct GoBuildInfo: Equatable, Sendable {

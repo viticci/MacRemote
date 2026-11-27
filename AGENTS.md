@@ -15,7 +15,7 @@ to pre-redesign patterns:
 
 - `docs/design/DESIGN-SPEC.md` — information architecture, every page's layout,
   onboarding flow, the parity mapping (§7), and the binding decision log (§1.2,
-  decisions D1–D88). When in doubt about *what* a screen does, this wins.
+  decisions D1–D89). When in doubt about *what* a screen does, this wins.
   Removing a feature is allowed when the decision log records it.
 - `docs/design/DESIGN-GUIDELINES.md` — the living rulebook: design tokens,
   component library, the Liquid Glass usage map, and the copy glossary. When in

@@ -129,9 +129,10 @@ final class AppModel {
     /// first-party check that refresh owed when it finishes (D86).
     @ObservationIgnored private var firstPartyCheckAfterScan = false
     @ObservationIgnored private var mcpActivationObserver: NSObjectProtocol?
-    /// R16 — tools whose binary changed signing identity since they were added.
-    /// Drives the inline "changed publisher" row; sharing stays off while flagged.
-    var provenanceIdentityChangedToolIDs: Set<String> = []
+    /// R16 — tools whose binary changed signing identity since they were
+    /// added, keyed by tool ID, with the identity the file has now. Drives the
+    /// inline "changed publisher" row; sharing stays off while flagged.
+    var provenanceIdentityChanges: [String: String] = [:]
     /// R16 — first date a same-identity content change was noticed ("Binary updated …").
     var provenanceContentUpdates: [String: Date] = [:]
 
@@ -163,9 +164,27 @@ final class AppModel {
             userDefaults.set(hasCompletedWelcome, forKey: Self.hasCompletedWelcomeKey)
         }
     }
+    /// The menu bar icon. macOS can also turn it off when the owner
+    /// Command-drags it out of the menu bar. With the Dock icon hidden it is
+    /// the only way back to the app, so turning it off then brings the Dock
+    /// icon back (D89).
     var isMenuBarExtraEnabled: Bool {
         didSet {
             userDefaults.set(isMenuBarExtraEnabled, forKey: Self.menuBarExtraEnabledKey)
+            if !isMenuBarExtraEnabled, !isDockIconEnabled {
+                isDockIconEnabled = true
+            }
+        }
+    }
+    /// Off makes MacRemote a menu bar app (D89): no Dock icon, no Command-Tab
+    /// entry. The menu bar icon stays on while the Dock icon is hidden.
+    var isDockIconEnabled: Bool {
+        didSet {
+            userDefaults.set(isDockIconEnabled, forKey: Self.dockIconEnabledKey)
+            if !isDockIconEnabled, !isMenuBarExtraEnabled {
+                isMenuBarExtraEnabled = true
+            }
+            applyActivationPolicy(activating: true)
         }
     }
     /// Folders the built-in File Transfer tools may reach (Settings › Security).
@@ -285,6 +304,7 @@ final class AppModel {
     private static let tunnelSupervisionURLKey = "MacRemote.tunnelSupervision.url"
     private static let hasCompletedWelcomeKey = "MacRemote.hasCompletedWelcome"
     private static let menuBarExtraEnabledKey = "MacRemote.menuBarExtraEnabled"
+    private static let dockIconEnabledKey = "MacRemote.dockIconEnabled"
     private static let warnBeforeQuitWhileSharingKey = "MacRemote.warnBeforeQuitWhileSharing"
     private static let setupChecklistEnabledKey = "MacRemote.setupChecklistEnabled"
     private static let goPublicAtLaunchHostnameKey = "MacRemote.goPublicAtLaunch.hostname"
@@ -430,7 +450,11 @@ final class AppModel {
         self.cliScanner = cliScanner
         self.provenanceInspector = provenanceInspector
         self.hasCompletedWelcome = userDefaults.bool(forKey: Self.hasCompletedWelcomeKey)
-        self.isMenuBarExtraEnabled = Self.loadBool(Self.menuBarExtraEnabledKey, from: userDefaults, defaultValue: true)
+        let isMenuBarExtraEnabled = Self.loadBool(Self.menuBarExtraEnabledKey, from: userDefaults, defaultValue: true)
+        self.isMenuBarExtraEnabled = isMenuBarExtraEnabled
+        // Never start with neither icon: the app would be unreachable.
+        self.isDockIconEnabled = Self.loadBool(Self.dockIconEnabledKey, from: userDefaults, defaultValue: true)
+            || !isMenuBarExtraEnabled
         self.warnBeforeQuitWhileSharing = Self.loadBool(Self.warnBeforeQuitWhileSharingKey, from: userDefaults, defaultValue: true)
         self.isSetupChecklistEnabled = Self.loadBool(Self.setupChecklistEnabledKey, from: userDefaults, defaultValue: true)
         self.goPublicAtLaunchHostname = userDefaults.string(forKey: Self.goPublicAtLaunchHostnameKey)
@@ -1706,7 +1730,7 @@ final class AppModel {
         let originalAllowances = clientToolPermissionSnapshot
         let originalInvalidToolIDs = invalidSavedToolIDs
         let originalFullDiskAccessPrompt = fullDiskAccessPrompt
-        let originalIdentityChangedToolIDs = provenanceIdentityChangedToolIDs
+        let originalIdentityChanges = provenanceIdentityChanges
         let originalProvenanceContentUpdates = provenanceContentUpdates
 
         do {
@@ -1765,8 +1789,8 @@ final class AppModel {
                 }
                 invalidSavedToolIDs.remove(oldID)
                 invalidSavedToolIDs.remove(newID)
-                provenanceIdentityChangedToolIDs.remove(oldID)
-                provenanceIdentityChangedToolIDs.remove(newID)
+                provenanceIdentityChanges.removeValue(forKey: oldID)
+                provenanceIdentityChanges.removeValue(forKey: newID)
                 provenanceContentUpdates.removeValue(forKey: oldID)
                 provenanceContentUpdates.removeValue(forKey: newID)
 
@@ -1823,7 +1847,7 @@ final class AppModel {
             clientToolPermissionSnapshot = originalAllowances
             invalidSavedToolIDs = originalInvalidToolIDs
             fullDiskAccessPrompt = originalFullDiskAccessPrompt
-            provenanceIdentityChangedToolIDs = originalIdentityChangedToolIDs
+            provenanceIdentityChanges = originalIdentityChanges
             provenanceContentUpdates = originalProvenanceContentUpdates
             appendLog(level: .error, "Could not update \(sourceName): \(error.localizedDescription)")
             return error.localizedDescription
@@ -3004,14 +3028,14 @@ final class AppModel {
         }).count
         let originalTools = tools
         let originalDisabledToolIDs = disabledToolIDs
-        let originalIdentityChangedToolIDs = provenanceIdentityChangedToolIDs
+        let originalIdentityChanges = provenanceIdentityChanges
         let originalContentUpdates = provenanceContentUpdates
         let originalInvalidToolIDs = invalidSavedToolIDs
 
         tools.removeAll { removedIDs.contains($0.id) }
         disabledToolIDs.subtract(removedIDs)
-        provenanceIdentityChangedToolIDs.subtract(removedIDs)
         for id in removedIDs {
+            provenanceIdentityChanges.removeValue(forKey: id)
             provenanceContentUpdates[id] = nil
             invalidSavedToolIDs.remove(id)
         }
@@ -3036,7 +3060,7 @@ final class AppModel {
         } catch {
             tools = originalTools
             disabledToolIDs = originalDisabledToolIDs
-            provenanceIdentityChangedToolIDs = originalIdentityChangedToolIDs
+            provenanceIdentityChanges = originalIdentityChanges
             provenanceContentUpdates = originalContentUpdates
             invalidSavedToolIDs = originalInvalidToolIDs
 
@@ -3275,7 +3299,9 @@ final class AppModel {
     private func makeProvenance(for candidate: DiscoveredCLICandidate) -> ToolProvenance {
         // R15: signature + content hash are re-read at add time; the candidate's
         // scan-time signature is only the fallback for a vanished target.
-        let identity = provenanceInspector.currentIdentity(forExecutableAt: candidate.resolvedPath)
+        let identity = provenanceInspector.currentIdentity(
+            forExecutableAt: CLIBinaryInspector.executionTarget(ofExecutableAt: candidate.stablePath)
+        )
         return ToolProvenance(
             sourceKind: candidate.source,
             packageName: candidate.packageName,
@@ -3314,20 +3340,17 @@ final class AppModel {
             return nil
         }
 
-        let inspector = provenanceInspector
-        let path = tool.executablePath
-        let identity = await Task.detached { inspector.currentIdentity(forExecutableAt: path) }.value
-        guard let identity else {
+        guard let identity = await currentIdentity(ofExecutableAt: tool.executablePath) else {
             // Missing executable is housekeeping (§5.6), never an auto-unshare.
             return nil
         }
 
         if identity.signingIdentity != provenance.signingIdentityAtAdd {
-            noteProvenanceIdentityChange(for: tool)
+            noteProvenanceIdentityChange(for: tool, currentSigningIdentity: identity.signingIdentity)
             return .identityChanged(previous: provenance.signingIdentityAtAdd, current: identity.signingIdentity)
         }
 
-        provenanceIdentityChangedToolIDs.remove(toolID)
+        provenanceIdentityChanges.removeValue(forKey: toolID)
         if !provenance.contentSHA256AtAdd.isEmpty, identity.contentSHA256 != provenance.contentSHA256AtAdd {
             if provenanceContentUpdates[toolID] == nil {
                 provenanceContentUpdates[toolID] = Date()
@@ -3337,9 +3360,79 @@ final class AppModel {
         return .identityUnchanged
     }
 
-    private func noteProvenanceIdentityChange(for tool: ToolDefinition) {
-        let isFirstNotice = !provenanceIdentityChangedToolIDs.contains(tool.id)
-        provenanceIdentityChangedToolIDs.insert(tool.id)
+    /// Reads the signature of the file a run of `path` executes, following
+    /// a wrapper script the same way the add did, off the main actor.
+    private func currentIdentity(ofExecutableAt path: String) async -> ToolBinaryIdentity? {
+        let inspector = provenanceInspector
+        return await Task.detached {
+            inspector.currentIdentity(forExecutableAt: CLIBinaryInspector.executionTarget(ofExecutableAt: path))
+        }.value
+    }
+
+    /// R16 — the owner reviewed a changed publisher and accepts it. Only the
+    /// signer Review showed can be trusted: if the file changed again since,
+    /// Review shows the new signer and nothing is saved. The record takes the
+    /// file's current signature and hash and a new permission epoch, so no
+    /// Always Allow grant survives, even one from an earlier version this
+    /// trust happens to restore. The tool stays Not Shared until the owner
+    /// shares it again.
+    /// `reviewedSigner` is the signer the inspector showed when the owner
+    /// clicked, never one read later.
+    func trustNewPublisher(toolID: String, reviewedSigner: String) async -> String? {
+        guard let path = tools.first(where: { $0.id == toolID })?.executablePath else {
+            return "Unknown tool."
+        }
+        guard let pendingSigner = provenanceIdentityChanges[toolID] else {
+            return "This tool's publisher hasn't changed."
+        }
+        guard pendingSigner == reviewedSigner else {
+            return "The publisher changed again. Review the new one before trusting it."
+        }
+        guard let identity = await currentIdentity(ofExecutableAt: path) else {
+            return "This tool's file is missing."
+        }
+        guard identity.signingIdentity == reviewedSigner, provenanceIdentityChanges[toolID] == reviewedSigner else {
+            provenanceIdentityChanges[toolID] = identity.signingIdentity
+            return "The publisher changed again. Review the new one before trusting it."
+        }
+        // Read the tool again: it may have changed during the read above.
+        guard let index = tools.firstIndex(where: { $0.id == toolID }),
+              tools[index].executablePath == path,
+              let provenance = tools[index].provenance else {
+            return "This tool changed. Review it again."
+        }
+        let tool = tools[index]
+        let originalTools = tools
+        tools[index] = tool.withPermissionEpoch(ToolDefinition.newPermissionEpoch()).withProvenance(ToolProvenance(
+            sourceKind: provenance.sourceKind,
+            packageName: provenance.packageName,
+            packageVersion: provenance.packageVersion,
+            addedDate: provenance.addedDate,
+            resolvedPathAtAdd: provenance.resolvedPathAtAdd,
+            signingIdentityAtAdd: identity.signingIdentity,
+            contentSHA256AtAdd: identity.contentSHA256,
+            wasQuarantinedAtAdd: provenance.wasQuarantinedAtAdd,
+            summaryIsHarvested: provenance.summaryIsHarvested,
+            summaryOrigin: provenance.summaryOrigin
+        ))
+        do {
+            try persistUserDefinedTools()
+        } catch {
+            tools = originalTools
+            appendLog(level: .error, "Could not save \(tool.name): \(error.localizedDescription)")
+            return error.localizedDescription
+        }
+        clientToolPermissionSnapshot = clientToolPermissionStore.snapshot(matching: securityFingerprints)
+        syncRunningToolSurface()
+        provenanceIdentityChanges.removeValue(forKey: toolID)
+        provenanceContentUpdates[toolID] = nil
+        appendLog(level: .warning, "\(tool.name): trusted its new publisher (\(identity.signingIdentity)). Always Allow no longer applies to it.")
+        return nil
+    }
+
+    private func noteProvenanceIdentityChange(for tool: ToolDefinition, currentSigningIdentity: String) {
+        let isFirstNotice = provenanceIdentityChanges[tool.id] == nil
+        provenanceIdentityChanges[tool.id] = currentSigningIdentity
         if isToolExposed(tool) {
             disabledToolIDs.insert(tool.id)
             persistToolExposureState()
@@ -3357,12 +3450,12 @@ final class AppModel {
 
         let originalTools = tools
         let originalDisabledToolIDs = disabledToolIDs
-        let originalIdentityChangedToolIDs = provenanceIdentityChangedToolIDs
+        let originalIdentityChanges = provenanceIdentityChanges
         let originalContentUpdates = provenanceContentUpdates
         let originalInvalidToolIDs = invalidSavedToolIDs
         tools.removeAll { $0.id == id && $0.isUserDefined }
         disabledToolIDs.remove(id)
-        provenanceIdentityChangedToolIDs.remove(id)
+        provenanceIdentityChanges.removeValue(forKey: id)
         provenanceContentUpdates[id] = nil
         invalidSavedToolIDs.remove(id)
         do {
@@ -3376,7 +3469,7 @@ final class AppModel {
         } catch {
             tools = originalTools
             disabledToolIDs = originalDisabledToolIDs
-            provenanceIdentityChangedToolIDs = originalIdentityChangedToolIDs
+            provenanceIdentityChanges = originalIdentityChanges
             provenanceContentUpdates = originalContentUpdates
             invalidSavedToolIDs = originalInvalidToolIDs
             appendLog(level: .error, "Could not delete tool: \(error.localizedDescription)")
@@ -4405,6 +4498,23 @@ final class AppModel {
             windowOpener?(MacRemoteWindowID.main)
         }
         NSApp?.activate(ignoringOtherApps: true)
+    }
+
+    /// Shows or hides the Dock icon to match `isDockIconEnabled` (D89).
+    /// Launch passes `activating: false`, because a login launch must not
+    /// bring the app forward. A change from Settings activates again, since
+    /// switching to a menu bar app can push the Settings window behind others.
+    func applyActivationPolicy(activating: Bool) {
+        // NSApp is nil outside a running NSApplication (swift test).
+        guard let application = NSApp else { return }
+        let policy: NSApplication.ActivationPolicy = isDockIconEnabled ? .regular : .accessory
+        guard application.activationPolicy() != policy else { return }
+        application.setActivationPolicy(policy)
+        if activating {
+            DispatchQueue.main.async {
+                application.activate(ignoringOtherApps: true)
+            }
+        }
     }
 
     // MARK: - Navigation helpers (spec §2.3/§2.4)

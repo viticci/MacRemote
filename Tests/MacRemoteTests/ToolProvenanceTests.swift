@@ -307,7 +307,7 @@ struct ToolProvenanceTests {
         let outcome = await model.revalidateToolProvenance(toolID: tool.id)
         #expect(outcome == .identityChanged(previous: "Developer ID: TEAM1234", current: "Developer ID: EVIL9999"))
         #expect(model.disabledToolIDs.contains(tool.id))
-        #expect(model.provenanceIdentityChangedToolIDs.contains(tool.id))
+        #expect(model.provenanceIdentityChanges[tool.id] != nil)
 
         let warnings = model.logs.filter { $0.message.contains("publisher changed since it was added — sharing turned off pending review") }
         #expect(warnings.count == 1)
@@ -316,6 +316,99 @@ struct ToolProvenanceTests {
         _ = await model.revalidateToolProvenance(toolID: tool.id)
         let repeatWarnings = model.logs.filter { $0.message.contains("publisher changed since it was added") }
         #expect(repeatWarnings.count == 1)
+    }
+
+    /// GitHub #7: Homebrew's `command_wrapper` is a two-line script that
+    /// execs a signed app. The add records the app's signature, so every
+    /// recheck must read the app too, never the unsigned script.
+    @MainActor
+    @Test func wrapperScriptIsRevalidatedThroughItsTarget() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let target = root + "/Fake.app/Contents/MacOS/Fake"
+        let wrapper = root + "/Caskroom/fake/1.0/.homebrew-command-wrappers/fake"
+        let stable = root + "/bin/fake"
+        for path in [target, wrapper, stable] {
+            try FileManager.default.createDirectory(
+                atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        }
+        try Data([0xCF, 0xFA, 0xED, 0xFE, 0, 0, 0, 0]).write(to: URL(fileURLWithPath: target))
+        try Data("#!/bin/bash\nexec \"\(target)\"  \"$@\"\n".utf8).write(to: URL(fileURLWithPath: wrapper))
+        for path in [target, wrapper] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        }
+        try FileManager.default.createSymbolicLink(atPath: stable, withDestinationPath: wrapper)
+
+        let signedTarget = URL(fileURLWithPath: target).resolvingSymlinksInPath().path
+        let context = try makeProvenanceContext(inspector: SignedTargetInspector(signedPath: signedTarget))
+        defer { context.tearDown() }
+        let model = context.model
+
+        #expect(model.addToolsFromScan([
+            makeCandidate(binaryName: "fake", stablePath: stable, resolvedPath: signedTarget)
+        ]) == nil)
+        let tool = try #require(model.tools.first)
+        #expect(tool.provenance?.signingIdentityAtAdd == baselineIdentity.signingIdentity)
+
+        let outcome = await model.revalidateToolProvenance(toolID: tool.id)
+        #expect(outcome == .identityUnchanged)
+        #expect(model.provenanceIdentityChanges.isEmpty)
+    }
+
+    /// R16: trusting a changed publisher records the signature the file has
+    /// now, clears the flag, and changes the security fingerprint, so Always
+    /// Allow grants stop applying.
+    @MainActor
+    @Test func trustNewPublisherAcceptsTheCurrentSignature() async throws {
+        let context = try makeProvenanceContext(
+            inspector: StubProvenanceInspector(
+                identity: ToolBinaryIdentity(signingIdentity: "Developer ID: NEW5678", contentSHA256: "new-hash")
+            )
+        )
+        defer { context.tearDown() }
+        let model = context.model
+        let tool = makeScannedTool()
+        model.tools = [tool]
+
+        _ = await model.revalidateToolProvenance(toolID: tool.id)
+        #expect(model.provenanceIdentityChanges[tool.id] == "Developer ID: NEW5678")
+
+        #expect(await model.trustNewPublisher(toolID: tool.id, reviewedSigner: "Developer ID: NEW5678") == nil)
+        let trusted = try #require(model.tools.first)
+        #expect(trusted.provenance?.signingIdentityAtAdd == "Developer ID: NEW5678")
+        #expect(trusted.securityFingerprint != tool.securityFingerprint)
+        // A new grant generation, so trusting back to an earlier version
+        // never revives that version's Always Allow grants.
+        #expect(trusted.permissionEpoch != tool.permissionEpoch)
+        #expect(model.provenanceIdentityChanges.isEmpty)
+        #expect(!model.isToolExposed(trusted))
+        #expect(await model.revalidateToolProvenance(toolID: tool.id) == .identityUnchanged)
+    }
+
+    /// Trust accepts only the signer Review showed. A file that changed
+    /// again since is shown anew, and nothing is saved.
+    @MainActor
+    @Test func trustRefusesASignerReviewDidNotShow() async throws {
+        let signerFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: signerFile) }
+        let context = try makeProvenanceContext(inspector: FileSignerInspector(signerFile: signerFile))
+        defer { context.tearDown() }
+        let model = context.model
+        let tool = makeScannedTool()
+        model.tools = [tool]
+
+        try Data("Developer ID: SHOWN".utf8).write(to: signerFile)
+        _ = await model.revalidateToolProvenance(toolID: tool.id)
+        try Data("Developer ID: LATER".utf8).write(to: signerFile)
+
+        // The file changed after Review drew SHOWN.
+        #expect(await model.trustNewPublisher(toolID: tool.id, reviewedSigner: "Developer ID: SHOWN") != nil)
+        #expect(model.provenanceIdentityChanges[tool.id] == "Developer ID: LATER")
+
+        // A background check already moved the warning to LATER, but the
+        // owner clicked while SHOWN was on screen.
+        #expect(await model.trustNewPublisher(toolID: tool.id, reviewedSigner: "Developer ID: SHOWN") != nil)
+        #expect(model.tools.first?.provenance?.signingIdentityAtAdd == "Developer ID: TEAM1234")
     }
 
     @MainActor
@@ -334,7 +427,7 @@ struct ToolProvenanceTests {
         let outcome = await model.revalidateToolProvenance(toolID: tool.id)
         #expect(outcome == .contentChanged)
         #expect(!model.disabledToolIDs.contains(tool.id))
-        #expect(model.provenanceIdentityChangedToolIDs.isEmpty)
+        #expect(model.provenanceIdentityChanges.isEmpty)
         #expect(model.provenanceContentUpdates[tool.id] != nil)
         #expect(!model.logs.contains { $0.message.contains("publisher changed") })
     }
@@ -550,6 +643,27 @@ private struct StubProvenanceInspector: ToolProvenanceInspecting {
 
     func currentIdentity(forExecutableAt path: String) -> ToolBinaryIdentity? {
         identity
+    }
+}
+
+/// Reports whichever signer the file names when asked.
+private struct FileSignerInspector: ToolProvenanceInspecting {
+    let signerFile: URL
+
+    func currentIdentity(forExecutableAt path: String) -> ToolBinaryIdentity? {
+        guard let signer = try? String(contentsOf: signerFile, encoding: .utf8) else { return nil }
+        return ToolBinaryIdentity(signingIdentity: signer, contentSHA256: signer)
+    }
+}
+
+/// Signed only at one path, like an app behind an unsigned wrapper script.
+private struct SignedTargetInspector: ToolProvenanceInspecting {
+    let signedPath: String
+
+    func currentIdentity(forExecutableAt path: String) -> ToolBinaryIdentity? {
+        path == signedPath
+            ? baselineIdentity
+            : ToolBinaryIdentity(signingIdentity: "unsigned", contentSHA256: "script")
     }
 }
 

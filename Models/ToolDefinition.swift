@@ -1088,7 +1088,15 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
         copy(permissionEpoch: permissionEpoch, capability: capability)
     }
 
-    private func copy(permissionEpoch: String, capability: ToolCapability) -> ToolDefinition {
+    func withProvenance(_ provenance: ToolProvenance?) -> ToolDefinition {
+        copy(permissionEpoch: permissionEpoch, capability: capability, provenance: provenance)
+    }
+
+    private func copy(
+        permissionEpoch: String,
+        capability: ToolCapability,
+        provenance: ToolProvenance?? = nil
+    ) -> ToolDefinition {
         ToolDefinition(
             id: id,
             permissionEpoch: permissionEpoch,
@@ -1110,7 +1118,7 @@ struct ToolDefinition: Identifiable, Codable, Hashable, Sendable {
             nativeToolID: nativeToolID,
             approvalPolicy: approvalPolicy,
             annotationOverrides: annotationOverrides,
-            provenance: provenance,
+            provenance: provenance ?? self.provenance,
             uiActions: uiActions,
             widgetPresentation: widgetPresentation
         )

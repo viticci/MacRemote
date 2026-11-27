@@ -61,6 +61,11 @@ private struct GeneralSettingsPane: View {
 
             Section("App Behavior") {
                 Toggle("Show menu bar icon", isOn: $appModel.isMenuBarExtraEnabled)
+                    .disabled(!appModel.isDockIconEnabled)
+                Toggle(isOn: $appModel.isDockIconEnabled) {
+                    Text("Show Dock icon")
+                    Text("When this is off, MacRemote runs in the menu bar, and the menu bar icon stays on.")
+                }
                 Toggle("Warn before quitting while sharing", isOn: $appModel.warnBeforeQuitWhileSharing)
                 Toggle("Show setup checklist", isOn: $appModel.isSetupChecklistEnabled)
 

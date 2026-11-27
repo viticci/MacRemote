@@ -298,9 +298,16 @@ private struct ToolOverviewTab: View {
 
     let tool: ToolDefinition
 
+    @State private var trustError: String?
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.s4) {
+                if let currentIdentity = appModel.provenanceIdentityChanges[tool.id],
+                   let provenance = tool.provenance {
+                    publisherChangeBlock(previous: provenance.signingIdentityAtAdd, current: currentIdentity)
+                }
+
                 if !tool.summary.isEmpty {
                     summaryBlock
                 }
@@ -420,21 +427,48 @@ private struct ToolOverviewTab: View {
         return rows
     }
 
+    // MARK: Publisher change (R16 — what Review… opens)
+
+    /// First in Overview, so Review… lands on it. Trusting records the
+    /// signature the file has now; sharing stays off until the owner turns
+    /// it back on.
+    private func publisherChangeBlock(previous: String, current: String) -> some View {
+        VStack(alignment: .leading, spacing: Space.s2) {
+            Label(
+                "Changed publisher since you added it — review before sharing again.",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(TypeRamp.rowDetail)
+            .foregroundStyle(.orange)
+
+            KeyValueGrid(rows: [
+                KeyValueRow("When added", previous),
+                KeyValueRow("Now", current)
+            ])
+
+            Text("Trust it only if you expected this, such as an update from the same developer. Always Allow stops applying, and the tool stays Not Shared until you share it.")
+                .font(TypeRamp.truthNote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button("Trust New Publisher") {
+                Task { trustError = await appModel.trustNewPublisher(toolID: tool.id, reviewedSigner: current) }
+            }
+
+            if let trustError {
+                Text(trustError)
+                    .font(TypeRamp.rowDetail)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
     // MARK: Provenance (CLI-25 / R15 — the permanent where-from record)
 
     private func provenanceGroup(_ provenance: ToolProvenance) -> some View {
         VStack(alignment: .leading, spacing: Space.s2) {
             Text("Provenance")
                 .font(TypeRamp.cardTitle)
-
-            if appModel.provenanceIdentityChangedToolIDs.contains(tool.id) {
-                Label(
-                    "Changed publisher since you added it — review before sharing again.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .font(TypeRamp.rowDetail)
-                .foregroundStyle(.orange)
-            }
 
             HStack(spacing: Space.s2) {
                 Image(systemName: provenance.sourceKind.badgeSystemImage)
