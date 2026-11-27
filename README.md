@@ -16,23 +16,15 @@
 
 ---
 
-## Why I Made This
+## What Is MacRemote and Why I Made It
 
-I use ChatGPT and Claude every day, on every device I own. But a lot of the
-stuff I care about lives on my Mac: my reminders and notes, my files, my
-podcast queue, and a pile of command-line tools I've built over the years. I
-wanted my AI apps to use those things, from my iPhone or anywhere else, without
-handing them a terminal and hoping for the best.
+I use AI agents every day, on every device I own. Most of them run in isolated cloud sandboxes that have no access to my Mac's tools and local MCP servers. MacRemote is designed to close that gap in a secure, permission-based way.
 
-So I made MacRemote. It's a native Mac app that shares the tools you pick with
-ChatGPT, Claude, and other AI apps over MCP. MCP, the Model Context Protocol,
-is the standard those apps use to call tools that live outside of them.
+A lot of the stuff I care about lives on my Mac: my reminders and notes, my files, assets for articles I'm researching, and a pile of command-line tools I've built over the years. I wanted my AI apps to use those things, from my iPhone or anywhere else, without jumping through the hoops of serving a Cloudflare Tunnel myself and dealing with a terminal.
 
-The idea is simple: your Mac, your rules. You choose every tool an app can
-see. You approve every new app on the Mac. Anything that can change something
-asks you first and shows you exactly what it's about to run.
+So I made MacRemote. It's a native Mac app that shares the tools you pick with ChatGPT, Claude, Muse, Grok Bot, and other AI apps over MCP. MacRemote is based on the latest MCP spec ([2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)) and comes with initial support for new features such as [Skills](https://modelcontextprotocol.io/extensions/skills/overview), [Tasks](https://modelcontextprotocol.io/extensions/tasks/overview), and [File Uploads](https://modelcontextprotocol.io/community/working-groups/file-uploads) over MCP. It also supports [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) and is backwards-compatible with earlier MCP versions.
 
-— Federico
+The idea is simple: your Mac, your rules. You choose every tool an app can see. You approve every new AI app that wants to connect to your Mac. Anything that can change something asks you first and shows you exactly what it's about to run.
 
 ## What It Does
 
@@ -96,7 +88,7 @@ helper it needs by itself.
 3. **Pick a tool.** For your first test, select **Current Date** in the
    Welcome window. It's read-only and built into macOS.
 4. **Go public.** Choose **Instant Link**, install the helper if asked, and
-   choose **Start Instant Link**.
+   choose **Start Instant Link**. If you want to run it at your stable domain name, read [Your Domain](INSTALL.md#your-domain).
 5. **Connect your app.** Paste the public URL, which ends in `/mcp`, into
    ChatGPT, Claude, or another MCP app. Your browser and MacRemote both show a
    six-digit code. Approve the request in MacRemote only when they match.
@@ -106,6 +98,7 @@ That's it. Ask your AI app what day it is, and the answer comes from your Mac.
 [INSTALL.md](INSTALL.md) covers the first run in detail, including how to
 check that the app is the notarized one and how to set up a permanent address
 with [Your Domain](INSTALL.md#your-domain).
+
 ChatGPT users should also read
 [Connect ChatGPT](docs/CHATGPT.md).
 
